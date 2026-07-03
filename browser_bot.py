@@ -207,13 +207,22 @@ class CFAutoGrabber:
             print(f"  → Waiting for Turnstile (4-5s)...")
             page.wait_for_timeout(4500)
             
+            # Check if button is enabled (Turnstile solved)
+            print(f"  → Checking if Turnstile solved...")
+            btn = page.query_selector('button[type="submit"]')
+            if btn:
+                disabled = btn.get_attribute('disabled')
+                if disabled is not None:
+                    print(f"  ❌ Turnstile not solved (button disabled)")
+                    return False
+            
             # Click login button
             print(f"  → Submitting login...")
             login_selectors = ['button[type="submit"]', 'button:has-text("Log In")', 'button:has-text("Login")', 'button:has-text("Sign In")']
             login_clicked = False
             for selector in login_selectors:
                 try:
-                    page.click(selector)
+                    page.click(selector, timeout=5000)
                     login_clicked = True
                     print(f"  → Clicked: {selector}")
                     break
@@ -221,8 +230,7 @@ class CFAutoGrabber:
                     continue
             
             if not login_clicked:
-                print(f"  ❌ Could not find login button")
-                page.screenshot(path="debug_no_button.png")
+                print(f"  ❌ Could not click login button")
                 return False
             
             # Wait for redirect
