@@ -70,12 +70,11 @@ function runSync(cmd, args, opts = {}) {
           stdio: opts.silent ? 'pipe' : 'inherit',
         });
       } else {
-        // Simple command name - use shell to resolve from PATH
-        // but don't add any quotes around the command
+        // Simple command name - use spawnSync without shell
+        // Node.js will resolve the command from PATH automatically
         result = spawnSync(cmd, args, {
           cwd: ROOT,
           stdio: opts.silent ? 'pipe' : 'inherit',
-          shell: 'cmd.exe',
         });
       }
     } else {

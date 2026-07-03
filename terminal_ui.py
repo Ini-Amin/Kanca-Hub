@@ -1,13 +1,29 @@
 #!/usr/bin/env python3
-"""Terminal UI for Cloudflare account automation"""
+"""Modern Terminal UI for Auto-FreeCF"""
 
 import json
 import sys
+import os
 from pathlib import Path
+from datetime import datetime
+
+# Try to import rich for better terminal UI
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.prompt import Prompt, IntPrompt
+    from rich import box
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
 from browser_bot import CFAutoGrabber, load_accounts, process_accounts
 
 
 class Colors:
+    """ANSI color codes"""
     HEADER = '\033[95m'
     BLUE = '\033[94m'
     CYAN = '\033[96m'
@@ -21,43 +37,41 @@ class Colors:
 
 
 def clear_screen():
-    print("\033[2J\033[H", end="")
+    """Clear terminal screen"""
+    os.system('cls' if os.name == 'nt' else 'clear')
 
 
-def print_header():
-    print(f"""
-{Colors.CYAN}{Colors.BOLD}╔══════════════════════════════════════════════════════════╗
-║                                                              ║
-║   {Colors.GREEN}🚀 Auto-FreeCF{Colors.CYAN}                                         ║
-║   {Colors.DIM}Cloudflare Workers AI Account ID & Token Grabber{Colors.CYAN}         ║
-║                                                              ║
-╚══════════════════════════════════════════════════════════╝{Colors.ENDC}
-{Colors.MAGENTA}{Colors.DIM}   By mmoaa{Colors.ENDC}
-""")
+def print_banner():
+    """Print modern banner"""
+    banner = f"""
+{Colors.CYAN}╔════════════════════════════════════════════════════════════════╗
+║                                                                    ║
+║   {Colors.GREEN}{Colors.BOLD}🚀 Auto-FreeCF{Colors.CYAN}{Colors.ENDC}                                          ║
+║   {Colors.DIM}Cloudflare Workers AI Account ID & Token Grabber{Colors.CYAN}              ║
+║                                                                    ║
+╚════════════════════════════════════════════════════════════════════╝{Colors.ENDC}
+{Colors.DIM}   By mmoaa{Colors.ENDC}
+"""
+    print(banner)
 
 
 def print_menu():
-    print(f"""{Colors.BOLD}Choose an option:{Colors.ENDC}
-
-  {Colors.GREEN}[1]{Colors.ENDC} 📂 Process accounts from file (JSON/TXT)
-  {Colors.GREEN}[2]{Colors.ENDC} ✏️  Add account manually
-  {Colors.GREEN}[3]{Colors.ENDC} 📋 View saved accounts
-  {Colors.GREEN}[4]{Colors.ENDC} 🚪 Exit
-
-""")
-
-
-def progress_bar(iteration, total, prefix='', suffix='', length=50, fill='█'):
-    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
-    filled_length = int(length * iteration // total)
-    bar = fill * filled_length + '-' * (length - filled_length)
-    sys.stdout.write(f'\r{Colors.CYAN}{prefix}{Colors.ENDC} |{Colors.GREEN}{bar}{Colors.ENDC}| {percent}% {suffix}')
-    sys.stdout.flush()
-    if iteration == total:
-        print()
+    """Print modern menu"""
+    menu = f"""
+{Colors.BOLD}┌─{Colors.ENDC} {Colors.CYAN}{Colors.BOLD}Main Menu{Colors.ENDC}
+{Colors.BOLD}│{Colors.ENDC}
+{Colors.BOLD}│{Colors.ENDC}  {Colors.GREEN}[1]{Colors.ENDC} 🌐  Web UI {Colors.DIM}(browser interface){Colors.ENDC}
+{Colors.BOLD}│{Colors.ENDC}  {Colors.GREEN}[2]{Colors.ENDC} 💻  Terminal UI {Colors.DIM}(interactive menu){Colors.ENDC}
+{Colors.BOLD}│{Colors.ENDC}  {Colors.GREEN}[3]{Colors.ENDC} 📝  Process accounts file
+{Colors.BOLD}│{Colors.ENDC}  {Colors.GREEN}[4]{Colors.ENDC} 🚪  Exit
+{Colors.BOLD}│{Colors.ENDC}
+{Colors.BOLD}└─{Colors.ENDC} {Colors.DIM}Select option (1-4){Colors.ENDC}
+"""
+    print(menu)
 
 
 def process_file():
+    """Process accounts from file"""
     print(f"\n{Colors.BOLD}📂 Process from file{Colors.ENDC}")
     print(f"{Colors.DIM}{'─' * 60}{Colors.ENDC}\n")
     
@@ -86,6 +100,7 @@ def process_file():
 
 
 def add_manual():
+    """Add account manually"""
     print(f"\n{Colors.BOLD}✏️  Add account manually{Colors.ENDC}")
     print(f"{Colors.DIM}{'─' * 60}{Colors.ENDC}\n")
     
@@ -138,6 +153,7 @@ def add_manual():
 
 
 def view_accounts():
+    """View saved accounts"""
     print(f"\n{Colors.BOLD}📋 View saved accounts{Colors.ENDC}")
     print(f"{Colors.DIM}{'─' * 60}{Colors.ENDC}\n")
     
@@ -163,9 +179,10 @@ def view_accounts():
 
 
 def main():
+    """Main loop"""
     while True:
         clear_screen()
-        print_header()
+        print_banner()
         print_menu()
         
         choice = input(f"{Colors.BOLD}Select option{Colors.ENDC} {Colors.DIM}(1-4){Colors.ENDC}: ").strip()

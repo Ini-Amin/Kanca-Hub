@@ -25,7 +25,7 @@ HTML_TEMPLATE = """
         }
         
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
@@ -36,13 +36,12 @@ HTML_TEMPLATE = """
         
         .container {
             background: white;
-            border-radius: 20px;
+            border-radius: 16px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 800px;
+            max-width: 900px;
             width: 100%;
             padding: 40px;
             animation: fadeIn 0.5s ease-in;
-            position: relative;
         }
         
         @keyframes fadeIn {
@@ -52,83 +51,110 @@ HTML_TEMPLATE = """
         
         .header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 40px;
         }
         
         .header h1 {
             font-size: 2.5em;
-            color: #333;
+            color: #2d3748;
             margin-bottom: 10px;
+            font-weight: 700;
         }
         
         .header p {
-            color: #666;
+            color: #718096;
             font-size: 1.1em;
-        }
-        
-        .watermark {
-            position: absolute;
-            bottom: 10px;
-            right: 20px;
-            color: #999;
-            font-size: 0.85em;
-            font-style: italic;
+            margin-bottom: 20px;
         }
         
         .badge {
             display: inline-block;
-            background: #667eea;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 5px 15px;
+            padding: 6px 16px;
             border-radius: 20px;
-            font-size: 0.9em;
+            font-size: 0.85em;
             margin: 5px;
+            font-weight: 500;
+        }
+        
+        .info-box {
+            background: #f7fafc;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        
+        .info-box h4 {
+            margin-bottom: 12px;
+            color: #2d3748;
+            font-size: 1.1em;
+        }
+        
+        .info-box p {
+            color: #4a5568;
+            margin-bottom: 8px;
+            line-height: 1.6;
+        }
+        
+        .info-box code {
+            background: #edf2f7;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            color: #2d3748;
         }
         
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 24px;
         }
         
         label {
             display: block;
-            margin-bottom: 8px;
-            color: #555;
+            margin-bottom: 10px;
+            color: #2d3748;
             font-weight: 600;
+            font-size: 1em;
         }
         
         textarea {
             width: 100%;
-            min-height: 250px;
-            padding: 15px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
+            min-height: 280px;
+            padding: 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
             font-family: 'Courier New', monospace;
             font-size: 14px;
             resize: vertical;
-            transition: border-color 0.3s;
+            transition: all 0.3s;
+            background: #f7fafc;
         }
         
         textarea:focus {
             outline: none;
             border-color: #667eea;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
         
         .btn {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 15px 40px;
+            padding: 16px 40px;
             border: none;
-            border-radius: 10px;
+            border-radius: 8px;
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: all 0.3s;
             width: 100%;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
         }
         
         .btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
         }
         
         .btn:active {
@@ -138,12 +164,13 @@ HTML_TEMPLATE = """
         .btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
+            transform: none;
         }
         
         .result {
             margin-top: 30px;
-            padding: 20px;
-            border-radius: 10px;
+            padding: 24px;
+            border-radius: 8px;
             display: none;
             animation: slideIn 0.3s ease-out;
         }
@@ -154,33 +181,36 @@ HTML_TEMPLATE = """
         }
         
         .result.success {
-            background: #d4edda;
-            border: 2px solid #c3e6cb;
-            color: #155724;
+            background: #f0fff4;
+            border: 2px solid #9ae6b4;
+            color: #22543d;
         }
         
         .result.error {
-            background: #f8d7da;
-            border: 2px solid #f5c6cb;
-            color: #721c24;
+            background: #fff5f5;
+            border: 2px solid #feb2b2;
+            color: #742a2a;
         }
         
         .result h3 {
-            margin-bottom: 15px;
+            margin-bottom: 16px;
+            font-size: 1.3em;
         }
         
         .result pre {
-            background: rgba(255,255,255,0.5);
-            padding: 15px;
-            border-radius: 5px;
+            background: rgba(255,255,255,0.7);
+            padding: 16px;
+            border-radius: 6px;
             overflow-x: auto;
             font-size: 13px;
+            line-height: 1.5;
+            border: 1px solid rgba(0,0,0,0.1);
         }
         
         .loader {
             display: none;
             text-align: center;
-            margin: 20px 0;
+            margin: 30px 0;
         }
         
         .loader.active {
@@ -188,13 +218,13 @@ HTML_TEMPLATE = """
         }
         
         .spinner {
-            border: 4px solid #f3f3f3;
+            border: 4px solid #f3f4f6;
             border-top: 4px solid #667eea;
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
+            width: 50px;
+            height: 50px;
             animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
+            margin: 0 auto 16px;
         }
         
         @keyframes spin {
@@ -202,23 +232,17 @@ HTML_TEMPLATE = """
             100% { transform: rotate(360deg); }
         }
         
-        .info-box {
-            background: #e7f3ff;
-            border-left: 4px solid #2196F3;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 5px;
+        .loader p {
+            color: #4a5568;
+            font-size: 1.1em;
         }
         
-        .info-box h4 {
-            margin-bottom: 10px;
-            color: #1976D2;
-        }
-        
-        .info-box code {
-            background: rgba(0,0,0,0.05);
-            padding: 2px 6px;
-            border-radius: 3px;
+        .watermark {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+            color: #a0aec0;
             font-size: 0.9em;
         }
     </style>
@@ -239,7 +263,7 @@ HTML_TEMPLATE = """
             <h4>📝 Supported Formats</h4>
             <p><strong>JSON format:</strong></p>
             <code>[{"email": "user@example.com", "password": "yourpassword"}]</code>
-            <p style="margin-top: 10px;"><strong>TXT format (recommended):</strong></p>
+            <p style="margin-top: 12px;"><strong>TXT format (recommended):</strong></p>
             <code>email:password</code>
         </div>
         
@@ -268,7 +292,9 @@ user2@example.com:pass2'></textarea>
         
         <div id="result" class="result"></div>
         
-        <div class="watermark">By mmoaa</div>
+        <div class="watermark">
+            Made with ❤️ by mmoaa
+        </div>
     </div>
     
     <script>
