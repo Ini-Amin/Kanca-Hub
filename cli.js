@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn, spawnSync, execSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -47,38 +47,51 @@ function showLogo() {
 function findPython() {
   for (const cmd of ['python3', 'python']) {
     try {
-      const ver = execSync(`${cmd} --version 2>&1`, { encoding: 'utf8', shell: true }).trim();
+      const ver = execFileSync(cmd, ['--version'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
       if (ver.startsWith('Python 3')) return cmd;
     } catch {}
   }
   return null;
 }
 
-function runSync(cmd, args, opts = {}) {
+// Run command with live timer display
+function runWithTimer(cmd, args, opts = {}) {
+  const startTime = Date.now();
+  let timerInterval = null;
+  let lastLine = '';
+
+  // Start live timer
+  if (!opts.silent) {
+    timerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const line = `${c.dim}  ⏱ ${elapsed}s elapsed...${c.reset}`;
+      // Clear previous line and write new one
+      process.stdout.write(`\r${' '.repeat(lastLine.length + 2)}\r`);
+      process.stdout.write(line);
+      lastLine = `  ⏱ ${elapsed}s elapsed...`;
+    }, 1000);
+  }
+
   try {
-    const isWindows = process.platform === 'win32';
-    let result;
-    
-    if (isWindows && (cmd.includes('\\') || cmd.includes('/') || cmd.includes(':'))) {
-      // Full path on Windows - use spawnSync directly, Node.js handles quoting
-      result = spawnSync(cmd, args, {
-        cwd: ROOT,
-        stdio: opts.silent ? 'pipe' : 'inherit',
-        windowsHide: true,
-      });
-    } else {
-      // Simple command name or non-Windows - use shell
-      result = spawnSync(cmd, args, {
-        cwd: ROOT,
-        stdio: opts.silent ? 'pipe' : 'inherit',
-        shell: true,
-      });
+    const result = spawnSync(cmd, args, {
+      cwd: ROOT,
+      stdio: opts.silent ? 'pipe' : 'inherit',
+    });
+
+    // Clear timer line
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      process.stdout.write(`\r${' '.repeat(lastLine.length + 2)}\r`);
     }
-    
+
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`Exit code ${result.status}`);
     return true;
   } catch (err) {
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      process.stdout.write(`\r${' '.repeat(lastLine.length + 2)}\r`);
+    }
     if (!opts.silent) {
       logErr(`Command failed: ${cmd} ${args.join(' ')}`);
       if (err.message) log(`  ${err.message}`);
@@ -116,7 +129,7 @@ function setup() {
     logStep('Creating virtual environment...');
     logDim('This isolates Python dependencies (~10s)');
     const start = Date.now();
-    if (!runSync(python, ['-m', 'venv', 'venv'])) {
+    if (!runWithTimer(python, ['-m', 'venv', 'venv'])) {
       logErr('Failed to create virtual environment');
       process.exit(1);
     }
@@ -138,7 +151,7 @@ function setup() {
     logDim('Packages: httpx, curl_cffi, playwright, flask');
     logDim('Estimated time: ~30-60s');
     const pipStart = Date.now();
-    if (!runSync(venvPython, ['-m', 'pip', 'install', '-q', '-r', 'requirements.txt'])) {
+    if (!runWithTimer(venvPython, ['-m', 'pip', 'install', '-q', '-r', 'requirements.txt'])) {
       logErr('Failed to install Python dependencies');
       process.exit(1);
     }
@@ -150,7 +163,7 @@ function setup() {
     logDim('Downloading Chromium (~150MB)');
     logDim('Estimated time: ~1-3 min (depends on connection)');
     const pwStart = Date.now();
-    if (!runSync(venvPython, ['-m', 'playwright', 'install', 'chromium'])) {
+    if (!runWithTimer(venvPython, ['-m', 'playwright', 'install', 'chromium'])) {
       logErr('Failed to install Chromium');
       process.exit(1);
     }
@@ -172,7 +185,6 @@ function runPython(script, args = []) {
     const proc = spawn(venvPython, [path.join(ROOT, script), ...args], {
       stdio: 'inherit',
       cwd: ROOT,
-      shell: IS_WIN,
     });
     proc.on('close', code => resolve(code));
     proc.on('error', err => {
