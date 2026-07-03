@@ -39,23 +39,6 @@ if not exist "venv\.installed" (
     echo.
 )
 
-REM Run based on arguments
-if "%1"=="--web" (
-    echo 🌐 Starting Web UI on http://localhost:8080
-    python web_ui.py --port 8080
-    exit /b 0
-)
-if "%1"=="--tui" (
-    echo 💻 Starting Terminal UI...
-    python terminal_ui.py
-    exit /b 0
-)
-if "%1"=="--accounts" (
-    echo 📝 Processing accounts...
-    python browser_bot.py --accounts %2
-    exit /b 0
-)
-
 REM Interactive menu
 echo Choose an option:
 echo.

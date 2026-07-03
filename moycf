@@ -1,8 +1,6 @@
 #!/bin/bash
 set -e
 
-# Auto-FreeCF Runner - Auto Setup & Run
-
 # Logo
 show_logo() {
     echo ""
@@ -91,16 +89,4 @@ show_menu() {
 show_logo
 check_python
 auto_setup
-
-if [ "$1" = "--web" ]; then
-    echo "🌐 Starting Web UI on http://localhost:8080"
-    python web_ui.py --port 8080
-elif [ "$1" = "--tui" ]; then
-    echo "💻 Starting Terminal UI..."
-    python terminal_ui.py
-elif [ "$1" = "--accounts" ]; then
-    echo "📝 Processing accounts..."
-    python browser_bot.py --accounts "$2"
-else
-    show_menu
-fi
+show_menu
