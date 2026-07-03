@@ -106,13 +106,13 @@ function setup() {
     logInfo('Installing dependencies (first time, may take ~5 min)...');
     log('');
 
-    if (!runSync(venvPip, ['install', '-q', '-r', 'requirements.txt'])) {
+    if (!runSync(venvPython, ['-m', 'pip', 'install', '-q', '-r', 'requirements.txt'])) {
       logErr('Failed to install Python dependencies');
       process.exit(1);
     }
 
     logInfo('Installing browser (Chromium)...');
-    if (!runSync(venvPlaywright, ['install', 'chromium'])) {
+    if (!runSync(venvPython, ['-m', 'playwright', 'install', 'chromium'])) {
       logErr('Failed to install Chromium');
       process.exit(1);
     }
