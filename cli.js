@@ -60,7 +60,9 @@ function runSync(cmd, args, opts = {}) {
     let result;
     
     if (isWindows) {
-      const quotedCmd = `"${cmd}"`;
+      // Only quote full paths (containing \ or /), not simple command names like "python"
+      const isFullPath = cmd.includes('\\') || cmd.includes('/');
+      const quotedCmd = isFullPath ? `"${cmd}"` : cmd;
       const fullArgs = ['/c', quotedCmd, ...args];
       result = spawnSync('cmd.exe', fullArgs, {
         cwd: ROOT,
