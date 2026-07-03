@@ -60,14 +60,24 @@ function findPython() {
 
 function runSync(cmd, args, opts = {}) {
   try {
-    // Windows needs special handling for paths with spaces
     const isWindows = process.platform === 'win32';
-    const result = spawnSync(cmd, args, {
-      cwd: ROOT,
-      stdio: opts.silent ? 'pipe' : 'inherit',
-      shell: isWindows, // Use shell on Windows to handle paths with spaces
-      windowsVerbatimArguments: isWindows,
-    });
+    let result;
+    
+    if (isWindows) {
+      // Windows: use cmd.exe /c with explicit quoting for paths with spaces
+      const quotedCmd = `"${cmd}"`;
+      const fullArgs = ['/c', quotedCmd, ...args];
+      result = spawnSync('cmd.exe', fullArgs, {
+        cwd: ROOT,
+        stdio: opts.silent ? 'pipe' : 'inherit',
+      });
+    } else {
+      result = spawnSync(cmd, args, {
+        cwd: ROOT,
+        stdio: opts.silent ? 'pipe' : 'inherit',
+      });
+    }
+    
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`Exit code ${result.status}`);
     return true;
