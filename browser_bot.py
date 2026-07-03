@@ -14,7 +14,7 @@ from typing import Optional
 from playwright.async_api import async_playwright, Page, BrowserContext
 
 
-EXPORT_DIR = Path("/root/cf-account-bot/exports")
+EXPORT_DIR = Path(__file__).parent / "exports"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
