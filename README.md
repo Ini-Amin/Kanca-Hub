@@ -34,13 +34,8 @@
 ## ⚡ Quick Start
 
 ```bash
-# 1. Clone repo
-git clone https://github.com/mocasus/Auto-FreeCF.git
-cd Auto-FreeCF
-
-# 2. Run
-moycf.bat          # Windows
-./moycf            # Linux/Mac
+npm install -g auto-freecf
+moycf
 ```
 
 **That's it!** Auto-setup akan jalan, lalu muncul menu interaktif:
@@ -84,7 +79,7 @@ Tinggal pilih mode yang mau dipakai. Done! ✅
 
 ### 2. Run & Choose Mode
 
-Jalankan `moycf` atau `moycf.bat`, lalu pilih dari menu:
+Jalankan `moycf`, lalu pilih dari menu:
 
 - **[1] Web UI** — Buka browser di `http://localhost:8080`, paste JSON, klik process
 - **[2] Terminal UI** — Menu interaktif di terminal, bisa add account manual
@@ -154,6 +149,7 @@ Interactive terminal menu — navigate & process tanpa browser.
 
 ## ⚙️ Requirements
 
+- Node.js 18+ — [Download](https://nodejs.org/)
 - Python 3.10+ — [Download](https://www.python.org/downloads/)
 - Internet connection
 - Cloudflare account credentials
@@ -163,7 +159,7 @@ Interactive terminal menu — navigate & process tanpa browser.
 ## 🔧 Troubleshooting
 
 <details>
-<summary><b>Windows: "Python was not found"</b></summary>
+<summary><b>Python was not found</b></summary>
 
 1. Install Python dari https://www.python.org/downloads/
 2. **Centang "Add Python to PATH"** saat install
@@ -179,29 +175,12 @@ Interactive terminal menu — navigate & process tanpa browser.
 </details>
 
 <details>
-<summary><b>Permission error (Linux/Mac)</b></summary>
+<summary><b>Permission error</b></summary>
 
 ```bash
-chmod +x moycf
+sudo npm install -g auto-freecf
 ```
 </details>
-
----
-
-## 📁 Project Structure
-
-```
-Auto-FreeCF/
-├── assets/
-│   └── logo.svg          # 🎨 Project logo
-├── moycf                 # 🐧 Linux/Mac launcher
-├── moycf.bat             # 🪟 Windows launcher
-├── browser_bot.py        # 🤖 Core automation engine
-├── web_ui.py             # 🌐 Web interface
-├── terminal_ui.py        # 💻 Terminal interface
-├── requirements.txt      # 📦 Dependencies
-└── exports/              # 💾 Output results
-```
 
 ---
 
