@@ -57,7 +57,7 @@ function findPython() {
 function runSync(cmd, args, opts = {}) {
   try {
     // Use shell: true for all platforms - handles both simple commands and paths with spaces
-    result = spawnSync(cmd, args, {
+    const result = spawnSync(cmd, args, {
       cwd: ROOT,
       stdio: opts.silent ? 'pipe' : 'inherit',
       shell: true,
