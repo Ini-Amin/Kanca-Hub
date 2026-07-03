@@ -6,7 +6,7 @@ import threading
 import webbrowser
 from pathlib import Path
 from flask import Flask, request, render_template_string, jsonify
-from browser_bot import CFAutoGrabber
+from browser_bot import CFAutoGrabber, load_accounts
 
 app = Flask(__name__)
 
@@ -42,6 +42,7 @@ HTML_TEMPLATE = """
             width: 100%;
             padding: 40px;
             animation: fadeIn 0.5s ease-in;
+            position: relative;
         }
         
         @keyframes fadeIn {
@@ -63,6 +64,15 @@ HTML_TEMPLATE = """
         .header p {
             color: #666;
             font-size: 1.1em;
+        }
+        
+        .watermark {
+            position: absolute;
+            bottom: 10px;
+            right: 20px;
+            color: #999;
+            font-size: 0.85em;
+            font-style: italic;
         }
         
         .badge {
@@ -226,18 +236,25 @@ HTML_TEMPLATE = """
         </div>
         
         <div class="info-box">
-            <h4>📝 Format JSON</h4>
-            <p>Paste accounts dalam format JSON array:</p>
+            <h4>📝 Supported Formats</h4>
+            <p><strong>JSON format:</strong></p>
             <code>[{"email": "user@example.com", "password": "yourpassword"}]</code>
+            <p style="margin-top: 10px;"><strong>TXT format (recommended):</strong></p>
+            <code>email:password</code>
         </div>
         
         <form id="accountsForm">
             <div class="form-group">
-                <label for="accounts">Cloudflare Accounts:</label>
-                <textarea id="accounts" placeholder='[
+                <label for="accounts">Cloudflare Accounts (JSON or TXT):</label>
+                <textarea id="accounts" placeholder='JSON format:
+[
   {"email": "user1@example.com", "password": "pass1"},
   {"email": "user2@example.com", "password": "pass2"}
-]'>[]</textarea>
+]
+
+OR TXT format:
+user1@example.com:pass1
+user2@example.com:pass2'></textarea>
             </div>
             <button type="submit" class="btn" id="submitBtn">
                 🚀 Process Accounts
@@ -250,6 +267,8 @@ HTML_TEMPLATE = """
         </div>
         
         <div id="result" class="result"></div>
+        
+        <div class="watermark">By mmoaa</div>
     </div>
     
     <script>
@@ -265,7 +284,31 @@ HTML_TEMPLATE = """
             submitBtn.disabled = true;
             
             try {
-                const accounts = JSON.parse(document.getElementById('accounts').value);
+                const input = document.getElementById('accounts').value.trim();
+                
+                // Try to parse as JSON first
+                let accounts;
+                try {
+                    accounts = JSON.parse(input);
+                } catch (jsonError) {
+                    // If not JSON, try TXT format
+                    accounts = [];
+                    const lines = input.split('\n');
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed && trimmed.includes(':')) {
+                            const [email, ...passParts] = trimmed.split(':');
+                            accounts.push({
+                                email: email.trim(),
+                                password: passParts.join(':').trim()
+                            });
+                        }
+                    }
+                }
+                
+                if (!accounts || accounts.length === 0) {
+                    throw new Error('No valid accounts found');
+                }
                 
                 const response = await fetch('/process', {
                     method: 'POST',
