@@ -47,7 +47,7 @@ function showLogo() {
 function findPython() {
   for (const cmd of ['python3', 'python']) {
     try {
-      const ver = execSync(`${cmd} --version 2>&1`, { encoding: 'utf8' }).trim();
+      const ver = execSync(`${cmd} --version 2>&1`, { encoding: 'utf8', shell: true }).trim();
       if (ver.startsWith('Python 3')) return cmd;
     } catch {}
   }
@@ -56,12 +56,35 @@ function findPython() {
 
 function runSync(cmd, args, opts = {}) {
   try {
-    // Use shell: true for all platforms - handles both simple commands and paths with spaces
-    const result = spawnSync(cmd, args, {
-      cwd: ROOT,
-      stdio: opts.silent ? 'pipe' : 'inherit',
-      shell: true,
-    });
+    const isWindows = process.platform === 'win32';
+    let result;
+    
+    if (isWindows) {
+      // Check if cmd is a full path or simple command name
+      const isFullPath = cmd.includes('\\') || cmd.includes('/') || cmd.includes(':');
+      
+      if (isFullPath) {
+        // Full path - use cmd.exe /c with quotes to handle spaces
+        result = spawnSync('cmd.exe', ['/c', `"${cmd}"`, ...args], {
+          cwd: ROOT,
+          stdio: opts.silent ? 'pipe' : 'inherit',
+        });
+      } else {
+        // Simple command name - use spawnSync directly WITHOUT shell
+        // This avoids the quote escaping issue on Windows
+        result = spawnSync(cmd, args, {
+          cwd: ROOT,
+          stdio: opts.silent ? 'pipe' : 'inherit',
+        });
+      }
+    } else {
+      // Non-Windows - use spawnSync with shell: true
+      result = spawnSync(cmd, args, {
+        cwd: ROOT,
+        stdio: opts.silent ? 'pipe' : 'inherit',
+        shell: true,
+      });
+    }
     
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`Exit code ${result.status}`);
