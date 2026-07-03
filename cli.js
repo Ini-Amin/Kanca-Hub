@@ -60,12 +60,18 @@ function findPython() {
 
 function runSync(cmd, args, opts = {}) {
   try {
-    execSync(`${cmd} ${args.join(' ')}`, {
+    const fullCmd = `"${cmd}" ${args.map(a => `"${a}"`).join(' ')}`;
+    execSync(fullCmd, {
       cwd: ROOT,
       stdio: opts.silent ? 'pipe' : 'inherit',
+      shell: true,
     });
     return true;
-  } catch {
+  } catch (err) {
+    if (!opts.silent) {
+      logErr(`Command failed: ${cmd} ${args.join(' ')}`);
+      if (err.message) log(`  ${err.message}`);
+    }
     return false;
   }
 }
