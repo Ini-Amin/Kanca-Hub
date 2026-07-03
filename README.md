@@ -18,118 +18,127 @@
 
 ---
 
-> [!NOTE]
-> ## 🚀 Overview
-> Auto-FreeCF automatically grabs **Cloudflare Account IDs** and creates **Workers AI API Tokens** using browser automation. Just provide your credentials and let the bot handle everything.
-> 
-> Supports **JSON** and **TXT** (email:password) input formats, with Web UI, Terminal UI, and CLI modes.
+## 🚀 Overview
+
+Auto-FreeCF automatically grabs **Cloudflare Account IDs** and creates **Workers AI API Tokens** using browser automation. Just provide your credentials and let the bot handle everything.
+
+Supports **JSON** and **TXT** (email:password) input formats, with Web UI, Terminal UI, and CLI modes.
 
 ---
 
-> [!TIP]
-> ## ⚡ Quick Start
-> ```bash
-> npm install -g auto-freecf
-> moycf
-> ```
-> That's it! First run will auto-setup everything (Python venv, pip packages, Chromium).
+## ⚡ Quick Start
+
+```bash
+npm install -g auto-freecf
+moycf
+```
+
+That's it! First run will auto-setup everything (Python venv, pip packages, Chromium).
 
 ---
 
-> [!IMPORTANT]
-> ## ✨ Features
-> - 🤖 **Full Automation** — Login, grab Account ID, create API Token, all automatic
-> - 🛡️ **Bypass Cloudflare Challenge** — Handle managed challenge automatically
-> - 🌐 **Web UI** — Modern browser interface with gradient design
-> - 💻 **Terminal UI** — Interactive terminal with colors and progress
-> - 📝 **CLI Mode** — Batch processing via command line
-> - 📦 **Auto Setup** — Dependencies install automatically with **live timer**
-> - 📂 **Multi-Format** — Supports both JSON and TXT (email:password) files
-> - 💾 **Export JSON** — Results saved in clean JSON format
+## ✨ Features
+
+- 🤖 **Full Automation** — Login, grab Account ID, create API Token, all automatic
+- 🛡️ **Bypass Cloudflare Challenge** — Handle managed challenge automatically
+- 🌐 **Web UI** — Modern browser interface with gradient design
+- 💻 **Terminal UI** — Interactive terminal with colors and progress
+- 📝 **CLI Mode** — Batch processing via command line
+- 📦 **Auto Setup** — Dependencies install automatically with **live timer**
+- 📂 **Multi-Format** — Supports both JSON and TXT (email:password) files
+- 💾 **Export JSON** — Results saved in clean JSON format
 
 ---
 
-> [!NOTE]
-> ## 📂 Input Formats
-> 
-> **TXT Format (Recommended):**
-> ```txt
-> user1@example.com:password1
-> user2@example.com:password2
-> ```
-> 
-> **JSON Format:**
-> ```json
-> [
->   {"email": "user1@example.com", "password": "password1"},
->   {"email": "user2@example.com", "password": "password2"}
-> ]
-> ```
+## 📂 Input Formats
+
+**TXT Format (Recommended):**
+```txt
+user1@example.com:password1
+user2@example.com:password2
+```
+
+**JSON Format:**
+```json
+[
+  {"email": "user1@example.com", "password": "password1"},
+  {"email": "user2@example.com", "password": "password2"}
+]
+```
 
 ---
 
-> [!TIP]
-> ## 📖 Usage
-> 1. **Prepare accounts file** — Create `accounts.txt` or `accounts.json`
-> 2. **Run `moycf`** — Choose from menu:
->    - **[1] Web UI** — Opens browser at `http://localhost:8080`
->    - **[2] Terminal UI** — Interactive menu with colors
->    - **[3] Process file** — Directly process a JSON or TXT file
-> 3. **Get results** — Output saved to `exports/cf_accounts.json`
-> 
-> **Output format:**
-> ```json
-> [
->   {
->     "email": "user1@example.com",
->     "account_id": "abc123def456...",
->     "api_token": "xyz789abc012...",
->     "workers_ai_ok": true
->   }
-> ]
-> ```
+## 📖 Usage
+
+1. **Prepare accounts file** — Create `accounts.txt` or `accounts.json`
+2. **Run `moycf`** — Choose from menu:
+   - **[1] Web UI** — Opens browser at `http://localhost:8080`
+   - **[2] Terminal UI** — Interactive menu with colors
+   - **[3] Process file** — Directly process a JSON or TXT file
+3. **Get results** — Output saved to `exports/cf_accounts.json`
+
+**Output format:**
+```json
+[
+  {
+    "email": "user1@example.com",
+    "account_id": "abc123def456...",
+    "api_token": "xyz789abc012...",
+    "workers_ai_ok": true
+  }
+]
+```
 
 ---
 
-> [!IMPORTANT]
-> ## ⚙️ Requirements
-> - **Node.js 18+** — [Download](https://nodejs.org/)
-> - **Python 3.10+** — [Download](https://www.python.org/downloads/)
-> - **Internet connection**
-> - **Cloudflare account credentials**
+## ⚙️ Requirements
+
+- **Node.js 18+** — [Download](https://nodejs.org/)
+- **Python 3.10+** — [Download](https://www.python.org/downloads/)
+- **Internet connection**
+- **Cloudflare account credentials**
 
 ---
 
-> [!NOTE]
-> ## 🔄 Update
-> ```bash
-> npm update -g auto-freecf
-> ```
+## 🔄 Update
+
+```bash
+npm update -g auto-freecf
+```
 
 ---
+
+## 🔧 Troubleshooting
 
 <details>
-<summary><b>🔧 Troubleshooting</b></summary>
+<summary><b>Python was not found</b></summary>
 
-### Python was not found
 1. Install Python from https://www.python.org/downloads/
 2. **Check "Add Python to PATH"** during install
 3. Restart terminal
+</details>
 
-### Browser timeout / stuck
+<details>
+<summary><b>Browser timeout / stuck</b></summary>
+
 - Cloudflare can be slow sometimes, try again
 - Make sure internet connection is stable
 - Delete `browser_data/` folder and try again
+</details>
 
-### Permission error on Linux/macOS
+<details>
+<summary><b>Permission error on Linux/macOS</b></summary>
+
 ```bash
 sudo npm install -g auto-freecf
 ```
+</details>
 
-### Path with spaces error on Windows
+<details>
+<summary><b>Path with spaces error on Windows</b></summary>
+
 - Fixed in v3.1.2+ — update with `npm update -g auto-freecf`
 - If still having issues, reinstall: `npm uninstall -g auto-freecf && npm install -g auto-freecf`
-
 </details>
 
 ---
