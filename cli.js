@@ -70,11 +70,12 @@ function runSync(cmd, args, opts = {}) {
           stdio: opts.silent ? 'pipe' : 'inherit',
         });
       } else {
-        // Simple command name - use spawnSync directly WITHOUT shell
-        // This avoids the quote escaping issue on Windows
+        // Simple command name - use shell to resolve from PATH
+        // but don't add any quotes around the command
         result = spawnSync(cmd, args, {
           cwd: ROOT,
           stdio: opts.silent ? 'pipe' : 'inherit',
+          shell: 'cmd.exe',
         });
       }
     } else {
