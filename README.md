@@ -3,7 +3,10 @@
 </p>
 
 <h1 align="center">Auto-FreeCF</h1>
-<p align="center">Cloudflare Workers AI Account ID and token auto-grabber with full browser automation.</p>
+
+<p align="center">
+  <strong>Cloudflare Workers AI Account ID & Token Auto-Grabber</strong>
+</p>
 
 <p align="center">
   <img alt="Version" src="https://img.shields.io/badge/version-v3.0.0-181717?style=flat-square">
@@ -28,7 +31,7 @@
 
 ---
 
-## 🚀 Quick Start
+## ⚡ Quick Start
 
 ```bash
 # 1. Clone repo
@@ -36,18 +39,29 @@ git clone https://github.com/mocasus/Auto-FreeCF.git
 cd Auto-FreeCF
 
 # 2. Run
-# Windows
-moycf.bat
-
-# Linux/Mac
-./moycf
+moycf.bat          # Windows
+./moycf            # Linux/Mac
 ```
 
-**That's it!** Script akan:
-1. ✅ Auto-install semua dependencies (first time only)
-2. ✅ Download browser untuk automation
-3. ✅ Muncul menu interaktif di terminal
-4. ✅ Tinggal pilih mode yang mau dipakai
+**That's it!** Auto-setup akan jalan, lalu muncul menu interaktif:
+
+```
+╔══════════════════════════════════════════════════════════╗
+║   🚀 Auto-FreeCF                                         ║
+║   Cloudflare Workers AI Account ID & Token Grabber       ║
+╚══════════════════════════════════════════════════════════╝
+
+Choose an option:
+
+  [1] 🌐 Web UI (browser interface)
+  [2] 💻 Terminal UI (interactive menu)
+  [3] 📝 Process accounts file
+  [4] 🚪 Exit
+
+Select option (1-4):
+```
+
+Tinggal pilih mode yang mau dipakai. Done! ✅
 
 ---
 
@@ -70,23 +84,11 @@ moycf.bat
 
 ### 2. Run & Choose Mode
 
-Jalankan `moycf` atau `moycf.bat`, nanti muncul menu:
+Jalankan `moycf` atau `moycf.bat`, lalu pilih dari menu:
 
-```
-╔══════════════════════════════════════════════════════════╗
-║   🚀 Auto-FreeCF                                         ║
-║   Cloudflare Workers AI Account ID & Token Grabber       ║
-╚══════════════════════════════════════════════════════════╝
-
-Choose an option:
-
-  [1] 🌐 Web UI (browser interface)
-  [2] 💻 Terminal UI (interactive menu)
-  [3] 📝 Process accounts file
-  [4] 🚪 Exit
-
-Select option (1-4):
-```
+- **[1] Web UI** — Buka browser di `http://localhost:8080`, paste JSON, klik process
+- **[2] Terminal UI** — Menu interaktif di terminal, bisa add account manual
+- **[3] Process file** — Langsung process file JSON
 
 ### 3. Results
 
