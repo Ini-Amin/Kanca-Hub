@@ -13,13 +13,6 @@
   <img alt="Cloudflare" src="https://img.shields.io/badge/Cloudflare-Workers%20AI-F38020?style=flat-square&logo=cloudflare&logoColor=white">
 </p>
 
-<p align="center">
-  <a href="#features"><img alt="Features" src="https://img.shields.io/badge/%E2%9C%A8-features-181717?style=flat-square"></a>
-  <a href="#quick-start"><img alt="Quick Start" src="https://img.shields.io/badge/%E2%9A%A1-quick%20start-2ea44f?style=flat-square"></a>
-  <a href="#web-ui"><img alt="Web UI" src="https://img.shields.io/badge/%F0%9F%8C%90-web%20ui-4285F4?style=flat-square"></a>
-  <a href="#terminal-ui"><img alt="Terminal UI" src="https://img.shields.io/badge/%F0%9F%92%BB-terminal%20ui-3776AB?style=flat-square"></a>
-</p>
-
 ---
 
 ## ✨ Features
@@ -37,23 +30,24 @@
 
 ## 🚀 Quick Start
 
-### Clone & Run
-
 ```bash
+# 1. Clone repo
 git clone https://github.com/mocasus/Auto-FreeCF.git
 cd Auto-FreeCF
+
+# 2. Run (auto-setup + interactive menu)
+# Windows
+run.bat
+
+# Linux/Mac
+./run.sh
 ```
 
-### Choose Mode
-
-| Mode | Command | Description |
-|------|---------|-------------|
-| 🌐 **Web UI** | `./run.sh --web` / `run.bat --web` | Open browser, paste accounts, done! |
-| 💻 **Terminal UI** | `./run.sh --tui` / `run.bat --tui` | Interactive menu in terminal |
-| 📝 **CLI** | `./run.sh --accounts file.json` | Batch process from file |
-| 📋 **Menu** | `./run.sh` / `run.bat` | Interactive menu to choose mode |
-
-> **First time?** Script auto-installs all dependencies. Wait ~5 min on first run.
+**That's it!** Script akan:
+1. ✅ Auto-install semua dependencies (first time only)
+2. ✅ Download browser untuk automation
+3. ✅ Muncul menu interaktif di terminal
+4. ✅ Tinggal pilih mode yang mau dipakai
 
 ---
 
@@ -74,20 +68,24 @@ cd Auto-FreeCF
 ]
 ```
 
-### 2. Run
+### 2. Run & Choose Mode
 
-```bash
-# Web UI — open http://localhost:8080
-./run.sh --web
+Jalankan script tanpa argumen, nanti muncul menu:
 
-# Terminal UI — interactive menu
-./run.sh --tui
+```
+╔══════════════════════════════════════════════════════════╗
+║   🚀 Auto-FreeCF                                         ║
+║   Cloudflare Workers AI Account ID & Token Grabber       ║
+╚══════════════════════════════════════════════════════════╝
 
-# CLI — process file directly
-./run.sh --accounts accounts.json
+Choose an option:
 
-# Menu — choose mode interactively
-./run.sh
+  [1] 🌐 Web UI (browser interface)
+  [2] 💻 Terminal UI (interactive menu)
+  [3] 📝 Process accounts file
+  [4] 🚪 Exit
+
+Select option (1-4):
 ```
 
 ### 3. Results
@@ -109,7 +107,7 @@ Output saved to: `exports/cf_accounts.json`
 
 ## 🌐 Web UI
 
-Modern web interface — open in browser, paste JSON, click process.
+Modern web interface — buka di browser, paste JSON, klik process.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -131,17 +129,11 @@ Modern web interface — open in browser, paste JSON, click process.
 └──────────────────────────────────────────────┘
 ```
 
-**Features:**
-- 📋 Paste JSON directly in browser
-- 🔄 Real-time progress tracking
-- 📊 Complete results with per-account status
-- 🎨 Clean & modern UI
-
 ---
 
 ## 💻 Terminal UI
 
-Interactive terminal menu — navigate & process without browser.
+Interactive terminal menu — navigate & process tanpa browser.
 
 ```
 ╔══════════════════════════════════════════════╗
@@ -156,21 +148,13 @@ Interactive terminal menu — navigate & process without browser.
 ╚══════════════════════════════════════════════╝
 ```
 
-**Features:**
-- 🎨 Colorful output with emoji
-- 📊 Step-by-step progress per account
-- ✏️ Add account manually without creating file
-- 📋 View & manage saved accounts
-
 ---
 
 ## ⚙️ Requirements
 
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| Python | 3.10+ | [Download](https://www.python.org/downloads/) |
-| Internet | — | To connect to Cloudflare |
-| Cloudflare Account | — | Email + password |
+- Python 3.10+ — [Download](https://www.python.org/downloads/)
+- Internet connection
+- Cloudflare account credentials
 
 ---
 
@@ -179,17 +163,17 @@ Interactive terminal menu — navigate & process without browser.
 <details>
 <summary><b>Windows: "Python was not found"</b></summary>
 
-1. Install Python from https://www.python.org/downloads/
-2. **Check "Add Python to PATH"** during install
+1. Install Python dari https://www.python.org/downloads/
+2. **Centang "Add Python to PATH"** saat install
 3. Restart terminal
 </details>
 
 <details>
 <summary><b>Browser timeout / stuck</b></summary>
 
-- Cloudflare can be slow, try again
-- Make sure internet is stable
-- Delete `browser_data/` folder and retry
+- Cloudflare kadang lambat, coba lagi
+- Pastikan internet stabil
+- Hapus folder `browser_data/` lalu coba lagi
 </details>
 
 <details>
@@ -197,15 +181,6 @@ Interactive terminal menu — navigate & process without browser.
 
 ```bash
 chmod +x run.sh
-```
-</details>
-
-<details>
-<summary><b>ModuleNotFoundError</b></summary>
-
-```bash
-pip install -r requirements.txt
-playwright install chromium
 ```
 </details>
 
@@ -220,19 +195,17 @@ Auto-FreeCF/
 ├── run.sh                # 🐧 Linux/Mac launcher
 ├── run.bat               # 🪟 Windows launcher
 ├── browser_bot.py        # 🤖 Core automation engine
-├── web_ui.py             # 🌐 Web interface (Flask)
+├── web_ui.py             # 🌐 Web interface
 ├── terminal_ui.py        # 💻 Terminal interface
-├── requirements.txt      # 📦 Python dependencies
-├── accounts.json         # 📝 Input accounts
-└── exports/
-    └── cf_accounts.json  # 💾 Output results
+├── requirements.txt      # 📦 Dependencies
+└── exports/              # 💾 Output results
 ```
 
 ---
 
 ## 📄 License
 
-MIT — Free to use, modify, and distribute.
+MIT
 
 ---
 
