@@ -56,24 +56,12 @@ function findPython() {
 
 function runSync(cmd, args, opts = {}) {
   try {
-    const isWindows = process.platform === 'win32';
-    let result;
-    
-    if (isWindows) {
-      // Only quote full paths (containing \ or /), not simple command names like "python"
-      const isFullPath = cmd.includes('\\') || cmd.includes('/');
-      const quotedCmd = isFullPath ? `"${cmd}"` : cmd;
-      const fullArgs = ['/c', quotedCmd, ...args];
-      result = spawnSync('cmd.exe', fullArgs, {
-        cwd: ROOT,
-        stdio: opts.silent ? 'pipe' : 'inherit',
-      });
-    } else {
-      result = spawnSync(cmd, args, {
-        cwd: ROOT,
-        stdio: opts.silent ? 'pipe' : 'inherit',
-      });
-    }
+    // Use shell: true for all platforms - handles both simple commands and paths with spaces
+    result = spawnSync(cmd, args, {
+      cwd: ROOT,
+      stdio: opts.silent ? 'pipe' : 'inherit',
+      shell: true,
+    });
     
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`Exit code ${result.status}`);
