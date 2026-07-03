@@ -35,12 +35,12 @@
 git clone https://github.com/mocasus/Auto-FreeCF.git
 cd Auto-FreeCF
 
-# 2. Run (auto-setup + interactive menu)
+# 2. Run
 # Windows
-run.bat
+moycf.bat
 
 # Linux/Mac
-./run.sh
+./moycf
 ```
 
 **That's it!** Script akan:
@@ -70,7 +70,7 @@ run.bat
 
 ### 2. Run & Choose Mode
 
-Jalankan script tanpa argumen, nanti muncul menu:
+Jalankan `moycf` atau `moycf.bat`, nanti muncul menu:
 
 ```
 ╔══════════════════════════════════════════════════════════╗
@@ -180,7 +180,7 @@ Interactive terminal menu — navigate & process tanpa browser.
 <summary><b>Permission error (Linux/Mac)</b></summary>
 
 ```bash
-chmod +x run.sh
+chmod +x moycf
 ```
 </details>
 
@@ -192,8 +192,8 @@ chmod +x run.sh
 Auto-FreeCF/
 ├── assets/
 │   └── logo.svg          # 🎨 Project logo
-├── run.sh                # 🐧 Linux/Mac launcher
-├── run.bat               # 🪟 Windows launcher
+├── moycf                 # 🐧 Linux/Mac launcher
+├── moycf.bat             # 🪟 Windows launcher
 ├── browser_bot.py        # 🤖 Core automation engine
 ├── web_ui.py             # 🌐 Web interface
 ├── terminal_ui.py        # 💻 Terminal interface
