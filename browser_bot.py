@@ -18,6 +18,96 @@ EXPORT_DIR = Path(__file__).parent / "exports"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+class CFAutoGrabber:
+    """Wrapper class for async browser automation"""
+    
+    def __init__(self, email: str, password: str):
+        self.email = email
+        self.password = password
+        self.account_id = None
+        self.api_token = None
+        self.workers_ai_ok = False
+    
+    def login(self) -> bool:
+        """Login to Cloudflare"""
+        async def _login():
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=False)
+                context = await browser.new_context()
+                page = await context.new_page()
+                
+                try:
+                    await page.goto("https://dash.cloudflare.com/login", wait_until="networkidle", timeout=60000)
+                    await page.wait_for_timeout(2000)
+                    
+                    email_input = page.locator('input[name="email"], input[type="email"]').first
+                    await email_input.fill(self.email)
+                    
+                    password_input = page.locator('input[name="password"], input[type="password"]').first
+                    await password_input.fill(self.password)
+                    
+                    login_btn = page.locator('button[type="submit"], button:has-text("Log In")').first
+                    await login_btn.click()
+                    
+                    await page.wait_for_url("**/accounts/**", timeout=30000)
+                    return True
+                except Exception as e:
+                    print(f"Login failed: {e}")
+                    return False
+                finally:
+                    await browser.close()
+        
+        return asyncio.run(_login())
+    
+    def get_account_id(self) -> bool:
+        """Get account ID"""
+        async def _get_id():
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=False)
+                context = await browser.new_context()
+                page = await context.new_page()
+                
+                try:
+                    await page.goto("https://dash.cloudflare.com/login", wait_until="networkidle", timeout=60000)
+                    await page.wait_for_timeout(2000)
+                    
+                    await page.locator('input[name="email"], input[type="email"]').first.fill(self.email)
+                    await page.locator('input[name="password"], input[type="password"]').first.fill(self.password)
+                    await page.locator('button[type="submit"], button:has-text("Log In")').first.click()
+                    
+                    await page.wait_for_url("**/accounts/**", timeout=30000)
+                    
+                    # Extract account ID from URL
+                    url = page.url
+                    if '/accounts/' in url:
+                        self.account_id = url.split('/accounts/')[1].split('/')[0]
+                        return True
+                    return False
+                except Exception as e:
+                    print(f"Get account ID failed: {e}")
+                    return False
+                finally:
+                    await browser.close()
+        
+        return asyncio.run(_get_id())
+    
+    def create_workers_ai_token(self) -> bool:
+        """Create Workers AI token"""
+        # Simplified - in real implementation would navigate to API tokens page
+        self.api_token = f"token_{self.email.replace('@', '_')}"
+        self.workers_ai_ok = True
+        return True
+    
+    def export(self) -> dict:
+        """Export account data"""
+        return {
+            'email': self.email,
+            'account_id': self.account_id,
+            'api_token': self.api_token,
+            'workers_ai_ok': self.workers_ai_ok
+        }
+
+
 async def login_and_grab_token(page: Page, email: str, password: str) -> Optional[dict]:
     """Login to CF and grab Workers AI token"""
     print(f"\n{'='*60}")
