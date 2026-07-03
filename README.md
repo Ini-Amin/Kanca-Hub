@@ -48,7 +48,21 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-### Single Account
+### Web UI (Open in Browser)
+
+```bash
+./run.sh --web --port 8080
+```
+
+Open browser ke `http://localhost:8080`
+
+### Terminal UI
+
+```bash
+./run.sh --tui
+```
+
+### Single Account (CLI)
 
 ```bash
 ./run.sh --email your@email.com --password yourpassword
