@@ -1,12 +1,25 @@
 #!/usr/bin/env node
 
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
 const ROOT = __dirname;
 const VENV = path.join(ROOT, 'venv');
 const INSTALLED = path.join(VENV, '.installed');
+const IS_WIN = process.platform === 'win32';
+
+const venvPython = IS_WIN
+  ? path.join(VENV, 'Scripts', 'python.exe')
+  : path.join(VENV, 'bin', 'python');
+
+const venvPip = IS_WIN
+  ? path.join(VENV, 'Scripts', 'pip.exe')
+  : path.join(VENV, 'bin', 'pip');
+
+const venvPlaywright = IS_WIN
+  ? path.join(VENV, 'Scripts', 'playwright.exe')
+  : path.join(VENV, 'bin', 'playwright');
 
 // Colors
 const c = {
@@ -36,7 +49,6 @@ function showLogo() {
 }
 
 function findPython() {
-  const { execSync } = require('child_process');
   for (const cmd of ['python3', 'python']) {
     try {
       const ver = execSync(`${cmd} --version 2>&1`, { encoding: 'utf8' }).trim();
@@ -46,27 +58,25 @@ function findPython() {
   return null;
 }
 
-function run(cmd, args, opts = {}) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, {
-      stdio: opts.silent ? 'pipe' : 'inherit',
+function runSync(cmd, args, opts = {}) {
+  try {
+    execSync(`${cmd} ${args.join(' ')}`, {
       cwd: ROOT,
-      shell: process.platform === 'win32',
+      stdio: opts.silent ? 'pipe' : 'inherit',
     });
-    proc.on('close', code => {
-      if (code === 0) resolve();
-      else reject(new Error(`${cmd} exited with code ${code}`));
-    });
-    proc.on('error', reject);
-  });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-async function setup() {
+function setup() {
   // Check Python
   const python = findPython();
   if (!python) {
     logErr('Python 3 not found!');
     log('Install: https://www.python.org/downloads/');
+    log('Make sure to check "Add Python to PATH" during install.');
     process.exit(1);
   }
   logInfo(`Python: ${python}`);
@@ -74,43 +84,46 @@ async function setup() {
   // Create venv
   if (!fs.existsSync(VENV)) {
     logInfo('Creating virtual environment...');
-    await run(python, ['-m', 'venv', 'venv']);
+    if (!runSync(python, ['-m', 'venv', 'venv'])) {
+      logErr('Failed to create virtual environment');
+      process.exit(1);
+    }
     logOk('Virtual environment created');
   }
 
   // Install deps
   if (!fs.existsSync(INSTALLED)) {
     logInfo('Installing dependencies (first time, may take ~5 min)...');
-    const pip = process.platform === 'win32'
-      ? path.join(VENV, 'Scripts', 'pip')
-      : path.join(VENV, 'bin', 'pip');
-    
-    await run(pip, ['install', '-q', '-r', 'requirements.txt']);
-    
-    const playwright = process.platform === 'win32'
-      ? path.join(VENV, 'Scripts', 'playwright')
-      : path.join(VENV, 'bin', 'playwright');
-    
-    await run(playwright, ['install', 'chromium']);
-    
-    fs.writeFileSync(INSTALLED, '');
-    logOk('Dependencies installed');
-  }
-}
+    log('');
 
-function getPython() {
-  return process.platform === 'win32'
-    ? path.join(VENV, 'Scripts', 'python')
-    : path.join(VENV, 'bin', 'python');
+    if (!runSync(venvPip, ['install', '-q', '-r', 'requirements.txt'])) {
+      logErr('Failed to install Python dependencies');
+      process.exit(1);
+    }
+
+    logInfo('Installing browser (Chromium)...');
+    if (!runSync(venvPlaywright, ['install', 'chromium'])) {
+      logErr('Failed to install Chromium');
+      process.exit(1);
+    }
+
+    fs.writeFileSync(INSTALLED, '');
+    log('');
+    logOk('All dependencies installed!');
+  }
 }
 
 function runPython(script, args = []) {
   return new Promise((resolve) => {
-    const proc = spawn(getPython(), [script, ...args], {
+    const proc = spawn(venvPython, [path.join(ROOT, script), ...args], {
       stdio: 'inherit',
       cwd: ROOT,
     });
     proc.on('close', code => resolve(code));
+    proc.on('error', err => {
+      logErr(`Failed to start: ${err.message}`);
+      resolve(1);
+    });
   });
 }
 
@@ -165,7 +178,7 @@ async function showMenu() {
 
 async function main() {
   showLogo();
-  await setup();
+  setup();
   await showMenu();
 }
 

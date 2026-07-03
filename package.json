@@ -1,6 +1,6 @@
 {
   "name": "auto-freecf",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Cloudflare Workers AI Account ID & Token Auto-Grabber",
   "bin": {
     "moycf": "./cli.js"
@@ -13,9 +13,6 @@
     "requirements.txt",
     "assets/"
   ],
-  "scripts": {
-    "postinstall": "node postinstall.js"
-  },
   "keywords": [
     "cloudflare",
     "workers-ai",
