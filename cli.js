@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn, execSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -60,12 +60,16 @@ function findPython() {
 
 function runSync(cmd, args, opts = {}) {
   try {
-    const fullCmd = `"${cmd}" ${args.map(a => `"${a}"`).join(' ')}`;
-    execSync(fullCmd, {
+    // Windows needs special handling for paths with spaces
+    const isWindows = process.platform === 'win32';
+    const result = spawnSync(cmd, args, {
       cwd: ROOT,
       stdio: opts.silent ? 'pipe' : 'inherit',
-      shell: true,
+      shell: isWindows, // Use shell on Windows to handle paths with spaces
+      windowsVerbatimArguments: isWindows,
     });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`Exit code ${result.status}`);
     return true;
   } catch (err) {
     if (!opts.silent) {
