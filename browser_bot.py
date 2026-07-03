@@ -203,6 +203,10 @@ class CFAutoGrabber:
                 print(f"  ❌ Could not find password input field")
                 return False
             
+            # Wait for Turnstile/CAPTCHA to complete before submitting
+            print(f"  → Waiting for Turnstile (4-5s)...")
+            page.wait_for_timeout(4500)
+            
             # Click login button
             print(f"  → Submitting login...")
             login_selectors = ['button[type="submit"]', 'button:has-text("Log In")', 'button:has-text("Login")', 'button:has-text("Sign In")']
@@ -211,12 +215,14 @@ class CFAutoGrabber:
                 try:
                     page.click(selector)
                     login_clicked = True
+                    print(f"  → Clicked: {selector}")
                     break
                 except:
                     continue
             
             if not login_clicked:
                 print(f"  ❌ Could not find login button")
+                page.screenshot(path="debug_no_button.png")
                 return False
             
             # Wait for redirect
@@ -229,6 +235,23 @@ class CFAutoGrabber:
             # Check if we're logged in
             if "/login" in current_url:
                 print(f"  ❌ Still on login page - credentials may be wrong")
+                # Take screenshot for debugging
+                page.screenshot(path="debug_login_failed.png")
+                print(f"  → Screenshot saved: debug_login_failed.png")
+                # Check for error messages
+                error_text = page.query_selector('.error-message, [data-testid="error"], .alert-danger')
+                if error_text:
+                    print(f"  → Error message: {error_text.inner_text()}")
+                # Extract page content for debugging
+                page_content = page.inner_text('body')
+                if 'incorrect' in page_content.lower() or 'invalid' in page_content.lower():
+                    print(f"  → Page shows authentication error")
+                elif 'captcha' in page_content.lower() or 'challenge' in page_content.lower():
+                    print(f"  → Page shows CAPTCHA/challenge")
+                # Save page content for manual inspection
+                with open("debug_page_content.txt", "w") as f:
+                    f.write(page_content)
+                print(f"  → Page content saved: debug_page_content.txt")
                 return False
             
             # Try to extract account ID
@@ -477,29 +500,56 @@ def load_accounts(file_path: str) -> List[Dict[str, str]]:
     return accounts
 
 
-def load_proxy_config(proxy_file: str) -> Optional[Dict]:
-    """Load proxy configuration from JSON file"""
+def load_proxy_config(proxy_file: str) -> List[Dict]:
+    """Load proxy configuration from JSON file (supports single or multi-proxy)"""
     path = Path(proxy_file)
     if not path.exists():
-        return None
+        print(f"Warning: Proxy file not found: {proxy_file}")
+        return []
     
     try:
         with open(path, 'r') as f:
             config = json.load(f)
-            return {
-                'server': config.get('server'),
+        
+        # Check if it's multi-proxy format (has "proxies" array)
+        if 'proxies' in config and isinstance(config['proxies'], list):
+            proxies = []
+            for p in config['proxies']:
+                if p.get('server') and p.get('username') and p.get('password'):
+                    proxies.append({
+                        'server': p['server'],
+                        'username': p['username'],
+                        'password': p['password'],
+                        'country': p.get('country', 'N/A'),
+                        'city': p.get('city', 'N/A')
+                    })
+            return proxies
+        
+        # Legacy single-proxy format
+        elif config.get('server'):
+            return [{
+                'server': config['server'],
                 'username': config.get('username'),
                 'password': config.get('password'),
-            }
+                'country': 'N/A',
+                'city': 'N/A'
+            }]
+        
+        else:
+            print(f"Warning: Invalid proxy config format")
+            return []
+            
     except Exception as e:
         print(f"Warning: Could not load proxy config: {e}")
-        return None
+        return []
 
 
-def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, proxy: Optional[Dict] = None) -> List[Dict]:
-    """Process multiple accounts"""
+def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, proxies: Optional[List[Dict]] = None) -> List[Dict]:
+    """Process multiple accounts with proxy rotation and retry"""
     results = []
     total = len(accounts)
+    proxy_idx = 0
+    max_retries = 3
     
     for idx, account in enumerate(accounts, 1):
         email = account['email']
@@ -509,51 +559,64 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
         print(f"Processing {idx}/{total}: {email}")
         print('='*60)
         
-        grabber = CFAutoGrabber(email, password, headless, proxy)
+        success = False
+        for attempt in range(1, max_retries + 1):
+            # Pick proxy (rotate through list)
+            proxy = None
+            if proxies and len(proxies) > 0:
+                proxy = proxies[proxy_idx % len(proxies)]
+                proxy_idx += 1
+            
+            if proxy:
+                print(f"  Attempt {attempt}/{max_retries} - Proxy: {proxy.get('server')} ({proxy.get('country')}/{proxy.get('city')})")
+            else:
+                print(f"  Attempt {attempt}/{max_retries} - No proxy")
+            
+            grabber = CFAutoGrabber(email, password, headless, proxy)
+            
+            # Step 1: Login
+            print(f"  [1/4] Logging in...")
+            if not grabber.login():
+                print(f"  ❌ Login failed (attempt {attempt})")
+                grabber._close_browser()
+                if attempt < max_retries:
+                    print(f"  → Retrying with different proxy...")
+                    time.sleep(2)
+                continue
+            print(f"  ✓ Login successful")
+            
+            # Step 2: Get Account ID
+            print(f"  [2/4] Getting Account ID...")
+            if not grabber.get_account_id():
+                print(f"  ❌ Failed to get Account ID")
+                grabber._close_browser()
+                break
+            print(f"  ✓ Account ID: {grabber.account_id}")
+            
+            # Step 3: Create Token
+            print(f"  [3/4] Creating API token...")
+            if not grabber.create_workers_ai_token():
+                print(f"  ❌ Failed to create token")
+                grabber._close_browser()
+                break
+            print(f"  ✓ Token created")
+            
+            # Step 4: Export
+            print(f"  [4/4] Exporting...")
+            result = grabber.export()
+            results.append(result)
+            print(f"  ✓ Exported")
+            success = True
+            break
         
-        # Step 1: Login
-        print(f"[1/4] Logging in...")
-        if not grabber.login():
-            print(f"❌ Login failed for {email}")
+        if success:
+            print(f"\n  ✅ Success: {email}")
+        else:
+            print(f"\n  ❌ All {max_retries} attempts failed for {email}")
             results.append({
                 'email': email,
-                'status': 'login_failed'
+                'status': 'all_attempts_failed'
             })
-            grabber._close_browser()
-            continue
-        print("✓ Login successful")
-        
-        # Step 2: Get Account ID
-        print(f"[2/4] Getting Account ID...")
-        if not grabber.get_account_id():
-            print(f"❌ Failed to get Account ID for {email}")
-            results.append({
-                'email': email,
-                'status': 'account_id_failed'
-            })
-            grabber._close_browser()
-            continue
-        print(f"✓ Account ID: {grabber.account_id}")
-        
-        # Step 3: Create Token
-        print(f"[3/4] Creating API token...")
-        if not grabber.create_workers_ai_token():
-            print(f"❌ Failed to create token for {email}")
-            results.append({
-                'email': email,
-                'status': 'token_failed'
-            })
-            grabber._close_browser()
-            continue
-        print("✓ Token created")
-        
-        # Step 4: Export
-        print(f"[4/4] Exporting...")
-        result = grabber.export()
-        results.append(result)
-        print("✓ Exported")
-        
-        print(f"\n✅ Success: {email}")
     
     # Save results
     output_dir = Path("exports")
@@ -583,13 +646,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Load proxy if provided
-    proxy = None
+    proxies = None
     if args.proxy:
-        proxy = load_proxy_config(args.proxy)
-        if proxy:
-            print(f"✓ Proxy loaded: {proxy.get('server')}")
+        proxies = load_proxy_config(args.proxy)
+        if proxies:
+            print(f"✓ Loaded {len(proxies)} proxies from {args.proxy}")
+            for p in proxies:
+                print(f"  → {p.get('server')} ({p.get('country')}/{p.get('city')})")
         else:
-            print(f"⚠️  Could not load proxy from {args.proxy}")
+            print(f"⚠️  Could not load proxies from {args.proxy}")
     
     # Single account mode
     if args.single:
@@ -609,7 +674,7 @@ if __name__ == "__main__":
         print("=" * 60)
         
         accounts = [{'email': email, 'password': password}]
-        results = process_accounts(accounts, headless=args.headless, proxy=proxy)
+        results = process_accounts(accounts, headless=args.headless, proxies=proxies)
         sys.exit(0 if results else 1)
     
     # Bulk accounts mode
@@ -617,7 +682,7 @@ if __name__ == "__main__":
         accounts = load_accounts(args.accounts)
         print(f"Loaded {len(accounts)} accounts from {args.accounts}")
         
-        results = process_accounts(accounts, headless=args.headless, proxy=proxy)
+        results = process_accounts(accounts, headless=args.headless, proxies=proxies)
         sys.exit(0 if results else 1)
     
     # No arguments provided
