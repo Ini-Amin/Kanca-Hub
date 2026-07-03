@@ -59,26 +59,15 @@ function runSync(cmd, args, opts = {}) {
     const isWindows = process.platform === 'win32';
     let result;
     
-    if (isWindows) {
-      // Check if cmd is a full path or simple command name
-      const isFullPath = cmd.includes('\\') || cmd.includes('/') || cmd.includes(':');
-      
-      if (isFullPath) {
-        // Full path - use cmd.exe /c with quotes to handle spaces
-        result = spawnSync('cmd.exe', ['/c', `"${cmd}"`, ...args], {
-          cwd: ROOT,
-          stdio: opts.silent ? 'pipe' : 'inherit',
-        });
-      } else {
-        // Simple command name - use spawnSync without shell
-        // Node.js will resolve the command from PATH automatically
-        result = spawnSync(cmd, args, {
-          cwd: ROOT,
-          stdio: opts.silent ? 'pipe' : 'inherit',
-        });
-      }
+    if (isWindows && (cmd.includes('\\') || cmd.includes('/') || cmd.includes(':'))) {
+      // Full path on Windows - use spawnSync directly, Node.js handles quoting
+      result = spawnSync(cmd, args, {
+        cwd: ROOT,
+        stdio: opts.silent ? 'pipe' : 'inherit',
+        windowsHide: true,
+      });
     } else {
-      // Non-Windows - use spawnSync with shell: true
+      // Simple command name or non-Windows - use shell
       result = spawnSync(cmd, args, {
         cwd: ROOT,
         stdio: opts.silent ? 'pipe' : 'inherit',
@@ -183,6 +172,7 @@ function runPython(script, args = []) {
     const proc = spawn(venvPython, [path.join(ROOT, script), ...args], {
       stdio: 'inherit',
       cwd: ROOT,
+      shell: IS_WIN,
     });
     proc.on('close', code => resolve(code));
     proc.on('error', err => {

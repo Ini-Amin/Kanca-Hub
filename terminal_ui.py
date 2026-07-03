@@ -46,8 +46,8 @@ def print_banner():
     banner = f"""
 {Colors.CYAN}╔════════════════════════════════════════════════════════════════╗
 ║                                                                    ║
-║   {Colors.GREEN}{Colors.BOLD}🚀 Auto-FreeCF{Colors.CYAN}{Colors.ENDC}                                          ║
-║   {Colors.DIM}Cloudflare Workers AI Account ID & Token Grabber{Colors.CYAN}              ║
+║   {Colors.GREEN}{Colors.BOLD}🚀 Auto-FreeCF{Colors.ENDC}{Colors.CYAN}                                          ║
+║   {Colors.DIM}Cloudflare Workers AI Account ID & Token Grabber{Colors.ENDC}{Colors.CYAN}              ║
 ║                                                                    ║
 ╚════════════════════════════════════════════════════════════════════╝{Colors.ENDC}
 {Colors.DIM}   By mmoaa{Colors.ENDC}
