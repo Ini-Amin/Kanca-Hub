@@ -3,35 +3,95 @@ set -e
 
 # Auto-FreeCF Runner - Auto Setup & Run
 
-echo "🚀 Auto-FreeCF - Cloudflare Workers AI Token Grabber"
-echo ""
+# Logo
+show_logo() {
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║                                                          ║"
+    echo "║   🚀 Auto-FreeCF                                         ║"
+    echo "║   Cloudflare Workers AI Account ID & Token Grabber       ║"
+    echo "║                                                          ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo ""
+}
 
 # Check Python
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python not found!"
-    echo "Install: https://www.python.org/downloads/"
-    exit 1
-fi
+check_python() {
+    if ! command -v python3 &> /dev/null; then
+        echo "❌ Python not found!"
+        echo "Install: https://www.python.org/downloads/"
+        exit 1
+    fi
+}
 
-# Auto setup venv
-if [ ! -d "venv" ]; then
-    echo "📦 Setting up virtual environment..."
-    python3 -m venv venv
-fi
+# Auto setup
+auto_setup() {
+    if [ ! -d "venv" ]; then
+        echo "📦 Setting up virtual environment..."
+        python3 -m venv venv
+    fi
 
-# Activate venv
-source venv/bin/activate
+    source venv/bin/activate
 
-# Auto install dependencies
-if [ ! -f "venv/.installed" ]; then
-    echo "📦 Installing dependencies..."
-    pip install -q -r requirements.txt
-    playwright install chromium
-    touch venv/.installed
-    echo "✅ Setup complete!"
-fi
+    if [ ! -f "venv/.installed" ]; then
+        echo "📦 Installing dependencies..."
+        pip install -q -r requirements.txt
+        playwright install chromium
+        touch venv/.installed
+        echo "✅ Setup complete!"
+        echo ""
+    fi
+}
 
-# Run based on arguments
+# Interactive menu
+show_menu() {
+    echo "Choose an option:"
+    echo ""
+    echo "  [1] 🌐 Web UI (browser interface)"
+    echo "  [2] 💻 Terminal UI (interactive menu)"
+    echo "  [3] 📝 Process accounts file"
+    echo "  [4] 🚪 Exit"
+    echo ""
+    read -p "Select option (1-4): " choice
+    
+    case $choice in
+        1)
+            echo ""
+            echo "🌐 Starting Web UI on http://localhost:8080"
+            python web_ui.py --port 8080
+            ;;
+        2)
+            echo ""
+            echo "💻 Starting Terminal UI..."
+            python terminal_ui.py
+            ;;
+        3)
+            echo ""
+            read -p "Enter accounts file path (default: accounts.json): " filepath
+            if [ -z "$filepath" ]; then
+                filepath="accounts.json"
+            fi
+            echo "📝 Processing accounts from $filepath..."
+            python browser_bot.py --accounts "$filepath"
+            ;;
+        4)
+            echo ""
+            echo "Goodbye! 👋"
+            exit 0
+            ;;
+        *)
+            echo ""
+            echo "❌ Invalid option"
+            exit 1
+            ;;
+    esac
+}
+
+# Main
+show_logo
+check_python
+auto_setup
+
 if [ "$1" = "--web" ]; then
     echo "🌐 Starting Web UI on http://localhost:8080"
     python web_ui.py --port 8080
@@ -42,13 +102,5 @@ elif [ "$1" = "--accounts" ]; then
     echo "📝 Processing accounts..."
     python browser_bot.py --accounts "$2"
 else
-    echo ""
-    echo "Usage:"
-    echo "  ./run.sh --web              # Web UI (browser)"
-    echo "  ./run.sh --tui              # Terminal UI"
-    echo "  ./run.sh --accounts FILE    # Process accounts file"
-    echo ""
-    echo "Example:"
-    echo "  ./run.sh --web"
-    echo "  ./run.sh --accounts accounts.json"
+    show_menu
 fi

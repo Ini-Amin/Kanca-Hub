@@ -1,11 +1,20 @@
 @echo off
-echo Auto-FreeCF - Cloudflare Workers AI Token Grabber
+setlocal enabledelayedexpansion
+
+REM Logo
+echo.
+echo ╔══════════════════════════════════════════════════════════╗
+echo ║                                                          ║
+echo ║   🚀 Auto-FreeCF                                         ║
+echo ║   Cloudflare Workers AI Account ID ^& Token Grabber       ║
+echo ║                                                          ║
+echo ╚══════════════════════════════════════════════════════════╝
 echo.
 
 REM Check Python
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo Python not found!
+    echo ❌ Python not found!
     echo Install: https://www.python.org/downloads/
     pause
     exit /b 1
@@ -13,7 +22,7 @@ if errorlevel 1 (
 
 REM Auto setup venv
 if not exist "venv" (
-    echo Setting up virtual environment...
+    echo 📦 Setting up virtual environment...
     python -m venv venv
 )
 
@@ -22,31 +31,61 @@ call venv\Scripts\activate.bat
 
 REM Auto install dependencies
 if not exist "venv\.installed" (
-    echo Installing dependencies...
+    echo 📦 Installing dependencies...
     pip install -q -r requirements.txt
     playwright install chromium
     echo. > venv\.installed
-    echo Setup complete!
+    echo ✅ Setup complete!
+    echo.
 )
 
 REM Run based on arguments
 if "%1"=="--web" (
-    echo Starting Web UI on http://localhost:8080
+    echo 🌐 Starting Web UI on http://localhost:8080
     python web_ui.py --port 8080
-) else if "%1"=="--tui" (
-    echo Starting Terminal UI...
+    exit /b 0
+)
+if "%1"=="--tui" (
+    echo 💻 Starting Terminal UI...
     python terminal_ui.py
-) else if "%1"=="--accounts" (
-    echo Processing accounts...
+    exit /b 0
+)
+if "%1"=="--accounts" (
+    echo 📝 Processing accounts...
     python browser_bot.py --accounts %2
+    exit /b 0
+)
+
+REM Interactive menu
+echo Choose an option:
+echo.
+echo   [1] 🌐 Web UI (browser interface)
+echo   [2] 💻 Terminal UI (interactive menu)
+echo   [3] 📝 Process accounts file
+echo   [4] 🚪 Exit
+echo.
+set /p choice="Select option (1-4): "
+
+if "%choice%"=="1" (
+    echo.
+    echo 🌐 Starting Web UI on http://localhost:8080
+    python web_ui.py --port 8080
+) else if "%choice%"=="2" (
+    echo.
+    echo 💻 Starting Terminal UI...
+    python terminal_ui.py
+) else if "%choice%"=="3" (
+    echo.
+    set /p filepath="Enter accounts file path (default: accounts.json): "
+    if "!filepath!"=="" set filepath=accounts.json
+    echo 📝 Processing accounts from !filepath!...
+    python browser_bot.py --accounts !filepath!
+) else if "%choice%"=="4" (
+    echo.
+    echo Goodbye! 👋
+    exit /b 0
 ) else (
     echo.
-    echo Usage:
-    echo   run.bat --web              Web UI (browser)
-    echo   run.bat --tui              Terminal UI
-    echo   run.bat --accounts FILE    Process accounts file
-    echo.
-    echo Example:
-    echo   run.bat --web
-    echo   run.bat --accounts accounts.json
+    echo ❌ Invalid option
+    exit /b 1
 )
