@@ -575,7 +575,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Cloudflare Account Automation")
-    parser.add_argument("--accounts", required=True, help="Path to accounts file (JSON or TXT)")
+    parser.add_argument("--accounts", help="Path to accounts file (JSON or TXT)")
+    parser.add_argument("--single", help="Single account in email:password format")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
     parser.add_argument("--proxy", help="Path to proxy config JSON file")
     
@@ -590,7 +591,35 @@ if __name__ == "__main__":
         else:
             print(f"⚠️  Could not load proxy from {args.proxy}")
     
-    accounts = load_accounts(args.accounts)
-    print(f"Loaded {len(accounts)} accounts from {args.accounts}")
+    # Single account mode
+    if args.single:
+        if ':' not in args.single:
+            print("Error: Invalid format. Use email:password")
+            sys.exit(1)
+        
+        email, password = args.single.split(':', 1)
+        email = email.strip()
+        password = password.strip()
+        
+        if not email or not password:
+            print("Error: Email and password cannot be empty")
+            sys.exit(1)
+        
+        print(f"Processing single account: {email}")
+        print("=" * 60)
+        
+        accounts = [{'email': email, 'password': password}]
+        results = process_accounts(accounts, headless=args.headless, proxy=proxy)
+        sys.exit(0 if results else 1)
     
-    results = process_accounts(accounts, headless=args.headless, proxy=proxy)
+    # Bulk accounts mode
+    if args.accounts:
+        accounts = load_accounts(args.accounts)
+        print(f"Loaded {len(accounts)} accounts from {args.accounts}")
+        
+        results = process_accounts(accounts, headless=args.headless, proxy=proxy)
+        sys.exit(0 if results else 1)
+    
+    # No arguments provided
+    print("Error: Please provide --accounts <file> or --single <email:password>")
+    sys.exit(1)
