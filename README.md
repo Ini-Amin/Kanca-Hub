@@ -6,7 +6,7 @@
 
 ### Cloudflare Workers AI Account ID & Token Auto-Grabber
 
-<img alt="Version" src="https://img.shields.io/badge/version-v3.3.9-5865F2?style=flat-square">
+<img alt="Version" src="https://img.shields.io/badge/version-v3.3.10-5865F2?style=flat-square">
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
 <img alt="Node" src="https://img.shields.io/badge/node-%3E=18.0.0-339933?style=flat-square">
 <img alt="Python" src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square">
