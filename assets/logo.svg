@@ -1,7 +1,23 @@
-<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="128" height="128" rx="28" fill="#0D1117"/>
-  <path d="M41 80C30.5 80 22 71.5 22 61C22 51.3 29.3 43.3 38.8 42.2C43.2 31.5 53.8 24 66 24C80.9 24 93.3 35 95.4 49.3C101.8 51.4 106.5 57.5 106.5 64.6C106.5 73.1 99.6 80 91.1 80H41Z" fill="#F38020"/>
-  <path d="M48 80L38 104L62 84L54 84L64 60L40 80H48Z" fill="#FFFFFF"/>
-  <path d="M76 55H94" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
-  <path d="M76 67H88" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" opacity="0.85"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="64" fill="#0D1117"/>
+
+  <!-- Minimal Robot Blob -->
+  <ellipse cx="256" cy="265" rx="125" ry="115" fill="#F38020"/>
+
+  <!-- Head -->
+  <ellipse cx="256" cy="192" rx="85" ry="55" fill="#F38020"/>
+
+  <!-- Pill Eyes -->
+  <ellipse cx="227" cy="192" rx="26" ry="15" fill="#FFF"/>
+  <ellipse cx="285" cy="192" rx="26" ry="15" fill="#FFF"/>
+
+  <!-- Smirk -->
+  <path d="M 235 215 Q 256 235 277 215" stroke="#FFF" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+  <!-- Cloud icon accent -->
+  <path d="M 185 345 Q 185 325 210 325 Q 215 310 235 310 Q 255 310 260 325 Q 285 325 285 345 Z" fill="#FFF" opacity="0.3"/>
+
+  <!-- Text -->
+  <text x="256" y="440" text-anchor="middle" font-family="system-ui, sans-serif" font-size="28" font-weight="800" fill="#F38020" letter-spacing="5">FREE CF</text>
+  <text x="256" y="468" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#FFF" opacity="0.5" letter-spacing="8">BY MMOAA</text>
 </svg>
