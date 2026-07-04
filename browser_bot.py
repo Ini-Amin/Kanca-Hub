@@ -3,6 +3,7 @@
 
 import sys
 import asyncio
+import re
 
 # Fix for Windows: patchright sync API fails inside asyncio loop
 if sys.platform == 'win32':
@@ -414,7 +415,6 @@ class CFAutoGrabber:
             page_text = page.inner_text('body')
             if "token" in page_text.lower():
                 # Look for token pattern
-                import re
                 token_match = re.search(r'[A-Za-z0-9_\-]{40,}', page_text)
                 if token_match:
                     self.api_token = token_match.group()

@@ -417,10 +417,19 @@ def process():
             result = grabber.export()
             results.append(result)
         
+        # Save results to file
+        output_dir = Path("exports")
+        output_dir.mkdir(exist_ok=True)
+        output_file = output_dir / "cf_accounts.json"
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        
         return jsonify({
             'success': True,
             'processed': len(results),
-            'results': results
+            'results': results,
+            'output_file': str(output_file)
         })
         
     except Exception as e:
