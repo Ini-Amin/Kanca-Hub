@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Browser automation for Cloudflare account processing with stealth mode"""
+"""Browser automation for Cloudflare account processing with patchright (anti-detection)"""
 
 import json
 import os
@@ -7,11 +7,11 @@ import sys
 import time
 from pathlib import Path
 from typing import List, Dict, Optional
-from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
+from patchright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
 
 class CFAutoGrabber:
-    """Automated Cloudflare account grabber with stealth mode"""
+    """Automated Cloudflare account grabber with patchright (anti-detection)"""
     
     def __init__(self, email: str, password: str, headless: bool = True, proxy: Optional[Dict] = None):
         self.email = email
@@ -27,24 +27,13 @@ class CFAutoGrabber:
         self._page = None
     
     def _start_browser(self):
-        """Start browser session with stealth mode"""
+        """Start browser session with patchright (anti-detection)"""
         if self._browser is None:
             self._playwright = sync_playwright().start()
             
-            # Launch options
+            # Launch options - patchright handles most anti-detection automatically
             launch_args = {
                 'headless': self.headless,
-                'args': [
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-features=IsolateOrigins,site-per-process',
-                    '--disable-site-isolation-trials',
-                    '--disable-web-security',
-                    '--no-first-run',
-                    '--no-default-browser-check',
-                    '--disable-infobars',
-                    '--disable-extensions',
-                    '--window-size=1920,1080',
-                ]
             }
             
             # Add proxy if provided
@@ -58,61 +47,15 @@ class CFAutoGrabber:
             
             self._browser = self._playwright.chromium.launch(**launch_args)
             
-            # Context options for stealth
+            # Context options
             context_args = {
                 'viewport': {'width': 1920, 'height': 1080},
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'locale': 'en-US',
                 'timezone_id': 'America/New_York',
             }
             
             self._context = self._browser.new_context(**context_args)
             self._page = self._context.new_page()
-            
-            # Apply stealth scripts
-            self._apply_stealth_scripts()
-    
-    def _apply_stealth_scripts(self):
-        """Apply stealth scripts to avoid detection"""
-        page = self._page
-        
-        # Remove webdriver property
-        page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
-        
-        # Override plugins
-        page.add_init_script("""
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
-            });
-        """)
-        
-        # Override languages
-        page.add_init_script("""
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
-            });
-        """)
-        
-        # Remove automation indicators
-        page.add_init_script("""
-            window.chrome = {
-                runtime: {}
-            };
-        """)
-        
-        # Override permissions
-        page.add_init_script("""
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
-        """)
     
     def _close_browser(self):
         """Close browser session"""
