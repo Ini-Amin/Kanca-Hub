@@ -147,24 +147,47 @@ class CFAutoGrabber:
                 return False
             
             # Wait for Turnstile/CAPTCHA to complete before submitting
-            print(f"  → Waiting for Turnstile...")
+            print(f"  → Solving Turnstile...")
             
-            # Wait up to 15s for Turnstile to solve (check button state)
+            # Active turnstile solving (from Turnstile-Solver approach)
             turnstile_solved = False
-            for attempt in range(6):  # 6 attempts x 2.5s = 15s max
-                page.wait_for_timeout(2500)
+            for attempt in range(10):  # 10 attempts x 2s = 20s max
+                page.wait_for_timeout(2000)
+                
+                # Try to click turnstile div to trigger solving
+                try:
+                    turnstile_div = page.query_selector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
+                    if turnstile_div:
+                        turnstile_div.click()
+                        if attempt == 0:
+                            print(f"  → Clicked turnstile widget")
+                except:
+                    pass
+                
+                # Check if turnstile response token exists
+                try:
+                    turnstile_value = page.input_value('[name="cf-turnstile-response"]')
+                    if turnstile_value and turnstile_value != "":
+                        turnstile_solved = True
+                        print(f"  ✓ Turnstile solved ({(attempt + 1) * 2}s)")
+                        break
+                except:
+                    pass
+                
+                # Also check button state as fallback
                 btn = page.query_selector('button[type="submit"]')
                 if btn:
                     disabled = btn.get_attribute('disabled')
                     if disabled is None:
                         turnstile_solved = True
-                        print(f"  ✓ Turnstile solved ({(attempt + 1) * 2.5}s)")
+                        print(f"  ✓ Turnstile solved (button enabled) ({(attempt + 1) * 2}s)")
                         break
-                    else:
-                        print(f"  ⏳ Turnstile still solving... ({(attempt + 1) * 2.5}s)")
+                
+                if attempt < 5:
+                    print(f"  ⏳ Turnstile solving... ({(attempt + 1) * 2}s)")
             
             if not turnstile_solved:
-                print(f"  ❌ Turnstile not solved after 15s")
+                print(f"  ❌ Turnstile not solved after 20s")
                 page.screenshot(path="debug_turnstile_timeout.png")
                 return False
             
