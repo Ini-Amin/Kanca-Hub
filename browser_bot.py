@@ -147,17 +147,26 @@ class CFAutoGrabber:
                 return False
             
             # Wait for Turnstile/CAPTCHA to complete before submitting
-            print(f"  → Waiting for Turnstile (4-5s)...")
-            page.wait_for_timeout(4500)
+            print(f"  → Waiting for Turnstile...")
             
-            # Check if button is enabled (Turnstile solved)
-            print(f"  → Checking if Turnstile solved...")
-            btn = page.query_selector('button[type="submit"]')
-            if btn:
-                disabled = btn.get_attribute('disabled')
-                if disabled is not None:
-                    print(f"  ❌ Turnstile not solved (button disabled)")
-                    return False
+            # Wait up to 15s for Turnstile to solve (check button state)
+            turnstile_solved = False
+            for attempt in range(6):  # 6 attempts x 2.5s = 15s max
+                page.wait_for_timeout(2500)
+                btn = page.query_selector('button[type="submit"]')
+                if btn:
+                    disabled = btn.get_attribute('disabled')
+                    if disabled is None:
+                        turnstile_solved = True
+                        print(f"  ✓ Turnstile solved ({(attempt + 1) * 2.5}s)")
+                        break
+                    else:
+                        print(f"  ⏳ Turnstile still solving... ({(attempt + 1) * 2.5}s)")
+            
+            if not turnstile_solved:
+                print(f"  ❌ Turnstile not solved after 15s")
+                page.screenshot(path="debug_turnstile_timeout.png")
+                return False
             
             # Click login button
             print(f"  → Submitting login...")
