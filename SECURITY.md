@@ -14,7 +14,7 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 ### How to Report
 
 **DO:**
-- 📧 Email: [andikacustom2@gmail.com](mailto:andikacustom2@gmail.com)
+- 📧 Email: [andikastore.ads@gmail.com](mailto:andikastore.ads@gmail.com)
 - 🔒 Provide detailed information about the vulnerability
 - 📝 Include steps to reproduce if possible
 - ⏰ Allow reasonable time for us to address the issue before public disclosure
