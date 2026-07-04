@@ -124,7 +124,7 @@ def process_bulk():
         
         print(f"\n{Colors.DIM}{'═' * 60}{Colors.ENDC}")
         print(f"{Colors.GREEN}{Colors.BOLD}✅ Completed!{Colors.ENDC} {len(results)}/{len(accounts)} accounts processed")
-        print(f"{Colors.CYAN}Results saved to:{Colors.ENDC} exports/cf_accounts.json")
+        print(f"{Colors.CYAN}Results saved to:{Colors.ENDC} exports/cf_accounts.txt")
         print(f"{Colors.DIM}{'═' * 60}{Colors.ENDC}")
         
     except Exception as e:

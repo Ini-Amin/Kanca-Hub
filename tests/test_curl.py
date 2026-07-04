@@ -5,8 +5,8 @@ from curl_cffi import requests
 import json
 
 # Test with first account
-email = "REDACTED"
-password = "REDACTED"
+email = "your_email@example.com"
+password = "your_password"
 
 print(f"Testing login for: {email}")
 

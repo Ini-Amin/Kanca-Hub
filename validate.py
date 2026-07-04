@@ -30,15 +30,14 @@ def validate_class_structure():
         '__init__',
         '_start_browser',
         '_close_browser',
-        '_extract_sitekey',
-        '_solve_turnstile_isolated',
         '_wait_for_challenge',
-        '_wait_for_turnstile_manual',
+        '_login_manual_turnstile',
         'login',
         'login_google',
         'get_account_id',
         'create_workers_ai_token',
-        'export'
+        'export',
+        '__del__'
     ]
     
     all_exist = True

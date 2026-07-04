@@ -1,6 +1,6 @@
 [project]
 name = "auto-freecf"
-version = "1.0.0"
+version = "3.3.14"
 description = "Cloudflare Workers AI Account ID and token manager with explicit automation modes"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-auto-freecf = "auto_freecf.cli:main"
+moycf = "auto_freecf.cli:main"
 
 [tool.setuptools]
 packages = ["auto_freecf"]

@@ -43,11 +43,11 @@ if (!fs.existsSync(INSTALLED)) {
   
   execSync(`${pip} install -q -r requirements.txt`, { cwd: ROOT, stdio: 'inherit' });
   
-  const playwright = process.platform === 'win32'
-    ? path.join(VENV, 'Scripts', 'playwright')
-    : path.join(VENV, 'bin', 'playwright');
+  const patchright = process.platform === 'win32'
+    ? path.join(VENV, 'Scripts', 'patchright')
+    : path.join(VENV, 'bin', 'patchright');
   
-  execSync(`${playwright} install chromium`, { cwd: ROOT, stdio: 'inherit' });
+  execSync(`${patchright} install chromium`, { cwd: ROOT, stdio: 'inherit' });
   
   fs.writeFileSync(INSTALLED, '');
   console.log('✓ Dependencies installed');

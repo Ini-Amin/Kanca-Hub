@@ -353,7 +353,7 @@ user2@example.com:pass2'></textarea>
                     resultDiv.innerHTML = `
                         <h3>✅ Success!</h3>
                         <p>Processed <strong>${data.processed}</strong> accounts successfully.</p>
-                        <p>Results saved to: <code>exports/cf_accounts.json</code></p>
+                        <p>Results saved to: <code>exports/cf_accounts.txt</code></p>
                         <pre>${JSON.stringify(data.results, null, 2)}</pre>
                     `;
                     resultDiv.style.display = 'block';

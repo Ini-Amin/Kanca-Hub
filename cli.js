@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn, spawnSync, execSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -208,7 +208,7 @@ async function setup() {
         logErr('Alternative method also failed');
         if (altResult.stderr) log(`${colors.dim}${altResult.stderr}${colors.reset}`);
         
-        log('\n' + logInfo('Troubleshooting:'));
+        logInfo('\n⚠ Troubleshooting:');
         logInfo('1. Try manually: ' + pythonExe + ' -m venv "' + VENV_DIR + '"');
         logInfo('2. Check antivirus is not blocking venv creation');
         logInfo('3. Try running PowerShell as Administrator');

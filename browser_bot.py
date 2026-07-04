@@ -22,7 +22,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cloudflare Account Automation")
     parser.add_argument("--accounts", help="Path to accounts file (JSON or TXT)")
     parser.add_argument("--single", help="Single account in email:password format")
-    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
+    parser.add_argument("--visible", action="store_true", default=False,
+                        help="Show browser window (non-headless)")
     parser.add_argument("--proxy", help="Path to proxy config JSON file")
     parser.add_argument("--login-method", choices=["email", "google"], default="email", 
                        help="Login method: 'email' for email:password, 'google' for Google OAuth")
@@ -59,7 +60,7 @@ if __name__ == "__main__":
         print("=" * 60)
         
         accounts = [{'email': email, 'password': password}]
-        results = process_accounts(accounts, headless=args.headless, proxies=proxies, login_method=args.login_method)
+        results = process_accounts(accounts, headless=not args.visible, proxies=proxies, login_method=args.login_method)
         sys.exit(0 if results else 1)
     
     # Bulk accounts mode
@@ -68,7 +69,7 @@ if __name__ == "__main__":
         print(f"Loaded {len(accounts)} accounts from {args.accounts}")
         print(f"Login method: {args.login_method}")
         
-        results = process_accounts(accounts, headless=args.headless, proxies=proxies, login_method=args.login_method)
+        results = process_accounts(accounts, headless=not args.visible, proxies=proxies, login_method=args.login_method)
         sys.exit(0 if results else 1)
     
     # No arguments provided
