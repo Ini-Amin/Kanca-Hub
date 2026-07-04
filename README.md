@@ -6,7 +6,7 @@
 
 **Cloudflare Workers AI Account ID & Token Auto-Grabber**
 
-<img alt="Version" src="https://img.shields.io/badge/version-v3.2.0-5865F2?style=flat-square">
+<img alt="Version" src="https://img.shields.io/badge/version-v3.2.4-5865F2?style=flat-square">
 <img alt="License" src="https://img.shields.io/badge/license-MIT-57F287?style=flat-square">
 <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="Node" src="https://img.shields.io/badge/node-18%2B-339933?style=flat-square&logo=node.js&logoColor=white">
@@ -55,10 +55,11 @@ That's it! First run will auto-setup everything (Python venv, pip packages, Chro
 
 - 🤖 **Full Automation** — Login, grab Account ID, create API Token, all automatic
 - 🛡️ **Stealth Mode** — Bypass Cloudflare bot detection with advanced stealth scripts
+- 👻 **Headless by Default** — Runs completely in background, no browser window opens
 - 🌐 **Residential Proxy** — Optional proxy configuration for better success rate
 - 📝 **Single & Bulk** — Input single email:pass atau bulk dari file
 - 📦 **Auto Setup** — Automatic dependency installation with live timer
-- 💾 **Export Results** — Save to JSON with account ID, API token, and validation
+- 💾 **Export Results** — Save to TXT format with account_id:worker_token
 
 ---
 
@@ -180,6 +181,22 @@ First run automatically sets up:
 - Chromium browser for automation
 
 Setup includes live timer and progress indicators.
+
+## 💾 Export Format
+
+Results are saved to `exports/cf_accounts.txt` in simple format:
+
+```txt
+account_id:worker_token
+```
+
+Example:
+```txt
+abc123def456:AIzaSyD-example-token-xyz789
+xyz789abc123:AIzaSyE-another-token-uvw456
+```
+
+This format is ready to use with other tools and scripts.
 
 ---
 

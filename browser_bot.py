@@ -633,12 +633,16 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
     output_dir = Path("exports")
     output_dir.mkdir(exist_ok=True)
     
-    output_file = output_dir / "cf_accounts.json"
+    # Save as TXT format: account_id:worker_token
+    output_file = output_dir / "cf_accounts.txt"
     with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
+        for result in results:
+            if result.get('account_id') and result.get('api_token'):
+                f.write(f"{result['account_id']}:{result['api_token']}\n")
     
     print(f"\n{'='*60}")
     print(f"Results saved to: {output_file}")
+    print(f"Format: account_id:worker_token")
     print(f"Total processed: {len(results)}/{total}")
     print('='*60)
     

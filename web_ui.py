@@ -420,10 +420,12 @@ def process():
         # Save results to file
         output_dir = Path("exports")
         output_dir.mkdir(exist_ok=True)
-        output_file = output_dir / "cf_accounts.json"
+        output_file = output_dir / "cf_accounts.txt"
         
         with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
+            for result in results:
+                if result.get('account_id') and result.get('api_token'):
+                    f.write(f"{result['account_id']}:{result['api_token']}\n")
         
         return jsonify({
             'success': True,
