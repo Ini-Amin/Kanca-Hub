@@ -1,6 +1,37 @@
-# Auto-FreeCF
+<div align="center">
 
-Cloudflare Workers AI Account ID & Token Auto-Grabber
+# 🚀 Auto-FreeCF
+
+<img src="assets/logo.svg" alt="Auto-FreeCF Logo" width="200"/>
+
+### Cloudflare Workers AI Account ID & Token Auto-Grabber
+
+<img alt="Version" src="https://img.shields.io/badge/version-v3.3.6-5865F2?style=flat-square">
+<img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
+<img alt="Node" src="https://img.shields.io/badge/node-%3E=18.0.0-339933?style=flat-square">
+<img alt="Python" src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square">
+<img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square">
+
+**Fully automated Cloudflare account grabber with advanced stealth scripts**
+
+[Installation](#-installation) • [Usage](#-usage) • [Features](#-features) • [Documentation](#-documentation)
+
+</div>
+
+---
+
+## ✨ Features
+
+- 🤖 **Full Automation** — Login, grab Account ID, create API Token, all automatic
+- 🛡️ **Stealth Mode** — Bypass Cloudflare bot detection with advanced stealth scripts
+- 👻 **Headless by Default** — Runs completely in background, no browser window opens
+- 🌐 **Residential Proxy** — Optional proxy configuration for better success rate
+- 📝 **Single & Bulk** — Input single email:pass atau bulk dari file
+- 📦 **Auto Setup** — Automatic dependency installation with live timer
+- 💾 **Export Results** — Save to TXT format with account_id:worker_token
+- 🔐 **Google OAuth** — Support login via Google Sign-In (fully automated)
+
+---
 
 ## 📁 Project Structure
 
