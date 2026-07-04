@@ -24,7 +24,7 @@
 
 ```bash
 npm install -g auto-freecf
-moycf email@example.com:password123
+moycf
 ```
 
 ---
