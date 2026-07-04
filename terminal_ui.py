@@ -67,7 +67,7 @@ def process_single():
     print(f"\n{Colors.BOLD}Processing:{Colors.ENDC} {Colors.CYAN}{email}{Colors.ENDC}")
     print(f"{Colors.DIM}{'─' * 60}{Colors.ENDC}")
     
-    grabber = CFAutoGrabber(email, password, headless=False)
+    grabber = CFAutoGrabber(email, password, headless=True)
     
     sys.stdout.write(f"  {Colors.DIM}[1/4]{Colors.ENDC} Logging in... ")
     sys.stdout.flush()
@@ -119,7 +119,7 @@ def process_bulk():
         accounts = load_accounts(filename)
         print(f"\n{Colors.GREEN}✓{Colors.ENDC} Found {Colors.BOLD}{len(accounts)}{Colors.ENDC} accounts\n")
         
-        results = process_accounts(accounts, headless=False)
+        results = process_accounts(accounts, headless=True)
         
         print(f"\n{Colors.DIM}{'═' * 60}{Colors.ENDC}")
         print(f"{Colors.GREEN}{Colors.BOLD}✅ Completed!{Colors.ENDC} {len(results)}/{len(accounts)} accounts processed")
