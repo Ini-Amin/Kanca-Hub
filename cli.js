@@ -285,7 +285,7 @@ function getPythonCmd() {
 // ============================================================
 // PROCESS ACCOUNTS
 // ============================================================
-async function processSingle(emailPass, proxyFile) {
+async function processSingle(emailPass, proxyFile, loginMethod = 'email') {
   const pyCmd = getPythonCmd();
   const browserBot = path.join(ROOT, 'browser_bot.py');
   const cmdArgs = [browserBot, '--single', emailPass];
@@ -294,18 +294,26 @@ async function processSingle(emailPass, proxyFile) {
     cmdArgs.push('--proxy', proxyFile);
   }
   
+  if (loginMethod === 'google') {
+    cmdArgs.push('--login-method', 'google');
+  }
+  
   // NO shell:true - fixes space-in-path
   const success = await runAsync(pyCmd, cmdArgs);
   process.exit(success ? 0 : 1);
 }
 
-async function processBulk(filePath, proxyFile) {
+async function processBulk(filePath, proxyFile, loginMethod = 'email') {
   const pyCmd = getPythonCmd();
   const browserBot = path.join(ROOT, 'browser_bot.py');
   const cmdArgs = [browserBot, '--accounts', filePath];
   
   if (proxyFile) {
     cmdArgs.push('--proxy', proxyFile);
+  }
+  
+  if (loginMethod === 'google') {
+    cmdArgs.push('--login-method', 'google');
   }
   
   // NO shell:true - fixes space-in-path
@@ -333,21 +341,24 @@ async function main() {
   const args = process.argv.slice(2);
   const proxyArg = args.find(a => a.startsWith('--proxy='));
   const proxyFile = proxyArg ? proxyArg.split('=')[1] : null;
+  const loginMethod = args.includes('--google') ? 'google' : 'email';
   
   const fileArg = args.find(a => !a.startsWith('--') && (a.endsWith('.txt') || a.endsWith('.json')));
   const singleArg = args.find(a => !a.startsWith('--') && a.includes('@') && a.includes(':'));
   
   if (fileArg) {
     logInfo(`Bulk mode: ${fileArg}`);
+    logInfo(`Login method: ${loginMethod}`);
     if (proxyFile) logInfo(`Proxy: ${proxyFile}`);
-    await processBulk(fileArg, proxyFile);
+    await processBulk(fileArg, proxyFile, loginMethod);
     return;
   }
   
   if (singleArg) {
     logInfo(`Single mode: ${singleArg.split(':')[0]}`);
+    logInfo(`Login method: ${loginMethod}`);
     if (proxyFile) logInfo(`Proxy: ${proxyFile}`);
-    await processSingle(singleArg, proxyFile);
+    await processSingle(singleArg, proxyFile, loginMethod);
     return;
   }
   
@@ -360,11 +371,12 @@ async function main() {
   const question = (prompt) => new Promise(resolve => rl.question(prompt, resolve));
   
   log(`\n${colors.bold}Choose mode:${colors.reset}`);
-  log(`  ${colors.green}[1]${colors.reset} Single account ${colors.dim}(enter email:password)${colors.reset}`);
-  log(`  ${colors.green}[2]${colors.reset} Bulk accounts ${colors.dim}(from file)${colors.reset}`);
-  log(`  ${colors.green}[3]${colors.reset} Exit\n`);
+  log(`  ${colors.green}[1]${colors.reset} Single account ${colors.dim}(email:password)${colors.reset}`);
+  log(`  ${colors.green}[2]${colors.reset} Single account ${colors.dim}(Google OAuth)${colors.reset}`);
+  log(`  ${colors.green}[3]${colors.reset} Bulk accounts ${colors.dim}(from file)${colors.reset}`);
+  log(`  ${colors.green}[4]${colors.reset} Exit\n`);
   
-  const choice = await question(`${colors.bold}Select${colors.reset} ${colors.dim}(1-3)${colors.reset}: `);
+  const choice = await question(`${colors.bold}Select${colors.reset} ${colors.dim}(1-4)${colors.reset}: `);
   
   if (choice === '1') {
     const emailPass = await question(`${colors.cyan}Enter email:password${colors.reset}: `);
@@ -374,8 +386,17 @@ async function main() {
       process.exit(1);
     }
     const proxy = await question(`${colors.dim}Proxy file (optional, Enter to skip)${colors.reset}: `);
-    await processSingle(emailPass.trim(), proxy.trim() || null);
+    await processSingle(emailPass.trim(), proxy.trim() || null, 'email');
   } else if (choice === '2') {
+    const emailPass = await question(`${colors.cyan}Enter Google email:password${colors.reset}: `);
+    if (!emailPass || !emailPass.includes(':')) {
+      logErr('Invalid format. Use: google_email:password');
+      rl.close();
+      process.exit(1);
+    }
+    const proxy = await question(`${colors.dim}Proxy file (optional, Enter to skip)${colors.reset}: `);
+    await processSingle(emailPass.trim(), proxy.trim() || null, 'google');
+  } else if (choice === '3') {
     const file = await question(`${colors.cyan}Enter file path${colors.reset} ${colors.dim}(default: accounts.txt)${colors.reset}: `);
     const filePath = file.trim() || 'accounts.txt';
     if (!fs.existsSync(filePath)) {
@@ -384,8 +405,8 @@ async function main() {
       process.exit(1);
     }
     const proxy = await question(`${colors.dim}Proxy file (optional, Enter to skip)${colors.reset}: `);
-    await processBulk(filePath, proxy.trim() || null);
-  } else if (choice === '3') {
+    await processBulk(filePath, proxy.trim() || null, 'email');
+  } else if (choice === '4') {
     log('\nGoodbye! 👋\n');
     rl.close();
     process.exit(0);

@@ -36,11 +36,12 @@ TURNSTILE_HTML = """<!DOCTYPE html>
 class CFAutoGrabber:
     """Automated Cloudflare account grabber with patchright (anti-detection)"""
     
-    def __init__(self, email: str, password: str, headless: bool = False, proxy: Optional[Dict] = None):
+    def __init__(self, email: str, password: str, headless: bool = True, proxy: Optional[Dict] = None, login_method: str = "email"):
         self.email = email
         self.password = password
         self.headless = headless
         self.proxy = proxy
+        self.login_method = login_method
         self.account_id = None
         self.api_token = None
         self.workers_ai_ok = False
@@ -449,6 +450,86 @@ class CFAutoGrabber:
             traceback.print_exc()
             return False
     
+    def login_google(self) -> bool:
+        """Login to Cloudflare via Google OAuth (fully automated)"""
+        try:
+            self._start_browser()
+            page = self._page
+
+            print(f"  → Opening Cloudflare login...")
+            page.goto("https://dash.cloudflare.com/login", wait_until="domcontentloaded", timeout=60000)
+            
+            # Wait for page load
+            page.wait_for_timeout(3000)
+
+            # Click "Continue with Google"
+            print(f"  → Clicking 'Continue with Google'...")
+            google_btn = page.query_selector('button:has-text("Continue with Google"), a:has-text("Continue with Google")')
+            if google_btn:
+                google_btn.click()
+            else:
+                # Fallback: try clicking by href
+                page.click('a[href*="accounts.google.com"]')
+            
+            # Wait for Google login page/popup
+            print(f"  → Waiting for Google login...")
+            page.wait_for_load_state("networkidle", timeout=15000)
+            page.wait_for_timeout(2000)
+
+            current_url = page.url
+            if "accounts.google.com" not in current_url:
+                # Sometimes opens in new tab/popup
+                for p in self._context.pages:
+                    if "accounts.google.com" in p.url:
+                        page = p
+                        self._page = p
+                        break
+
+            # Fill Email
+            print(f"  → Filling Google email...")
+            page.wait_for_selector('input[type="email"]', timeout=10000)
+            page.fill('input[type="email"]', self.email)
+            page.click('button:has-text("Next"), #identifierNext')
+            page.wait_for_timeout(2000)
+
+            # Fill Password
+            print(f"  → Filling Google password...")
+            page.wait_for_selector('input[type="password"]', timeout=10000)
+            page.fill('input[type="password"]', self.password)
+            page.click('button:has-text("Next"), #passwordNext')
+            
+            # Wait for redirect back to Cloudflare
+            print(f"  → Waiting for authentication...")
+            page.wait_for_load_state("networkidle", timeout=20000)
+            page.wait_for_timeout(3000)
+
+            # Check for Google 2FA / Phone verification
+            if "challenge" in page.url or "signin/v2" in page.url or "Verify" in page.title():
+                print(f"  ⚠️  Google 2FA detected - waiting 60s for manual verification...")
+                page.wait_for_timeout(60000)
+
+            # Wait for redirect back to Cloudflare
+            print(f"  → Waiting for Cloudflare redirect...")
+            page.wait_for_url("**/dash.cloudflare.com/**", timeout=30000)
+            page.wait_for_timeout(3000)
+
+            # Extract Account ID
+            current_url = page.url
+            parts = current_url.split("dash.cloudflare.com/")
+            if len(parts) > 1:
+                account_part = parts[1].split("/")[0].split("?")[0]
+                if account_part and account_part not in ["login", "home", "sign-up", "", "profile"]:
+                    self.account_id = account_part
+                    print(f"  ✓ Logged in via Google | Account ID: {self.account_id}")
+                    return True
+
+            print(f"  ❌ Google login redirect failed or account ID not found")
+            return False
+
+        except Exception as e:
+            print(f"  ❌ Google login error: {e}")
+            return False
+    
     def _wait_for_turnstile_manual(self, page: Page) -> bool:
         """Wait for Turnstile widget to appear and solve manually"""
         print(f"  → Waiting for Turnstile widget (up to 60s)...")
@@ -759,7 +840,7 @@ def load_proxy_config(proxy_file: str) -> List[Dict]:
         return []
 
 
-def process_accounts(accounts: List[Dict[str, str]], headless: bool = False, proxies: Optional[List[Dict]] = None) -> List[Dict]:
+def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, proxies: Optional[List[Dict]] = None, login_method: str = "email") -> List[Dict]:
     """Process multiple accounts with proxy rotation and retry"""
     results = []
     total = len(accounts)
@@ -786,10 +867,16 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = False, pro
             else:
                 print(f"  Attempt {attempt}/{max_retries} - No proxy")
             
-            grabber = CFAutoGrabber(email, password, headless, proxy)
+            grabber = CFAutoGrabber(email, password, headless, proxy, login_method)
             
-            print(f"  [1/4] Logging in...")
-            if not grabber.login():
+            # Login based on method
+            print(f"  [1/4] Logging in via {login_method}...")
+            if login_method == "google":
+                login_success = grabber.login_google()
+            else:
+                login_success = grabber.login()
+            
+            if not login_success:
                 print(f"  ❌ Login failed (attempt {attempt})")
                 grabber._close_browser()
                 if attempt < max_retries:
@@ -854,6 +941,8 @@ if __name__ == "__main__":
     parser.add_argument("--single", help="Single account in email:password format")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
     parser.add_argument("--proxy", help="Path to proxy config JSON file")
+    parser.add_argument("--login-method", choices=["email", "google"], default="email", 
+                       help="Login method: 'email' for email:password, 'google' for Google OAuth")
     
     args = parser.parse_args()
     
@@ -883,18 +972,20 @@ if __name__ == "__main__":
             sys.exit(1)
         
         print(f"Processing single account: {email}")
+        print(f"Login method: {args.login_method}")
         print("=" * 60)
         
         accounts = [{'email': email, 'password': password}]
-        results = process_accounts(accounts, headless=args.headless, proxies=proxies)
+        results = process_accounts(accounts, headless=args.headless, proxies=proxies, login_method=args.login_method)
         sys.exit(0 if results else 1)
     
     # Bulk accounts mode
     if args.accounts:
         accounts = load_accounts(args.accounts)
         print(f"Loaded {len(accounts)} accounts from {args.accounts}")
+        print(f"Login method: {args.login_method}")
         
-        results = process_accounts(accounts, headless=args.headless, proxies=proxies)
+        results = process_accounts(accounts, headless=args.headless, proxies=proxies, login_method=args.login_method)
         sys.exit(0 if results else 1)
     
     # No arguments provided
