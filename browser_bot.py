@@ -98,42 +98,89 @@ class CFAutoGrabber:
         self._page = None
     
     def _extract_sitekey(self, page: Page) -> Optional[str]:
-        """Extract Turnstile sitekey from page"""
+        """Extract Turnstile sitekey from page with multiple methods"""
+        print(f"  → Attempting to extract Turnstile sitekey...")
+        
+        # Method 1: Wait for Turnstile iframe to appear, then extract from src
+        print(f"  → Method 1: Looking for Turnstile iframe...")
+        for attempt in range(30):  # Wait up to 60s
+            try:
+                iframe = page.query_selector('iframe[src*="challenges.cloudflare.com"]')
+                if iframe:
+                    src = iframe.get_attribute('src')
+                    print(f"  ✓ Found iframe: {src[:100]}...")
+                    match = re.search(r'sitekey=([0-9A-Za-z_-]+)', src)
+                    if match:
+                        sitekey = match.group(1)
+                        print(f"  ✓ Extracted sitekey from iframe: {sitekey}")
+                        return sitekey
+            except Exception as e:
+                pass
+            page.wait_for_timeout(2000)
+        
+        # Method 2: Look for data-sitekey attribute in DOM
+        print(f"  → Method 2: Looking for data-sitekey attribute...")
         try:
-            # Try to find sitekey in various ways
-            # Method 1: Look for data-sitekey attribute
             turnstile_div = page.query_selector('[data-sitekey]')
             if turnstile_div:
                 sitekey = turnstile_div.get_attribute('data-sitekey')
                 if sitekey:
+                    print(f"  ✓ Found data-sitekey: {sitekey}")
                     return sitekey
-            
-            # Method 2: Look in script tags
-            scripts = page.query_selector_all('script')
-            for script in scripts:
-                content = script.inner_text()
-                # Look for sitekey pattern
-                match = re.search(r'sitekey["\s:]+["\']?([0-9A-Za-z_-]+)', content)
-                if match:
-                    return match.group(1)
-            
-            # Method 3: Look in page source
+        except Exception as e:
+            print(f"  ⚠️  Error: {e}")
+        
+        # Method 3: Look in page source (HTML content)
+        print(f"  → Method 3: Searching in page HTML source...")
+        try:
             content = page.content()
             match = re.search(r'data-sitekey=["\']([0-9A-Za-z_-]+)', content)
             if match:
-                return match.group(1)
+                sitekey = match.group(1)
+                print(f"  ✓ Found sitekey in HTML: {sitekey}")
+                return sitekey
             
-            # Method 4: Look for Turnstile iframe
-            iframe = page.query_selector('iframe[src*="challenges.cloudflare.com"]')
-            if iframe:
-                src = iframe.get_attribute('src')
-                match = re.search(r'sitekey=([0-9A-Za-z_-]+)', src)
-                if match:
-                    return match.group(1)
-            
+            # Also try searching for sitekey in JavaScript
+            match = re.search(r'sitekey["\s:]+["\']?([0-9A-Za-z_-]{20,})', content)
+            if match:
+                sitekey = match.group(1)
+                print(f"  ✓ Found sitekey in JS: {sitekey}")
+                return sitekey
         except Exception as e:
-            print(f"  ⚠️  Could not extract sitekey: {e}")
+            print(f"  ⚠️  Error: {e}")
         
+        # Method 4: Look in script tags
+        print(f"  → Method 4: Searching in script tags...")
+        try:
+            scripts = page.query_selector_all('script')
+            for script in scripts:
+                content = script.inner_text()
+                match = re.search(r'sitekey["\s:]+["\']?([0-9A-Za-z_-]{20,})', content)
+                if match:
+                    sitekey = match.group(1)
+                    print(f"  ✓ Found sitekey in script: {sitekey}")
+                    return sitekey
+        except Exception as e:
+            print(f"  ⚠️  Error: {e}")
+        
+        # Method 5: Check if Turnstile is inside shadow DOM or iframe
+        print(f"  → Method 5: Checking for Turnstile in frames...")
+        try:
+            frames = page.frames
+            for frame in frames:
+                try:
+                    turnstile_div = frame.query_selector('[data-sitekey]')
+                    if turnstile_div:
+                        sitekey = turnstile_div.get_attribute('data-sitekey')
+                        if sitekey:
+                            print(f"  ✓ Found sitekey in frame: {sitekey}")
+                            return sitekey
+                except:
+                    continue
+        except Exception as e:
+            print(f"  ⚠️  Error: {e}")
+        
+        print(f"  ❌ Could not extract sitekey after all methods")
         return None
     
     def _solve_turnstile_isolated(self, url: str, sitekey: str) -> Optional[str]:
@@ -241,48 +288,56 @@ class CFAutoGrabber:
             print(f"  → Waiting for login form...")
             try:
                 page.wait_for_selector('input[type="email"], input[name="email"], input[placeholder*="email"]', timeout=15000)
+                print(f"  ✓ Login form found")
             except:
                 print(f"  ❌ Login form not found")
+                page.screenshot(path="debug_no_login_form.png")
+                print(f"  📸 Debug screenshot saved: debug_no_login_form.png")
                 return False
             
             # Extract sitekey from page
             print(f"  → Extracting Turnstile sitekey...")
             sitekey = self._extract_sitekey(page)
             
-            if not sitekey:
-                print(f"  ⚠️  Could not extract sitekey, trying manual solve...")
-                # Fallback to manual approach
-                return self._login_manual_turnstile()
+            if sitekey:
+                print(f"  ✓ Sitekey: {sitekey[:20]}...")
+                
+                # Solve Turnstile using isolated approach
+                token = self._solve_turnstile_isolated("https://dash.cloudflare.com/login", sitekey)
+                
+                if token:
+                    # Inject token into login page
+                    print(f"  → Injecting Turnstile token...")
+                    try:
+                        page.evaluate(f'''() => {{
+                            const input = document.querySelector('[name="cf-turnstile-response"]');
+                            if (input) {{
+                                input.value = "{token}";
+                            }} else {{
+                                // Create hidden input if not exists
+                                const hidden = document.createElement("input");
+                                hidden.type = "hidden";
+                                hidden.name = "cf-turnstile-response";
+                                hidden.value = "{token}";
+                                document.body.appendChild(hidden);
+                            }}
+                        }}''')
+                        print(f"  ✓ Token injected")
+                    except Exception as e:
+                        print(f"  ⚠️  Failed to inject token: {e}, trying manual approach...")
+                else:
+                    print(f"  ⚠️  Failed to solve Turnstile, trying manual approach...")
+            else:
+                print(f"  ⚠️  Could not extract sitekey")
+                print(f"  ℹ️  Cloudflare may be using managed challenge (auto-solve)")
             
-            print(f"  ✓ Sitekey: {sitekey[:20]}...")
+            # Try manual Turnstile solve as fallback
+            print(f"  → Attempting manual Turnstile solve...")
+            turnstile_solved = self._wait_for_turnstile_manual(page)
             
-            # Solve Turnstile using isolated approach
-            token = self._solve_turnstile_isolated("https://dash.cloudflare.com/login", sitekey)
-            
-            if not token:
-                print(f"  ❌ Failed to solve Turnstile")
-                return False
-            
-            # Inject token into login page
-            print(f"  → Injecting Turnstile token...")
-            try:
-                page.evaluate(f'''() => {{
-                    const input = document.querySelector('[name="cf-turnstile-response"]');
-                    if (input) {{
-                        input.value = "{token}";
-                    }} else {{
-                        // Create hidden input if not exists
-                        const hidden = document.createElement("input");
-                        hidden.type = "hidden";
-                        hidden.name = "cf-turnstile-response";
-                        hidden.value = "{token}";
-                        document.body.appendChild(hidden);
-                    }}
-                }}''')
-                print(f"  ✓ Token injected")
-            except Exception as e:
-                print(f"  ❌ Failed to inject token: {e}")
-                return False
+            if not turnstile_solved:
+                print(f"  ⚠️  Turnstile not detected or not solved")
+                print(f"  ℹ️  Proceeding anyway (may be auto-solved by Cloudflare)...")
             
             # Fill credentials
             print(f"  → Filling credentials...")
@@ -292,6 +347,7 @@ class CFAutoGrabber:
                 try:
                     page.fill(selector, self.email)
                     email_filled = True
+                    print(f"  ✓ Email filled")
                     break
                 except:
                     continue
@@ -306,6 +362,7 @@ class CFAutoGrabber:
                 try:
                     page.fill(selector, self.password)
                     password_filled = True
+                    print(f"  ✓ Password filled")
                     break
                 except:
                     continue
@@ -325,13 +382,15 @@ class CFAutoGrabber:
                 try:
                     page.click(selector, timeout=5000)
                     login_clicked = True
-                    print(f"  → Clicked: {selector}")
+                    print(f"  ✓ Clicked: {selector}")
                     break
                 except:
                     continue
             
             if not login_clicked:
                 print(f"  ❌ Could not click login button")
+                page.screenshot(path="debug_no_login_button.png")
+                print(f"  📸 Debug screenshot saved: debug_no_login_button.png")
                 return False
             
             # CRITICAL: Wait for Cloudflare to process Turnstile response
@@ -362,7 +421,7 @@ class CFAutoGrabber:
                 if "/login" in current_url:
                     print(f"  ❌ Still on login page - credentials may be wrong or Turnstile invalid")
                     page.screenshot(path="debug_login_failed.png")
-                    print(f"  → Screenshot saved: debug_login_failed.png")
+                    print(f"  📸 Debug screenshot saved: debug_login_failed.png")
                     return False
             
             # Try to extract account ID
@@ -386,143 +445,65 @@ class CFAutoGrabber:
             
         except Exception as e:
             print(f"  ❌ Login error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
-    def _login_manual_turnstile(self) -> bool:
-        """Fallback: Manual Turnstile solving (old approach)"""
-        page = self._page
-        
-        print(f"  → Waiting for Turnstile widget...")
+    def _wait_for_turnstile_manual(self, page: Page) -> bool:
+        """Wait for Turnstile widget to appear and solve manually"""
+        print(f"  → Waiting for Turnstile widget (up to 60s)...")
         turnstile_wait_start = time.time()
         turnstile_appeared = False
         
-        for _ in range(15):
+        for attempt in range(30):  # Wait up to 60s
             try:
+                # Check for Turnstile widget
                 turnstile_div = page.query_selector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
                 if turnstile_div:
                     turnstile_appeared = True
                     print(f"  ✓ Turnstile widget appeared ({int(time.time() - turnstile_wait_start)}s)")
-                    break
-            except:
-                pass
-            page.wait_for_timeout(2000)
-        
-        if not turnstile_appeared:
-            print(f"  ⚠️  Turnstile widget not detected, proceeding anyway...")
-        
-        print(f"  → Solving Turnstile manually...")
-        turnstile_solved = False
-        
-        for attempt in range(15):
-            page.wait_for_timeout(2000)
-            
-            try:
-                turnstile_div = page.query_selector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
-                if turnstile_div:
-                    turnstile_div.click()
-                    if attempt == 0:
+                    
+                    # Try to click turnstile to trigger solving
+                    try:
+                        turnstile_div.click()
                         print(f"  → Clicked turnstile widget")
+                    except:
+                        pass
+                    
+                    # Wait for token
+                    for solve_attempt in range(15):
+                        page.wait_for_timeout(2000)
+                        
+                        try:
+                            turnstile_value = page.input_value('[name="cf-turnstile-response"]')
+                            if turnstile_value and turnstile_value != "":
+                                print(f"  ✓ Turnstile solved ({(solve_attempt + 1) * 2}s)")
+                                return True
+                        except:
+                            pass
+                        
+                        # Check button state as fallback
+                        btn = page.query_selector('button[type="submit"]')
+                        if btn:
+                            disabled = btn.get_attribute('disabled')
+                            if disabled is None:
+                                print(f"  ✓ Turnstile solved (button enabled)")
+                                return True
+                        
+                        if solve_attempt < 8:
+                            print(f"  ⏳ Solving... ({(solve_attempt + 1) * 2}s)")
+                    
+                    # If we got here, widget appeared but didn't solve
+                    print(f"  ⚠️  Turnstile widget appeared but didn't solve")
+                    return False
             except:
                 pass
+            page.wait_for_timeout(2000)
             
-            try:
-                turnstile_value = page.input_value('[name="cf-turnstile-response"]')
-                if turnstile_value and turnstile_value != "":
-                    turnstile_solved = True
-                    print(f"  ✓ Turnstile solved ({(attempt + 1) * 2}s)")
-                    break
-            except:
-                pass
-            
-            btn = page.query_selector('button[type="submit"]')
-            if btn:
-                disabled = btn.get_attribute('disabled')
-                if disabled is None:
-                    turnstile_solved = True
-                    print(f"  ✓ Turnstile solved (button enabled) ({(attempt + 1) * 2}s)")
-                    break
-            
-            if attempt < 8:
-                print(f"  ⏳ Turnstile solving... ({(attempt + 1) * 2}s)")
+            if attempt < 15:
+                print(f"  ⏳ Waiting for widget... ({(attempt + 1) * 2}s)")
         
-        if not turnstile_solved:
-            print(f"  ❌ Turnstile not solved after 30s")
-            page.screenshot(path="debug_turnstile_timeout.png")
-            return False
-        
-        # Fill credentials
-        print(f"  → Filling credentials...")
-        email_selectors = ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="email"]', 'input[placeholder*="Email"]']
-        email_filled = False
-        for selector in email_selectors:
-            try:
-                page.fill(selector, self.email)
-                email_filled = True
-                break
-            except:
-                continue
-        
-        if not email_filled:
-            print(f"  ❌ Could not find email input field")
-            return False
-        
-        password_selectors = ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="password"]']
-        password_filled = False
-        for selector in password_selectors:
-            try:
-                page.fill(selector, self.password)
-                password_filled = True
-                break
-            except:
-                continue
-        
-        if not password_filled:
-            print(f"  ❌ Could not find password input field")
-            return False
-        
-        page.wait_for_timeout(1000)
-        
-        # Click login button
-        print(f"  → Submitting login...")
-        login_selectors = ['button[type="submit"]', 'button:has-text("Log In")', 'button:has-text("Login")', 'button:has-text("Sign In")']
-        login_clicked = False
-        for selector in login_selectors:
-            try:
-                page.click(selector, timeout=5000)
-                login_clicked = True
-                print(f"  → Clicked: {selector}")
-                break
-            except:
-                continue
-        
-        if not login_clicked:
-            print(f"  ❌ Could not click login button")
-            return False
-        
-        # Wait for redirect
-        print(f"  → Waiting for dashboard...")
-        page.wait_for_timeout(5000)
-        
-        current_url = page.url
-        
-        if "/login" in current_url:
-            print(f"  ❌ Still on login page")
-            return False
-        
-        # Extract account ID
-        if "/home" in current_url or current_url.endswith("dash.cloudflare.com/"):
-            page.goto("https://dash.cloudflare.com/", wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
-            current_url = page.url
-        
-        parts = current_url.split("dash.cloudflare.com/")
-        if len(parts) > 1:
-            account_part = parts[1].split("/")[0].split("?")[0]
-            if account_part and account_part not in ["login", "home", "sign-up", "", "profile"]:
-                self.account_id = account_part
-                print(f"  ✓ Account ID: {self.account_id}")
-                return True
-        
+        print(f"  ❌ Turnstile widget not detected after 60s")
         return False
     
     def get_account_id(self) -> bool:
