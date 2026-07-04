@@ -6,7 +6,7 @@
 
 ### Cloudflare Workers AI Account ID & Token Auto-Grabber
 
-<img alt="Version" src="https://img.shields.io/badge/version-v3.3.10-5865F2?style=flat-square">
+<img alt="Version" src="https://img.shields.io/badge/version-v3.3.11-5865F2?style=flat-square">
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
 <img alt="Node" src="https://img.shields.io/badge/node-%3E=18.0.0-339933?style=flat-square">
 <img alt="Python" src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square">
@@ -120,6 +120,92 @@ Open http://localhost:8080 in your browser.
 cd tests
 python test_login.py
 ```
+
+## 🔒 Security Policy
+
+### Supported Versions
+
+| Version | Supported          |
+| ------- | ------------------ |
+| 3.3.x   | :white_check_mark: |
+| < 3.3   | :x:                |
+
+### Reporting a Vulnerability
+
+We take security seriously. If you discover a vulnerability, please help us by following these steps:
+
+**DO:**
+- Email us at [security@auto-freecf.com](mailto:security@auto-freecf.com)
+- Include detailed information about the vulnerability
+- Provide steps to reproduce if possible
+- Allow us time to address the issue before public disclosure
+
+**DON'T:**
+- Open a public GitHub issue about the vulnerability
+- Exploit the vulnerability maliciously
+- Share the vulnerability details with others before we've had a chance to fix it
+
+**What to expect:**
+- We will acknowledge receipt of your report within 48 hours
+- We will provide a timeline for a fix within 7 days
+- We will keep you informed of our progress
+- We will credit you in the security advisory (unless you prefer to remain anonymous)
+
+### Security Best Practices
+
+- Always use the latest version
+- Keep your dependencies updated
+- Use strong, unique passwords
+- Enable 2FA on your Cloudflare account
+- Review the code before running it
+
+---
+
+## 📜 Code of Conduct
+
+### Our Pledge
+
+We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
+
+We pledge to act and interact in ways that contribute to an open, welcoming, diverse, inclusive, and healthy community.
+
+### Our Standards
+
+Examples of behavior that contributes to a positive environment:
+
+* Using welcoming and inclusive language
+* Being respectful of differing viewpoints and experiences
+* Gracefully accepting constructive criticism
+* Focusing on what is best for the community
+* Showing empathy towards other community members
+
+Examples of unacceptable behavior:
+
+* The use of sexualized language or imagery, and sexual attention or advances of any kind
+* Trolling, insulting or derogatory comments, and personal or political attacks
+* Public or private harassment
+* Publishing others' private information without explicit permission
+* Other conduct which could reasonably be considered inappropriate in a professional setting
+
+### Enforcement Responsibilities
+
+Community leaders are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
+
+### Scope
+
+This Code of Conduct applies within all community spaces, and also applies when an individual is officially representing the community in public spaces.
+
+### Enforcement
+
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at [conduct@auto-freecf.com](mailto:conduct@auto-freecf.com).
+
+All complaints will be reviewed and investigated promptly and fairly.
+
+### Attribution
+
+This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.0.
+
+---
 
 ## 📝 License
 
