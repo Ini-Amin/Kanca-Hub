@@ -1,273 +1,86 @@
-<div align="center">
+# Auto-FreeCF
 
-<img src="assets/logo.svg" width="128" height="128" alt="Auto-FreeCF">
+Cloudflare Workers AI Account ID & Token Auto-Grabber
 
-# 🚀 Auto-FreeCF
+## 📁 Project Structure
 
-**Cloudflare Workers AI Account ID & Token Auto-Grabber**
+```
+Auto-FreeCF/
+├── src/                    # Core source code
+│   ├── __init__.py
+│   ├── browser_bot.py      # Main browser automation logic
+│   ├── turnstile_solver.py # Turnstile challenge solver
+│   └── utils.py            # Utility functions
+├── tests/                  # Test files
+├── config/                 # Configuration files (proxy configs)
+├── docs/                   # Documentation
+├── assets/                 # Static assets
+├── cli.js                  # CLI entry point
+├── terminal_ui.py          # Terminal UI
+├── web_ui.py               # Web UI
+├── browser_bot.py          # Backward compatibility wrapper
+└── package.json            # NPM package config
+```
 
-<img alt="Version" src="https://img.shields.io/badge/version-v3.2.4-5865F2?style=flat-square">
-<img alt="License" src="https://img.shields.io/badge/license-MIT-57F287?style=flat-square">
-<img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white">
-<img alt="Node" src="https://img.shields.io/badge/node-18%2B-339933?style=flat-square&logo=node.js&logoColor=white">
-<img alt="npm" src="https://img.shields.io/badge/npm-auto--freecf-CB3837?style=flat-square&logo=npm">
-
-*By mmoaa*
-
-</div>
-
----
-
-> [!WARNING]
-> ## ⚠️ BETA TESTING
-> **This tool is currently in BETA / masa testing.**
-> 
-> - Fitur dan behavior masih bisa berubah sewaktu-waktu
-> - Mungkin masih ada bug atau issue yang belum terhandle
-> - Cloudflare bot detection bisa berubah dan membuat tool tidak bekerja
-> - **Gunakan dengan risiko sendiri (use at your own risk)**
-> - Jangan gunakan untuk production sebelum tool dinyatakan stable
-> 
-> Feedback dan bug report sangat diharapkan! 🙏
-
----
-
-## 🚀 Overview
-
-Auto-FreeCF automatically grabs **Cloudflare Account IDs** and creates **Workers AI API Tokens** using browser automation with **stealth mode** and **residential proxy support**.
-
-Supports **single account** (email:pass) dan **bulk accounts** dari file (email:pass per line).
-
----
-
-## ⚡ Quick Start
+## 🚀 Installation
 
 ```bash
 npm install -g auto-freecf
-moycf
 ```
 
-That's it! First run will auto-setup everything (Python venv, pip packages, Chromium).
+## 💻 Usage
 
----
-
-## ✨ Features
-
-- 🤖 **Full Automation** — Login, grab Account ID, create API Token, all automatic
-- 🛡️ **Stealth Mode** — Bypass Cloudflare bot detection with advanced stealth scripts
-- 👻 **Headless by Default** — Runs completely in background, no browser window opens
-- 🌐 **Residential Proxy** — Optional proxy configuration for better success rate
-- 📝 **Single & Bulk** — Input single email:pass atau bulk dari file
-- 📦 **Auto Setup** — Automatic dependency installation with live timer
-- 💾 **Export Results** — Save to TXT format with account_id:worker_token
-
----
-
-## 📖 Usage
-
-### CLI Mode (Recommended)
-
-**Single account** — langsung masukkan email:password:
+### CLI Mode
 
 ```bash
-moycf user@example.com:mypassword123
-```
+# Single account (email:password)
+moycf email@example.com:password123
 
-**Bulk accounts** — dari file (format email:pass per line):
-
-```bash
+# Bulk accounts from file
 moycf accounts.txt
-```
 
-**With proxy:**
+# With proxy
+moycf accounts.txt --proxy config/proxy.json
 
-```bash
-moycf accounts.txt --proxy=proxy.json
-moycf user@example.com:pass123 --proxy=proxy.json
+# Google OAuth login
+moycf google_email:password --login-method google
 ```
 
 ### Interactive Mode
 
-Jalankan tanpa argument, lalu pilih mode:
-
 ```bash
 moycf
 ```
 
-```
-Choose mode:
-  [1] Single account (enter email:password)
-  [2] Bulk accounts (from file)
-  [3] Exit
-```
+Then choose:
+1. Single account (email:password)
+2. Single account (Google OAuth)
+3. Bulk accounts (from file)
 
-Pilih mode → masukkan input → selesai. Tidak ada menu berlapis.
-
----
-
-## 📝 Input Formats
-
-### Single Account (CLI)
-
-Langsung di command line:
+### Web UI
 
 ```bash
-moycf user@example.com:password123
+python web_ui.py
 ```
 
-### Bulk File — TXT Format (Recommended)
+Open http://localhost:8080 in your browser.
 
-Simple `email:password` format, one per line:
+## 🔧 Development
 
-```txt
-user1@example.com:password1
-user2@example.com:password2
-user3@example.com:password3
-```
+### Project Structure
 
-### Bulk File — JSON Format
+- **src/browser_bot.py**: Main CFAutoGrabber class with login, token creation logic
+- **src/turnstile_solver.py**: Turnstile challenge solving (isolated page approach)
+- **src/utils.py**: Helper functions (load_accounts, load_proxy_config, save_results)
+- **browser_bot.py**: Backward compatibility wrapper for existing scripts
 
-```json
-[
-  {
-    "email": "user1@example.com",
-    "password": "password1"
-  },
-  {
-    "email": "user2@example.com",
-    "password": "password2"
-  }
-]
-```
-
----
-
-## 🌐 Residential Proxy Support (Optional)
-
-For better success rate, especially with bot detection, you can use residential proxies.
-
-### 1. Create Proxy Config
-
-Create a `proxy.json` file:
-
-```json
-{
-  "server": "http://proxy.example.com:8080",
-  "username": "your_username",
-  "password": "your_password"
-}
-```
-
-### 2. Run with Proxy
+### Running Tests
 
 ```bash
-moycf accounts.txt --proxy=proxy.json
-moycf user@example.com:pass --proxy=proxy.json
+cd tests
+python test_login.py
 ```
 
-### 3. Supported Proxy Formats
-
-- HTTP/HTTPS proxies: `http://host:port` or `https://host:port`
-- SOCKS5 proxies: `socks5://host:port`
-- Authentication via `username` and `password` fields
-
----
-
-## 📦 Auto Setup
-
-First run automatically sets up:
-- Python virtual environment
-- Required packages (playwright, requests, etc.)
-- Chromium browser for automation
-
-Setup includes live timer and progress indicators.
-
-## 💾 Export Format
-
-Results are saved to `exports/cf_accounts.txt` in simple format:
-
-```txt
-account_id:worker_token
-```
-
-Example:
-```txt
-abc123def456:AIzaSyD-example-token-xyz789
-xyz789abc123:AIzaSyE-another-token-uvw456
-```
-
-This format is ready to use with other tools and scripts.
-
----
-
-## ⚙️ Requirements
-
-- **Node.js 18+** — [Download](https://nodejs.org/)
-- **Python 3.10+** — [Download](https://www.python.org/downloads/)
-- **Internet connection**
-- **Cloudflare account credentials**
-
----
-
-## 🔄 Update
-
-```bash
-npm update -g auto-freecf
-```
-
----
-
-## 🔧 Troubleshooting
-
-<details>
-<summary><b>Python was not found</b></summary>
-
-1. Install Python from https://www.python.org/downloads/
-2. **Check "Add Python to PATH"** during install
-3. Restart terminal
-</details>
-
-<details>
-<summary><b>Browser timeout / stuck</b></summary>
-
-- Cloudflare can be slow sometimes, try again
-- Make sure internet connection is stable
-- Use residential proxy for better reliability
-</details>
-
-<details>
-<summary><b>Permission error on Linux/macOS</b></summary>
-
-```bash
-sudo npm install -g auto-freecf
-```
-</details>
-
-<details>
-<summary><b>Path with spaces error on Windows</b></summary>
-
-- Fixed in v3.1.2+ — update with `npm update -g auto-freecf`
-- If still having issues, reinstall: `npm uninstall -g auto-freecf && npm install -g auto-freecf`
-</details>
-
-<details>
-<summary><b>Bot detection / Challenge page stuck</b></summary>
-
-- Use residential proxy (`--proxy=proxy.json`)
-- Enable headless mode (default)
-- Try with different proxy provider
-</details>
-
----
-
-## 📄 License
+## 📝 License
 
 MIT
-
----
-
-<div align="center">
-
-**Made with ❤️ by mmoaa**
-
-</div>
