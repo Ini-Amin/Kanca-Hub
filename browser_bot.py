@@ -334,19 +334,36 @@ class CFAutoGrabber:
                 print(f"  ❌ Could not click login button")
                 return False
             
-            # Wait for redirect
-            print(f"  → Waiting for dashboard...")
+            # CRITICAL: Wait for Cloudflare to process Turnstile response
+            print(f"  → Waiting for Cloudflare validation...")
+            page.wait_for_timeout(8000)  # Wait 8s for Turnstile validation
+            
+            # Wait for page to fully load/reload after submit
+            print(f"  → Waiting for page reload...")
+            try:
+                page.wait_for_load_state("load", timeout=30000)
+                print(f"  ✓ Page loaded")
+            except:
+                print(f"  ⚠️  Page load timeout, continuing anyway...")
+            
+            # Additional wait for redirect
             page.wait_for_timeout(5000)
             
             current_url = page.url
             print(f"  → Current URL: {current_url}")
             
-            # Check if we're logged in
+            # Check if we're still on login page (may need retry)
             if "/login" in current_url:
-                print(f"  ❌ Still on login page - credentials may be wrong")
-                page.screenshot(path="debug_login_failed.png")
-                print(f"  → Screenshot saved: debug_login_failed.png")
-                return False
+                print(f"  ⚠️  Still on login page, waiting for redirect...")
+                page.wait_for_timeout(10000)
+                current_url = page.url
+                print(f"  → URL after wait: {current_url}")
+                
+                if "/login" in current_url:
+                    print(f"  ❌ Still on login page - credentials may be wrong or Turnstile invalid")
+                    page.screenshot(path="debug_login_failed.png")
+                    print(f"  → Screenshot saved: debug_login_failed.png")
+                    return False
             
             # Try to extract account ID
             if "/home" in current_url or current_url.endswith("dash.cloudflare.com/"):
