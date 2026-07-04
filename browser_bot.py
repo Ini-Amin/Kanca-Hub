@@ -36,7 +36,7 @@ TURNSTILE_HTML = """<!DOCTYPE html>
 class CFAutoGrabber:
     """Automated Cloudflare account grabber with patchright (anti-detection)"""
     
-    def __init__(self, email: str, password: str, headless: bool = True, proxy: Optional[Dict] = None):
+    def __init__(self, email: str, password: str, headless: bool = False, proxy: Optional[Dict] = None):
         self.email = email
         self.password = password
         self.headless = headless
@@ -761,7 +761,7 @@ def load_proxy_config(proxy_file: str) -> List[Dict]:
         return []
 
 
-def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, proxies: Optional[List[Dict]] = None) -> List[Dict]:
+def process_accounts(accounts: List[Dict[str, str]], headless: bool = False, proxies: Optional[List[Dict]] = None) -> List[Dict]:
     """Process multiple accounts with proxy rotation and retry"""
     results = []
     total = len(accounts)

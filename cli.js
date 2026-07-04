@@ -302,7 +302,7 @@ async function processSingle(emailPass, proxyFile) {
 async function processBulk(filePath, proxyFile) {
   const pyCmd = getPythonCmd();
   const browserBot = path.join(ROOT, 'browser_bot.py');
-  const cmdArgs = [browserBot, '--accounts', filePath, '--headless'];
+  const cmdArgs = [browserBot, '--accounts', filePath];
   
   if (proxyFile) {
     cmdArgs.push('--proxy', proxyFile);
