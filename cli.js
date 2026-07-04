@@ -288,7 +288,7 @@ function getPythonCmd() {
 async function processSingle(emailPass, proxyFile) {
   const pyCmd = getPythonCmd();
   const browserBot = path.join(ROOT, 'browser_bot.py');
-  const cmdArgs = [browserBot, '--single', emailPass, '--headless'];
+  const cmdArgs = [browserBot, '--single', emailPass];
   
   if (proxyFile) {
     cmdArgs.push('--proxy', proxyFile);
