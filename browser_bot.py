@@ -452,83 +452,105 @@ class CFAutoGrabber:
     
     def login_google(self) -> bool:
         """Login to Cloudflare via Google OAuth (fully automated)"""
-        try:
-            self._start_browser()
-            page = self._page
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self._start_browser()
+                page = self._page
 
-            print(f"  → Opening Cloudflare login...")
-            page.goto("https://dash.cloudflare.com/login", wait_until="domcontentloaded", timeout=60000)
-            
-            # Wait for page load
-            page.wait_for_timeout(3000)
+                print(f"  → Opening Cloudflare login...")
+                page.goto("https://dash.cloudflare.com/login", wait_until="domcontentloaded", timeout=60000)
+                
+                # Wait for page load
+                page.wait_for_timeout(3000)
 
-            # Click "Continue with Google"
-            print(f"  → Clicking 'Continue with Google'...")
-            google_btn = page.query_selector('button:has-text("Continue with Google"), a:has-text("Continue with Google")')
-            if google_btn:
-                google_btn.click()
-            else:
-                # Fallback: try clicking by href
-                page.click('a[href*="accounts.google.com"]')
-            
-            # Wait for Google login page/popup
-            print(f"  → Waiting for Google login...")
-            page.wait_for_load_state("networkidle", timeout=15000)
-            page.wait_for_timeout(2000)
+                # Click "Continue with Google"
+                print(f"  → Clicking 'Continue with Google'...")
+                google_btn = page.query_selector('button:has-text("Continue with Google"), a:has-text("Continue with Google")')
+                if google_btn:
+                    google_btn.click()
+                else:
+                    # Fallback: try clicking by href
+                    page.click('a[href*="accounts.google.com"]')
+                
+                # Wait for Google login page/popup
+                print(f"  → Waiting for Google login...")
+                page.wait_for_load_state("networkidle", timeout=15000)
+                page.wait_for_timeout(2000)
 
-            current_url = page.url
-            if "accounts.google.com" not in current_url:
-                # Sometimes opens in new tab/popup
-                for p in self._context.pages:
-                    if "accounts.google.com" in p.url:
-                        page = p
-                        self._page = p
-                        break
+                current_url = page.url
+                if "accounts.google.com" not in current_url:
+                    # Sometimes opens in new tab/popup
+                    for p in self._context.pages:
+                        if "accounts.google.com" in p.url:
+                            page = p
+                            self._page = p
+                            break
 
-            # Fill Email
-            print(f"  → Filling Google email...")
-            page.wait_for_selector('input[type="email"]', timeout=10000)
-            page.fill('input[type="email"]', self.email)
-            page.click('button:has-text("Next"), #identifierNext')
-            page.wait_for_timeout(2000)
+                # Fill Email
+                print(f"  → Filling Google email...")
+                page.wait_for_selector('input[type="email"]', timeout=10000)
+                page.fill('input[type="email"]', self.email)
+                page.click('button:has-text("Next"), #identifierNext')
+                page.wait_for_timeout(2000)
 
-            # Fill Password
-            print(f"  → Filling Google password...")
-            page.wait_for_selector('input[type="password"]', timeout=10000)
-            page.fill('input[type="password"]', self.password)
-            page.click('button:has-text("Next"), #passwordNext')
-            
-            # Wait for redirect back to Cloudflare
-            print(f"  → Waiting for authentication...")
-            page.wait_for_load_state("networkidle", timeout=20000)
-            page.wait_for_timeout(3000)
+                # Fill Password
+                print(f"  → Filling Google password...")
+                page.wait_for_selector('input[type="password"]', timeout=10000)
+                page.fill('input[type="password"]', self.password)
+                page.click('button:has-text("Next"), #passwordNext')
+                
+                # Wait for redirect back to Cloudflare
+                print(f"  → Waiting for authentication...")
+                page.wait_for_load_state("networkidle", timeout=20000)
+                page.wait_for_timeout(3000)
 
-            # Check for Google 2FA / Phone verification
-            if "challenge" in page.url or "signin/v2" in page.url or "Verify" in page.title():
-                print(f"  ⚠️  Google 2FA detected - waiting 60s for manual verification...")
-                page.wait_for_timeout(60000)
+                # Check for verification error
+                page_content = page.inner_text('body')
+                if "problem with verification" in page_content.lower() or "try again" in page_content.lower():
+                    print(f"  ⚠️  Google verification error detected (attempt {attempt + 1}/{max_retries})")
+                    print(f"  → Reloading and retrying...")
+                    self._close_browser()
+                    if attempt < max_retries - 1:
+                        page.wait_for_timeout(3000)
+                        continue
+                    else:
+                        print(f"  ❌ Max retries reached")
+                        return False
 
-            # Wait for redirect back to Cloudflare
-            print(f"  → Waiting for Cloudflare redirect...")
-            page.wait_for_url("**/dash.cloudflare.com/**", timeout=30000)
-            page.wait_for_timeout(3000)
+                # Check for Google 2FA / Phone verification
+                if "challenge" in page.url or "signin/v2" in page.url or "Verify" in page.title():
+                    print(f"  ⚠️  Google 2FA detected - waiting 60s for manual verification...")
+                    page.wait_for_timeout(60000)
 
-            # Extract Account ID
-            current_url = page.url
-            parts = current_url.split("dash.cloudflare.com/")
-            if len(parts) > 1:
-                account_part = parts[1].split("/")[0].split("?")[0]
-                if account_part and account_part not in ["login", "home", "sign-up", "", "profile"]:
-                    self.account_id = account_part
-                    print(f"  ✓ Logged in via Google | Account ID: {self.account_id}")
-                    return True
+                # Wait for redirect back to Cloudflare
+                print(f"  → Waiting for Cloudflare redirect...")
+                page.wait_for_url("**/dash.cloudflare.com/**", timeout=30000)
+                page.wait_for_timeout(3000)
 
-            print(f"  ❌ Google login redirect failed or account ID not found")
-            return False
+                # Extract Account ID
+                current_url = page.url
+                parts = current_url.split("dash.cloudflare.com/")
+                if len(parts) > 1:
+                    account_part = parts[1].split("/")[0].split("?")[0]
+                    if account_part and account_part not in ["login", "home", "sign-up", "", "profile"]:
+                        self.account_id = account_part
+                        print(f"  ✓ Logged in via Google | Account ID: {self.account_id}")
+                        return True
 
-        except Exception as e:
-            print(f"  ❌ Google login error: {e}")
-            return False
+                print(f"  ❌ Google login redirect failed or account ID not found")
+                return False
+
+            except Exception as e:
+                print(f"  ❌ Google login error: {e}")
+                if attempt < max_retries - 1:
+                    print(f"  → Retrying... (attempt {attempt + 2}/{max_retries})")
+                    self._close_browser()
+                    page.wait_for_timeout(3000)
+                    continue
+                return False
+        
+        return False
     
     def _wait_for_turnstile_manual(self, page: Page) -> bool:
         """Wait for Turnstile widget to appear and solve manually"""
