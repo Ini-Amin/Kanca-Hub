@@ -238,7 +238,7 @@ class CFAutoGrabber:
             except:
                 pass
     
-    def _wait_for_challenge(self, timeout=120):
+    def _wait_for_challenge(self, timeout=180):
         """Wait for Cloudflare challenge to complete"""
         page = self._page
         start_time = time.time()
@@ -248,16 +248,33 @@ class CFAutoGrabber:
             title = page.title()
             url = page.url
             
+            # Check if we've passed the challenge by looking for login form or dashboard
+            try:
+                # Check if login form is present (means challenge passed)
+                login_form = page.query_selector('input[type="email"], input[name="email"]')
+                if login_form:
+                    print(f"  ✓ Challenge passed - login form detected")
+                    return True
+                
+                # Check if we're on dashboard (means already logged in)
+                if '/home' in url or (url.endswith('dash.cloudflare.com/') and '/login' not in url):
+                    print(f"  ✓ Challenge passed - dashboard detected")
+                    return True
+            except:
+                pass
+            
             # Check if challenge is still active
             if "Just a moment" in title or "challenge" in title.lower() or "Attention Required" in title:
                 if title != last_check:
                     print(f"  ⏳ Security challenge in progress... ({int(time.time() - start_time)}s)")
                     last_check = title
                 page.wait_for_timeout(2000)
-            elif "login" in url.lower() or "dash.cloudflare" in url:
-                # Challenge passed
-                print(f"  ✓ Security check passed")
-                return True
+            elif "/login" in url and "Just a moment" not in title:
+                # On login page but no challenge title - might be waiting for form
+                if int(time.time() - start_time) > 10:
+                    print(f"  ✓ On login page, checking for form...")
+                    return True
+                page.wait_for_timeout(1000)
             else:
                 # Still waiting
                 page.wait_for_timeout(1000)
@@ -265,10 +282,20 @@ class CFAutoGrabber:
         # Timeout - take screenshot for debugging
         print(f"  ❌ Challenge timeout after {timeout}s")
         try:
-            page.screenshot(path="debug_challenge_timeout.png")
-            print(f"  📸 Debug screenshot saved: debug_challenge_timeout.png")
-        except:
-            pass
+            import os
+            debug_dir = 'debug'
+            os.makedirs(debug_dir, exist_ok=True)
+            screenshot_path = os.path.join(debug_dir, f"challenge_timeout_{int(time.time())}.png")
+            page.screenshot(path=screenshot_path)
+            print(f"  📸 Debug screenshot saved: {screenshot_path}")
+            
+            # Also save page content for debugging
+            content_path = os.path.join(debug_dir, f"page_content_{int(time.time())}.html")
+            with open(content_path, 'w', encoding='utf-8') as f:
+                f.write(page.content())
+            print(f"  📄 Page content saved: {content_path}")
+        except Exception as e:
+            print(f"  ⚠️  Could not save debug info: {e}")
         return False
     
     def login(self) -> bool:
