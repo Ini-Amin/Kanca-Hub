@@ -1,21 +1,22 @@
 #!/usr/bin/env node
 
-const { spawn, spawnSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const readline = require('readline');
 
 const ROOT = __dirname;
 const IS_WIN = process.platform === 'win32';
 
-// Use writable location for venv (avoid permission issues on Windows)
+// ============================================================
+// VENV LOCATION - Use writable, accessible path
+// ============================================================
 function getVenvDir() {
   if (IS_WIN) {
-    // Use AppData\Local on Windows
     const appData = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || process.env.HOME || '', 'AppData', 'Local');
     return path.join(appData, 'auto-freecf', 'venv');
   } else {
-    // Use ~/.local/share on Linux/Mac
     const home = process.env.HOME || process.env.USERPROFILE || '/tmp';
     return path.join(home, '.local', 'share', 'auto-freecf', 'venv');
   }
@@ -24,11 +25,13 @@ function getVenvDir() {
 const VENV_DIR = getVenvDir();
 const INSTALLED_MARKER = path.join(VENV_DIR, '.installed');
 
-// Python executable paths in venv
+// Python/pip executables inside venv
 const PYTHON_EXE = path.join(VENV_DIR, IS_WIN ? 'Scripts' : 'bin', IS_WIN ? 'python.exe' : 'python');
 const PIP_EXE = path.join(VENV_DIR, IS_WIN ? 'Scripts' : 'bin', IS_WIN ? 'pip.exe' : 'pip');
 
-// Colors
+// ============================================================
+// COLORS
+// ============================================================
 const colors = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
@@ -46,19 +49,33 @@ function logInfo(msg) { console.log(`${colors.cyan}ℹ${colors.reset} ${msg}`); 
 function logStep(msg) { console.log(`${colors.yellow}➤${colors.reset} ${msg}`); }
 function logErr(msg) { console.log(`${colors.red}✗${colors.reset} ${msg}`); }
 
+// ============================================================
+// FIND PYTHON - Resolve to FULL PATH (critical for Windows)
+// ============================================================
 function findPython() {
-  // Try multiple Python commands on Windows
-  const candidates = IS_WIN ? ['python', 'python3', 'py'] : ['python3', 'python'];
+  const candidates = IS_WIN ? ['python', 'py'] : ['python3', 'python'];
   
   for (const cmd of candidates) {
     try {
-      const result = spawnSync(cmd, ['--version'], { encoding: 'utf8', shell: true });
-      if (result.status === 0 && result.stdout) {
-        const version = result.stdout.trim();
-        // Check if it's Python 3
+      // Step 1: Resolve to full path using 'where' (Win) or 'which' (Linux)
+      const whereCmd = IS_WIN ? 'where' : 'which';
+      const whereResult = spawnSync(whereCmd, [cmd], { encoding: 'utf8' });
+      
+      if (whereResult.status !== 0 || !whereResult.stdout.trim()) continue;
+      
+      // Get first match (full path)
+      const fullPath = whereResult.stdout.trim().split(/\r?\n/)[0].trim();
+      if (!fullPath) continue;
+      
+      // Step 2: Verify it's Python 3.x
+      // IMPORTANT: No shell:true here - pass full path directly
+      const versionResult = spawnSync(fullPath, ['--version'], { encoding: 'utf8' });
+      
+      if (versionResult.status === 0) {
+        const version = (versionResult.stdout || versionResult.stderr || '').trim();
         if (version.match(/Python 3\./)) {
-          logInfo(`Found ${version}`);
-          return cmd;
+          logInfo(`Found ${version} at ${fullPath}`);
+          return fullPath;
         }
       }
     } catch {}
@@ -66,48 +83,49 @@ function findPython() {
   return null;
 }
 
-// Run command and capture output (for error reporting)
-function runSyncCapture(cmd, args, options = {}) {
+// ============================================================
+// RUN COMMANDS - WITHOUT shell:true (fixes space-in-path bug)
+// ============================================================
+
+/**
+ * Run command synchronously with output capture.
+ * CRITICAL: No shell:true - this fixes WinError 5 on paths with spaces.
+ * When shell:true is used on Windows, cmd.exe splits paths on spaces.
+ */
+function runCapture(exe, args, options = {}) {
   const opts = { encoding: 'utf8', ...options };
   
   try {
-    const result = spawnSync(cmd, args, opts);
+    const result = spawnSync(exe, args, opts);
     return {
       success: result.status === 0,
       stdout: result.stdout || '',
       stderr: result.stderr || '',
-      status: result.status
+      status: result.status,
+      error: result.error ? result.error.message : null
     };
   } catch (err) {
     return {
       success: false,
       stdout: '',
       stderr: err.message,
-      status: -1
+      status: -1,
+      error: err.message
     };
   }
 }
 
-// Run command with visible output (for interactive commands)
-function runSync(cmd, args, options = {}) {
-  const opts = { stdio: 'inherit', ...options };
-  
-  try {
-    const result = spawnSync(cmd, args, opts);
-    return result.status === 0;
-  } catch (err) {
-    logErr(`Command failed: ${err.message}`);
-    return false;
-  }
-}
-
-function runAsync(cmd, args, options = {}) {
+/**
+ * Run command asynchronously with visible output.
+ * No shell:true - fixes space-in-path issues.
+ */
+function runAsync(exe, args, options = {}) {
   return new Promise((resolve) => {
     const opts = { stdio: 'inherit', ...options };
     
     let proc;
     try {
-      proc = spawn(cmd, args, opts);
+      proc = spawn(exe, args, opts);
     } catch (err) {
       logErr(`Failed to start: ${err.message}`);
       resolve(false);
@@ -131,18 +149,30 @@ function formatTime(ms) {
   return `${s}s`;
 }
 
-// Ensure directory exists
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
 }
 
+// Remove directory recursively (for cleanup on failure)
+function removeDir(dirPath) {
+  try {
+    if (fs.existsSync(dirPath)) {
+      fs.rmSync(dirPath, { recursive: true, force: true });
+    }
+  } catch {}
+}
+
+// ============================================================
+// SETUP
+// ============================================================
 async function setup() {
-  const python = findPython();
-  if (!python) {
+  const pythonExe = findPython();
+  if (!pythonExe) {
     logErr('Python 3 not found! Please install Python 3.10+');
     logInfo('Download from: https://www.python.org/downloads/');
+    logInfo('IMPORTANT: Check "Add Python to PATH" during installation');
     process.exit(1);
   }
   
@@ -151,73 +181,97 @@ async function setup() {
     log(`${colors.dim}This may take a few minutes...${colors.reset}\n`);
     
     // Ensure venv parent directory exists
-    logStep(`Creating virtual environment at: ${VENV_DIR}`);
+    logStep(`Creating virtual environment...`);
+    logInfo(`Location: ${VENV_DIR}`);
     ensureDir(path.dirname(VENV_DIR));
     
-    // Create venv with error capture
-    const venvResult = runSyncCapture(python, ['-m', 'venv', VENV_DIR], { shell: true });
+    // Clean up any partial venv from previous failed attempt
+    removeDir(VENV_DIR);
+    
+    // Create venv - NO shell:true (fixes space-in-path bug)
+    const venvResult = runCapture(pythonExe, ['-m', 'venv', VENV_DIR], {
+      timeout: 120000
+    });
     
     if (!venvResult.success) {
       logErr('Failed to create virtual environment');
-      if (venvResult.stderr) {
-        log(`${colors.dim}Error: ${venvResult.stderr}${colors.reset}`);
-      }
+      if (venvResult.stderr) log(`${colors.dim}${venvResult.stderr}${colors.reset}`);
+      if (venvResult.error) log(`${colors.dim}${venvResult.error}${colors.reset}`);
       
-      // Try alternative: use --without-pip flag and install pip manually
-      logInfo('Trying alternative method...');
-      const altResult = runSyncCapture(python, ['-m', 'venv', '--without-pip', VENV_DIR], { shell: true });
+      // Try alternative: --without-pip
+      logInfo('Trying alternative method (--without-pip)...');
+      const altResult = runCapture(pythonExe, ['-m', 'venv', '--without-pip', VENV_DIR], {
+        timeout: 120000
+      });
       
       if (!altResult.success) {
         logErr('Alternative method also failed');
-        if (altResult.stderr) {
-          log(`${colors.dim}Error: ${altResult.stderr}${colors.reset}`);
-        }
-        logInfo('\nTroubleshooting:');
-        logInfo('1. Make sure Python is installed correctly');
-        logInfo('2. Try running: python -m venv test_env');
-        logInfo('3. Check antivirus is not blocking venv creation');
+        if (altResult.stderr) log(`${colors.dim}${altResult.stderr}${colors.reset}`);
+        
+        log('\n' + logInfo('Troubleshooting:'));
+        logInfo('1. Try manually: ' + pythonExe + ' -m venv "' + VENV_DIR + '"');
+        logInfo('2. Check antivirus is not blocking venv creation');
+        logInfo('3. Try running PowerShell as Administrator');
+        process.exit(1);
+      }
+      
+      // If --without-pip worked, bootstrap pip
+      logInfo('Bootstrapping pip...');
+      const getpipResult = runCapture(pythonExe, ['-m', 'ensurepip', '--default-pip'], {
+        timeout: 60000
+      });
+      if (!getpipResult.success) {
+        logErr('Failed to bootstrap pip');
         process.exit(1);
       }
     }
+    
+    // Verify python.exe exists in venv
+    if (!fs.existsSync(PYTHON_EXE)) {
+      logErr('Virtual environment python not found at: ' + PYTHON_EXE);
+      process.exit(1);
+    }
     logOk('Virtual environment created');
     
-    // Install Python packages
+    // Install Python packages - NO shell:true
     logStep('Installing Python packages...');
     const pipStart = Date.now();
     const reqPath = path.join(ROOT, 'requirements.txt');
     
-    // Use python -m pip instead of pip directly (more reliable on Windows)
-    const pipResult = runSyncCapture(PYTHON_EXE, ['-m', 'pip', 'install', '-q', '-r', reqPath], { 
-      shell: true,
-      timeout: 300000 // 5 minutes timeout
+    const pipResult = runCapture(PYTHON_EXE, ['-m', 'pip', 'install', '-q', '-r', reqPath], {
+      timeout: 300000
     });
     
     if (!pipResult.success) {
       logErr('Failed to install Python packages');
-      if (pipResult.stderr) {
-        log(`${colors.dim}${pipResult.stderr}${colors.reset}`);
-      }
+      if (pipResult.stderr) log(`${colors.dim}${pipResult.stderr}${colors.reset}`);
       process.exit(1);
     }
     logOk(`Python packages installed (${formatTime(Date.now() - pipStart)})`);
     
-    // Install Playwright browsers
-    logStep('Installing Playwright browsers...');
+    // Install patchright browsers - NO shell:true
+    logStep('Installing browser (patchright/chromium)...');
     const pwStart = Date.now();
     
-    const pwResult = runSyncCapture(PYTHON_EXE, ['-m', 'playwright', 'install', 'chromium'], {
-      shell: true,
-      timeout: 600000 // 10 minutes timeout
+    const pwResult = runCapture(PYTHON_EXE, ['-m', 'patchright', 'install', 'chromium'], {
+      timeout: 600000
     });
     
     if (!pwResult.success) {
-      logErr('Failed to install Playwright browsers');
-      if (pwResult.stderr) {
-        log(`${colors.dim}${pwResult.stderr}${colors.reset}`);
+      // Fallback: try playwright command (in case patchright aliases it)
+      logInfo('Trying alternative browser install...');
+      const pwResult2 = runCapture(PYTHON_EXE, ['-m', 'playwright', 'install', 'chromium'], {
+        timeout: 600000
+      });
+      
+      if (!pwResult2.success) {
+        logErr('Failed to install browser');
+        if (pwResult.stderr) log(`${colors.dim}${pwResult.stderr}${colors.reset}`);
+        if (pwResult2.stderr) log(`${colors.dim}${pwResult2.stderr}${colors.reset}`);
+        process.exit(1);
       }
-      process.exit(1);
     }
-    logOk(`Playwright browsers installed (${formatTime(Date.now() - pwStart)})`);
+    logOk(`Browser installed (${formatTime(Date.now() - pwStart)})`);
     
     fs.writeFileSync(INSTALLED_MARKER, new Date().toISOString());
     logOk('Setup complete!');
@@ -228,6 +282,9 @@ function getPythonCmd() {
   return PYTHON_EXE;
 }
 
+// ============================================================
+// PROCESS ACCOUNTS
+// ============================================================
 async function processSingle(emailPass, proxyFile) {
   const pyCmd = getPythonCmd();
   const browserBot = path.join(ROOT, 'browser_bot.py');
@@ -237,7 +294,8 @@ async function processSingle(emailPass, proxyFile) {
     cmdArgs.push('--proxy', proxyFile);
   }
   
-  const success = await runAsync(pyCmd, cmdArgs, { shell: true });
+  // NO shell:true - fixes space-in-path
+  const success = await runAsync(pyCmd, cmdArgs);
   process.exit(success ? 0 : 1);
 }
 
@@ -250,10 +308,14 @@ async function processBulk(filePath, proxyFile) {
     cmdArgs.push('--proxy', proxyFile);
   }
   
-  const success = await runAsync(pyCmd, cmdArgs, { shell: true });
+  // NO shell:true - fixes space-in-path
+  const success = await runAsync(pyCmd, cmdArgs);
   process.exit(success ? 0 : 1);
 }
 
+// ============================================================
+// MAIN
+// ============================================================
 async function main() {
   log(`${colors.cyan}${colors.bold}`);
   log('╔══════════════════════════════════════════════════════════╗');
@@ -272,14 +334,10 @@ async function main() {
   const proxyArg = args.find(a => a.startsWith('--proxy='));
   const proxyFile = proxyArg ? proxyArg.split('=')[1] : null;
   
-  // Check for file argument (bulk mode)
   const fileArg = args.find(a => !a.startsWith('--') && (a.endsWith('.txt') || a.endsWith('.json')));
-  
-  // Check for email:pass argument (single mode)
   const singleArg = args.find(a => !a.startsWith('--') && a.includes('@') && a.includes(':'));
   
   if (fileArg) {
-    // CLI bulk mode
     logInfo(`Bulk mode: ${fileArg}`);
     if (proxyFile) logInfo(`Proxy: ${proxyFile}`);
     await processBulk(fileArg, proxyFile);
@@ -287,14 +345,13 @@ async function main() {
   }
   
   if (singleArg) {
-    // CLI single mode
     logInfo(`Single mode: ${singleArg.split(':')[0]}`);
     if (proxyFile) logInfo(`Proxy: ${proxyFile}`);
     await processSingle(singleArg, proxyFile);
     return;
   }
   
-  // Interactive mode - simplified
+  // Interactive mode
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
