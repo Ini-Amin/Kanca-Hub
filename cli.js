@@ -6,7 +6,22 @@ const path = require('path');
 const readline = require('readline');
 
 const ROOT = __dirname;
-const VENV_DIR = path.join(ROOT, 'venv');
+
+// Use writable location for venv (avoid permission issues on Windows)
+function getVenvDir() {
+  const isWin = process.platform === 'win32';
+  if (isWin) {
+    // Use AppData\Local on Windows
+    const appData = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || process.env.HOME, 'AppData', 'Local');
+    return path.join(appData, 'auto-freecf', 'venv');
+  } else {
+    // Use ~/.local/share on Linux/Mac
+    const home = process.env.HOME || process.env.USERPROFILE;
+    return path.join(home, '.local', 'share', 'auto-freecf', 'venv');
+  }
+}
+
+const VENV_DIR = getVenvDir();
 const INSTALLED_MARKER = path.join(VENV_DIR, '.installed');
 
 // Colors
