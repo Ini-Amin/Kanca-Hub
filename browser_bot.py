@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Browser automation for Cloudflare account processing with patchright (anti-detection)"""
 
+import sys
+import asyncio
+
+# Fix for Windows: patchright sync API fails inside asyncio loop
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import json
 import os
-import sys
 import time
 from pathlib import Path
 from typing import List, Dict, Optional
