@@ -124,42 +124,30 @@ class CFAutoGrabber:
                 print(f"  ❌ Login form not found")
                 return False
             
-            # Fill login form - try multiple selectors
-            print(f"  → Filling credentials...")
-            email_selectors = ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="email"]', 'input[placeholder*="Email"]']
-            email_filled = False
-            for selector in email_selectors:
+            # CRITICAL: Wait for Turnstile widget to appear BEFORE filling credentials
+            print(f"  → Waiting for Turnstile widget...")
+            turnstile_wait_start = time.time()
+            turnstile_appeared = False
+            
+            for _ in range(15):  # Wait up to 30s for Turnstile to appear
                 try:
-                    page.fill(selector, self.email)
-                    email_filled = True
-                    break
+                    turnstile_div = page.query_selector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
+                    if turnstile_div:
+                        turnstile_appeared = True
+                        print(f"  ✓ Turnstile widget appeared ({int(time.time() - turnstile_wait_start)}s)")
+                        break
                 except:
-                    continue
+                    pass
+                page.wait_for_timeout(2000)
             
-            if not email_filled:
-                print(f"  ❌ Could not find email input field")
-                return False
+            if not turnstile_appeared:
+                print(f"  ⚠️  Turnstile widget not detected, proceeding anyway...")
             
-            password_selectors = ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="password"]']
-            password_filled = False
-            for selector in password_selectors:
-                try:
-                    page.fill(selector, self.password)
-                    password_filled = True
-                    break
-                except:
-                    continue
-            
-            if not password_filled:
-                print(f"  ❌ Could not find password input field")
-                return False
-            
-            # Wait for Turnstile/CAPTCHA to complete before submitting
+            # Wait for Turnstile to be solved
             print(f"  → Solving Turnstile...")
-            
-            # Active turnstile solving (from Turnstile-Solver approach)
             turnstile_solved = False
-            for attempt in range(10):  # 10 attempts x 2s = 20s max
+            
+            for attempt in range(15):  # 15 attempts x 2s = 30s max
                 page.wait_for_timeout(2000)
                 
                 # Try to click turnstile div to trigger solving
@@ -191,13 +179,46 @@ class CFAutoGrabber:
                         print(f"  ✓ Turnstile solved (button enabled) ({(attempt + 1) * 2}s)")
                         break
                 
-                if attempt < 5:
+                if attempt < 8:
                     print(f"  ⏳ Turnstile solving... ({(attempt + 1) * 2}s)")
             
             if not turnstile_solved:
-                print(f"  ❌ Turnstile not solved after 20s")
+                print(f"  ❌ Turnstile not solved after 30s")
                 page.screenshot(path="debug_turnstile_timeout.png")
                 return False
+            
+            # NOW fill credentials (after Turnstile is solved)
+            print(f"  → Filling credentials...")
+            email_selectors = ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="email"]', 'input[placeholder*="Email"]']
+            email_filled = False
+            for selector in email_selectors:
+                try:
+                    page.fill(selector, self.email)
+                    email_filled = True
+                    break
+                except:
+                    continue
+            
+            if not email_filled:
+                print(f"  ❌ Could not find email input field")
+                return False
+            
+            password_selectors = ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="password"]']
+            password_filled = False
+            for selector in password_selectors:
+                try:
+                    page.fill(selector, self.password)
+                    password_filled = True
+                    break
+                except:
+                    continue
+            
+            if not password_filled:
+                print(f"  ❌ Could not find password input field")
+                return False
+            
+            # Small delay after filling to let page process
+            page.wait_for_timeout(1000)
             
             # Click login button
             print(f"  → Submitting login...")
