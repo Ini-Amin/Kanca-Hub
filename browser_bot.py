@@ -18,6 +18,21 @@ from typing import List, Dict, Optional
 from patchright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
 
+# Turnstile Solver HTML template (from Theyka/Turnstile-Solver)
+TURNSTILE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Turnstile Solver</title>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async></script>
+</head>
+<body>
+    <!-- cf turnstile -->
+</body>
+</html>"""
+
+
 class CFAutoGrabber:
     """Automated Cloudflare account grabber with patchright (anti-detection)"""
     
@@ -82,6 +97,99 @@ class CFAutoGrabber:
         self._context = None
         self._page = None
     
+    def _extract_sitekey(self, page: Page) -> Optional[str]:
+        """Extract Turnstile sitekey from page"""
+        try:
+            # Try to find sitekey in various ways
+            # Method 1: Look for data-sitekey attribute
+            turnstile_div = page.query_selector('[data-sitekey]')
+            if turnstile_div:
+                sitekey = turnstile_div.get_attribute('data-sitekey')
+                if sitekey:
+                    return sitekey
+            
+            # Method 2: Look in script tags
+            scripts = page.query_selector_all('script')
+            for script in scripts:
+                content = script.inner_text()
+                # Look for sitekey pattern
+                match = re.search(r'sitekey["\s:]+["\']?([0-9A-Za-z_-]+)', content)
+                if match:
+                    return match.group(1)
+            
+            # Method 3: Look in page source
+            content = page.content()
+            match = re.search(r'data-sitekey=["\']([0-9A-Za-z_-]+)', content)
+            if match:
+                return match.group(1)
+            
+            # Method 4: Look for Turnstile iframe
+            iframe = page.query_selector('iframe[src*="challenges.cloudflare.com"]')
+            if iframe:
+                src = iframe.get_attribute('src')
+                match = re.search(r'sitekey=([0-9A-Za-z_-]+)', src)
+                if match:
+                    return match.group(1)
+            
+        except Exception as e:
+            print(f"  ⚠️  Could not extract sitekey: {e}")
+        
+        return None
+    
+    def _solve_turnstile_isolated(self, url: str, sitekey: str) -> Optional[str]:
+        """Solve Turnstile using isolated page approach (from Turnstile-Solver)"""
+        print(f"  → Solving Turnstile in isolated page...")
+        
+        # Create a new page for solving
+        solver_page = self._context.new_page()
+        
+        try:
+            # Prepare Turnstile HTML
+            turnstile_div = f'<div class="cf-turnstile" data-sitekey="{sitekey}"></div>'
+            page_data = TURNSTILE_HTML.replace("<!-- cf turnstile -->", turnstile_div)
+            
+            # Route the URL to serve our custom HTML
+            url_with_slash = url + "/" if not url.endswith("/") else url
+            solver_page.route(url_with_slash, lambda route: route.fulfill(body=page_data, status=200))
+            solver_page.goto(url_with_slash)
+            
+            # Wait for Turnstile to solve
+            token = None
+            for attempt in range(15):  # 30 seconds max
+                solver_page.wait_for_timeout(2000)
+                
+                # Try to click turnstile to trigger
+                try:
+                    turnstile_div = solver_page.query_selector('.cf-turnstile')
+                    if turnstile_div:
+                        turnstile_div.click()
+                except:
+                    pass
+                
+                # Check for token
+                try:
+                    token_value = solver_page.input_value('[name="cf-turnstile-response"]')
+                    if token_value and token_value != "":
+                        token = token_value
+                        print(f"  ✓ Turnstile solved ({(attempt + 1) * 2}s)")
+                        break
+                except:
+                    pass
+                
+                if attempt < 8:
+                    print(f"  ⏳ Solving... ({(attempt + 1) * 2}s)")
+            
+            return token
+            
+        except Exception as e:
+            print(f"  ❌ Turnstile solver error: {e}")
+            return None
+        finally:
+            try:
+                solver_page.close()
+            except:
+                pass
+    
     def _wait_for_challenge(self, timeout=120):
         """Wait for Cloudflare challenge to complete"""
         page = self._page
@@ -137,70 +245,46 @@ class CFAutoGrabber:
                 print(f"  ❌ Login form not found")
                 return False
             
-            # CRITICAL: Wait for Turnstile widget to appear BEFORE filling credentials
-            print(f"  → Waiting for Turnstile widget...")
-            turnstile_wait_start = time.time()
-            turnstile_appeared = False
+            # Extract sitekey from page
+            print(f"  → Extracting Turnstile sitekey...")
+            sitekey = self._extract_sitekey(page)
             
-            for _ in range(15):  # Wait up to 30s for Turnstile to appear
-                try:
-                    turnstile_div = page.query_selector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
-                    if turnstile_div:
-                        turnstile_appeared = True
-                        print(f"  ✓ Turnstile widget appeared ({int(time.time() - turnstile_wait_start)}s)")
-                        break
-                except:
-                    pass
-                page.wait_for_timeout(2000)
+            if not sitekey:
+                print(f"  ⚠️  Could not extract sitekey, trying manual solve...")
+                # Fallback to manual approach
+                return self._login_manual_turnstile()
             
-            if not turnstile_appeared:
-                print(f"  ⚠️  Turnstile widget not detected, proceeding anyway...")
+            print(f"  ✓ Sitekey: {sitekey[:20]}...")
             
-            # Wait for Turnstile to be solved
-            print(f"  → Solving Turnstile...")
-            turnstile_solved = False
+            # Solve Turnstile using isolated approach
+            token = self._solve_turnstile_isolated("https://dash.cloudflare.com/login", sitekey)
             
-            for attempt in range(15):  # 15 attempts x 2s = 30s max
-                page.wait_for_timeout(2000)
-                
-                # Try to click turnstile div to trigger solving
-                try:
-                    turnstile_div = page.query_selector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
-                    if turnstile_div:
-                        turnstile_div.click()
-                        if attempt == 0:
-                            print(f"  → Clicked turnstile widget")
-                except:
-                    pass
-                
-                # Check if turnstile response token exists
-                try:
-                    turnstile_value = page.input_value('[name="cf-turnstile-response"]')
-                    if turnstile_value and turnstile_value != "":
-                        turnstile_solved = True
-                        print(f"  ✓ Turnstile solved ({(attempt + 1) * 2}s)")
-                        break
-                except:
-                    pass
-                
-                # Also check button state as fallback
-                btn = page.query_selector('button[type="submit"]')
-                if btn:
-                    disabled = btn.get_attribute('disabled')
-                    if disabled is None:
-                        turnstile_solved = True
-                        print(f"  ✓ Turnstile solved (button enabled) ({(attempt + 1) * 2}s)")
-                        break
-                
-                if attempt < 8:
-                    print(f"  ⏳ Turnstile solving... ({(attempt + 1) * 2}s)")
-            
-            if not turnstile_solved:
-                print(f"  ❌ Turnstile not solved after 30s")
-                page.screenshot(path="debug_turnstile_timeout.png")
+            if not token:
+                print(f"  ❌ Failed to solve Turnstile")
                 return False
             
-            # NOW fill credentials (after Turnstile is solved)
+            # Inject token into login page
+            print(f"  → Injecting Turnstile token...")
+            try:
+                page.evaluate(f'''() => {{
+                    const input = document.querySelector('[name="cf-turnstile-response"]');
+                    if (input) {{
+                        input.value = "{token}";
+                    }} else {{
+                        // Create hidden input if not exists
+                        const hidden = document.createElement("input");
+                        hidden.type = "hidden";
+                        hidden.name = "cf-turnstile-response";
+                        hidden.value = "{token}";
+                        document.body.appendChild(hidden);
+                    }}
+                }}''')
+                print(f"  ✓ Token injected")
+            except Exception as e:
+                print(f"  ❌ Failed to inject token: {e}")
+                return False
+            
+            # Fill credentials
             print(f"  → Filling credentials...")
             email_selectors = ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="email"]', 'input[placeholder*="Email"]']
             email_filled = False
@@ -230,7 +314,7 @@ class CFAutoGrabber:
                 print(f"  ❌ Could not find password input field")
                 return False
             
-            # Small delay after filling to let page process
+            # Small delay after filling
             page.wait_for_timeout(1000)
             
             # Click login button
@@ -260,23 +344,8 @@ class CFAutoGrabber:
             # Check if we're logged in
             if "/login" in current_url:
                 print(f"  ❌ Still on login page - credentials may be wrong")
-                # Take screenshot for debugging
                 page.screenshot(path="debug_login_failed.png")
                 print(f"  → Screenshot saved: debug_login_failed.png")
-                # Check for error messages
-                error_text = page.query_selector('.error-message, [data-testid="error"], .alert-danger')
-                if error_text:
-                    print(f"  → Error message: {error_text.inner_text()}")
-                # Extract page content for debugging
-                page_content = page.inner_text('body')
-                if 'incorrect' in page_content.lower() or 'invalid' in page_content.lower():
-                    print(f"  → Page shows authentication error")
-                elif 'captcha' in page_content.lower() or 'challenge' in page_content.lower():
-                    print(f"  → Page shows CAPTCHA/challenge")
-                # Save page content for manual inspection
-                with open("debug_page_content.txt", "w") as f:
-                    f.write(page_content)
-                print(f"  → Page content saved: debug_page_content.txt")
                 return False
             
             # Try to extract account ID
@@ -302,21 +371,155 @@ class CFAutoGrabber:
             print(f"  ❌ Login error: {e}")
             return False
     
+    def _login_manual_turnstile(self) -> bool:
+        """Fallback: Manual Turnstile solving (old approach)"""
+        page = self._page
+        
+        print(f"  → Waiting for Turnstile widget...")
+        turnstile_wait_start = time.time()
+        turnstile_appeared = False
+        
+        for _ in range(15):
+            try:
+                turnstile_div = page.query_selector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
+                if turnstile_div:
+                    turnstile_appeared = True
+                    print(f"  ✓ Turnstile widget appeared ({int(time.time() - turnstile_wait_start)}s)")
+                    break
+            except:
+                pass
+            page.wait_for_timeout(2000)
+        
+        if not turnstile_appeared:
+            print(f"  ⚠️  Turnstile widget not detected, proceeding anyway...")
+        
+        print(f"  → Solving Turnstile manually...")
+        turnstile_solved = False
+        
+        for attempt in range(15):
+            page.wait_for_timeout(2000)
+            
+            try:
+                turnstile_div = page.query_selector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
+                if turnstile_div:
+                    turnstile_div.click()
+                    if attempt == 0:
+                        print(f"  → Clicked turnstile widget")
+            except:
+                pass
+            
+            try:
+                turnstile_value = page.input_value('[name="cf-turnstile-response"]')
+                if turnstile_value and turnstile_value != "":
+                    turnstile_solved = True
+                    print(f"  ✓ Turnstile solved ({(attempt + 1) * 2}s)")
+                    break
+            except:
+                pass
+            
+            btn = page.query_selector('button[type="submit"]')
+            if btn:
+                disabled = btn.get_attribute('disabled')
+                if disabled is None:
+                    turnstile_solved = True
+                    print(f"  ✓ Turnstile solved (button enabled) ({(attempt + 1) * 2}s)")
+                    break
+            
+            if attempt < 8:
+                print(f"  ⏳ Turnstile solving... ({(attempt + 1) * 2}s)")
+        
+        if not turnstile_solved:
+            print(f"  ❌ Turnstile not solved after 30s")
+            page.screenshot(path="debug_turnstile_timeout.png")
+            return False
+        
+        # Fill credentials
+        print(f"  → Filling credentials...")
+        email_selectors = ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="email"]', 'input[placeholder*="Email"]']
+        email_filled = False
+        for selector in email_selectors:
+            try:
+                page.fill(selector, self.email)
+                email_filled = True
+                break
+            except:
+                continue
+        
+        if not email_filled:
+            print(f"  ❌ Could not find email input field")
+            return False
+        
+        password_selectors = ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="password"]']
+        password_filled = False
+        for selector in password_selectors:
+            try:
+                page.fill(selector, self.password)
+                password_filled = True
+                break
+            except:
+                continue
+        
+        if not password_filled:
+            print(f"  ❌ Could not find password input field")
+            return False
+        
+        page.wait_for_timeout(1000)
+        
+        # Click login button
+        print(f"  → Submitting login...")
+        login_selectors = ['button[type="submit"]', 'button:has-text("Log In")', 'button:has-text("Login")', 'button:has-text("Sign In")']
+        login_clicked = False
+        for selector in login_selectors:
+            try:
+                page.click(selector, timeout=5000)
+                login_clicked = True
+                print(f"  → Clicked: {selector}")
+                break
+            except:
+                continue
+        
+        if not login_clicked:
+            print(f"  ❌ Could not click login button")
+            return False
+        
+        # Wait for redirect
+        print(f"  → Waiting for dashboard...")
+        page.wait_for_timeout(5000)
+        
+        current_url = page.url
+        
+        if "/login" in current_url:
+            print(f"  ❌ Still on login page")
+            return False
+        
+        # Extract account ID
+        if "/home" in current_url or current_url.endswith("dash.cloudflare.com/"):
+            page.goto("https://dash.cloudflare.com/", wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+            current_url = page.url
+        
+        parts = current_url.split("dash.cloudflare.com/")
+        if len(parts) > 1:
+            account_part = parts[1].split("/")[0].split("?")[0]
+            if account_part and account_part not in ["login", "home", "sign-up", "", "profile"]:
+                self.account_id = account_part
+                print(f"  ✓ Account ID: {self.account_id}")
+                return True
+        
+        return False
+    
     def get_account_id(self) -> bool:
         """Get account ID (already done during login)"""
         if self.account_id:
             return True
         
-        # If login didn't get account ID, try to get it now
         try:
             page = self._page
             if page is None:
                 return False
             
             current_url = page.url
-            print(f"  → Current URL: {current_url}")
             
-            # Extract from URL
             parts = current_url.split("dash.cloudflare.com/")
             if len(parts) > 1:
                 account_part = parts[1].split("/")[0].split("?")[0]
@@ -324,7 +527,6 @@ class CFAutoGrabber:
                     self.account_id = account_part
                     return True
             
-            # Navigate to main page to find account ID
             page.goto("https://dash.cloudflare.com/", wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
             
@@ -366,7 +568,6 @@ class CFAutoGrabber:
                 create_btn.click()
                 page.wait_for_timeout(2000)
             else:
-                # Try alternative selectors
                 page.click('text=Create Token')
                 page.wait_for_timeout(2000)
             
@@ -388,15 +589,12 @@ class CFAutoGrabber:
             if name_input:
                 name_input.fill(token_name)
             else:
-                # Try alternative
                 page.fill('input[placeholder*="name"]', token_name)
             
             page.wait_for_timeout(1000)
             
-            # Add permission - Account > Workers AI > Edit
+            # Add permission
             print(f"  → Adding Workers AI permission...")
-            
-            # Click "Add Permission" or similar button
             add_perm_btn = page.query_selector('button:has-text("Add Permission"), a:has-text("Add Permission")')
             if add_perm_btn:
                 add_perm_btn.click()
@@ -449,7 +647,6 @@ class CFAutoGrabber:
             # Try to find token in page text
             page_text = page.inner_text('body')
             if "token" in page_text.lower():
-                # Look for token pattern
                 token_match = re.search(r'[A-Za-z0-9_\-]{40,}', page_text)
                 if token_match:
                     self.api_token = token_match.group()
@@ -490,7 +687,6 @@ def load_accounts(file_path: str) -> List[Dict[str, str]]:
     accounts = []
     
     if path.suffix.lower() == '.json':
-        # JSON format
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             if isinstance(data, list):
@@ -502,7 +698,6 @@ def load_accounts(file_path: str) -> List[Dict[str, str]]:
                         })
     
     elif path.suffix.lower() == '.txt':
-        # TXT format: email:password per line
         with open(path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
@@ -525,7 +720,7 @@ def load_accounts(file_path: str) -> List[Dict[str, str]]:
 
 
 def load_proxy_config(proxy_file: str) -> List[Dict]:
-    """Load proxy configuration from JSON file (supports single or multi-proxy)"""
+    """Load proxy configuration from JSON file"""
     path = Path(proxy_file)
     if not path.exists():
         print(f"Warning: Proxy file not found: {proxy_file}")
@@ -535,7 +730,6 @@ def load_proxy_config(proxy_file: str) -> List[Dict]:
         with open(path, 'r') as f:
             config = json.load(f)
         
-        # Check if it's multi-proxy format (has "proxies" array)
         if 'proxies' in config and isinstance(config['proxies'], list):
             proxies = []
             for p in config['proxies']:
@@ -549,7 +743,6 @@ def load_proxy_config(proxy_file: str) -> List[Dict]:
                     })
             return proxies
         
-        # Legacy single-proxy format
         elif config.get('server'):
             return [{
                 'server': config['server'],
@@ -585,7 +778,6 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
         
         success = False
         for attempt in range(1, max_retries + 1):
-            # Pick proxy (rotate through list)
             proxy = None
             if proxies and len(proxies) > 0:
                 proxy = proxies[proxy_idx % len(proxies)]
@@ -598,7 +790,6 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
             
             grabber = CFAutoGrabber(email, password, headless, proxy)
             
-            # Step 1: Login
             print(f"  [1/4] Logging in...")
             if not grabber.login():
                 print(f"  ❌ Login failed (attempt {attempt})")
@@ -609,7 +800,6 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
                 continue
             print(f"  ✓ Login successful")
             
-            # Step 2: Get Account ID
             print(f"  [2/4] Getting Account ID...")
             if not grabber.get_account_id():
                 print(f"  ❌ Failed to get Account ID")
@@ -617,7 +807,6 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
                 break
             print(f"  ✓ Account ID: {grabber.account_id}")
             
-            # Step 3: Create Token
             print(f"  [3/4] Creating API token...")
             if not grabber.create_workers_ai_token():
                 print(f"  ❌ Failed to create token")
@@ -625,7 +814,6 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
                 break
             print(f"  ✓ Token created")
             
-            # Step 4: Export
             print(f"  [4/4] Exporting...")
             result = grabber.export()
             results.append(result)
@@ -642,11 +830,10 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
                 'status': 'all_attempts_failed'
             })
     
-    # Save results
+    # Save results to TXT format
     output_dir = Path("exports")
     output_dir.mkdir(exist_ok=True)
     
-    # Save as TXT format: account_id:worker_token
     output_file = output_dir / "cf_accounts.txt"
     with open(output_file, 'w', encoding='utf-8') as f:
         for result in results:
@@ -655,7 +842,6 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
     
     print(f"\n{'='*60}")
     print(f"Results saved to: {output_file}")
-    print(f"Format: account_id:worker_token")
     print(f"Total processed: {len(results)}/{total}")
     print('='*60)
     
