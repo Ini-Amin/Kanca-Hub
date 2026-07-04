@@ -5,9 +5,10 @@ import sys
 import asyncio
 import re
 
-# Fix for Windows: patchright sync API fails inside asyncio loop
+# Fix for Windows: patchright needs ProactorEventLoop for subprocess support
+# WindowsSelectorEventLoop does NOT support subprocess creation (NotImplementedError)
 if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 import json
 import os
