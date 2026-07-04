@@ -82,24 +82,37 @@ class CFAutoGrabber:
         self._context = None
         self._page = None
     
-    def _wait_for_challenge(self, timeout=60):
+    def _wait_for_challenge(self, timeout=120):
         """Wait for Cloudflare challenge to complete"""
         page = self._page
         start_time = time.time()
+        last_check = ""
         
         while time.time() - start_time < timeout:
             title = page.title()
+            url = page.url
             
             # Check if challenge is still active
-            if "Just a moment" in title or "challenge" in title.lower():
-                print(f"  ⏳ Security challenge in progress... ({int(time.time() - start_time)}s)")
+            if "Just a moment" in title or "challenge" in title.lower() or "Attention Required" in title:
+                if title != last_check:
+                    print(f"  ⏳ Security challenge in progress... ({int(time.time() - start_time)}s)")
+                    last_check = title
                 page.wait_for_timeout(2000)
-            else:
+            elif "login" in url.lower() or "dash.cloudflare" in url:
                 # Challenge passed
                 print(f"  ✓ Security check passed")
                 return True
+            else:
+                # Still waiting
+                page.wait_for_timeout(1000)
         
+        # Timeout - take screenshot for debugging
         print(f"  ❌ Challenge timeout after {timeout}s")
+        try:
+            page.screenshot(path="debug_challenge_timeout.png")
+            print(f"  📸 Debug screenshot saved: debug_challenge_timeout.png")
+        except:
+            pass
         return False
     
     def login(self) -> bool:
