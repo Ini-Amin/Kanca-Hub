@@ -35,7 +35,8 @@ def validate_class_structure():
         'login',
         'login_google',
         'get_account_id',
-        'create_workers_ai_token',
+        'create_custom_api_token',
+        'create_workers_ai_api_token',
         'export',
         '__del__'
     ]
@@ -188,10 +189,15 @@ def validate_flow_logic():
         print("✗ get_account_id() method is not callable")
         return False
     
-    if callable(getattr(grabber, 'create_workers_ai_token', None)):
-        print("✓ create_workers_ai_token() method is callable")
+    if callable(getattr(grabber, 'create_custom_api_token', None)):
+        print("✓ create_custom_api_token() method is callable")
     else:
-        print("✗ create_workers_ai_token() method is not callable")
+        print("✗ create_custom_api_token() method is not callable")
+        return False
+    if callable(getattr(grabber, 'create_workers_ai_api_token', None)):
+        print("✓ create_workers_ai_api_token() method is callable (new)")
+    else:
+        print("✗ create_workers_ai_api_token() method is not callable")
         return False
     
     if callable(getattr(grabber, 'export', None)):

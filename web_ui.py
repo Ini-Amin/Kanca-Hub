@@ -410,7 +410,7 @@ def process():
                 continue
             
             # Create token
-            if not grabber.create_workers_ai_token():
+            if not grabber.create_custom_api_token():
                 results.append({'email': email, 'status': 'token_failed'})
                 continue
             
