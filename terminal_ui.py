@@ -86,7 +86,7 @@ def process_single():
     
     sys.stdout.write(f"  {Colors.DIM}[3/4]{Colors.ENDC} Creating API token... ")
     sys.stdout.flush()
-    if not grabber.create_workers_ai_token():
+    if not grabber.create_custom_api_token():
         print(f"{Colors.FAIL}❌ Failed{Colors.ENDC}")
         return
     print(f"{Colors.GREEN}✓{Colors.ENDC}")

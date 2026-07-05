@@ -89,8 +89,8 @@ class CFAutoGrabber:
             print(f"❌ Error fetching account ID: {e}")
             return None
     
-    def create_workers_ai_token(self) -> Optional[str]:
-        """Create Workers AI API token"""
+    def create_custom_api_token(self) -> Optional[str]:
+        """Create Custom API token (HTTP-based, for API access)"""
         print("🔑 Creating Workers AI API token...")
         
         if not self.account_id:
@@ -223,7 +223,7 @@ def main():
         sys.exit(1)
     
     # Step 3: Create Workers AI Token
-    if not grabber.create_workers_ai_token():
+    if not grabber.create_custom_api_token():
         sys.exit(1)
     
     # Step 4: Export

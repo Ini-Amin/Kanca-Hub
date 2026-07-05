@@ -38,12 +38,44 @@ class CFAutoGrabber:
     def _start_browser(self):
         """Start browser session with patchright (anti-detection)"""
         if self._browser is None:
+            import os, subprocess
+            
+            # Auto-start Xvfb for headful mode (Turnstile bypass)
+            if not os.environ.get('DISPLAY'):
+                # Check if Xvfb already running on :99
+                result = subprocess.run(['pgrep', '-f', 'Xvfb :99'], capture_output=True)
+                if result.returncode != 0:
+                    # Start Xvfb
+                    try:
+                        subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1920x1080x24'],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        time.sleep(0.5)
+                    except FileNotFoundError:
+                        print("  ⚠️  Xvfb not found, using headless mode")
+                os.environ['DISPLAY'] = ':99'
+            
+            has_display = bool(os.environ.get('DISPLAY'))
+            use_headless = not has_display if self.headless else self.headless
+            if has_display and self.headless:
+                print("  → Using Xvfb (virtual display) for Turnstile bypass")
+                use_headless = False
+            
             self._playwright = sync_playwright().start()
             
-            # Launch options - patchright handles most anti-detection automatically
+            # Launch options
             launch_args = {
-                'headless': self.headless,
+                'headless': use_headless,
+                'args': ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
             }
+            
+            # Add proxy if provided
+            if self.proxy:
+                launch_args['proxy'] = {
+                    'server': self.proxy.get('server'),
+                    'username': self.proxy.get('username'),
+                    'password': self.proxy.get('password'),
+                }
+                print(f"  → Using proxy: {self.proxy.get('server')}")
             
             self._browser = self._playwright.chromium.launch(**launch_args)
             
@@ -53,16 +85,6 @@ class CFAutoGrabber:
                 'locale': 'en-US',
                 'timezone_id': 'America/New_York',
             }
-            
-            # Add proxy if provided (on context, not launch — newer Playwright)
-            if self.proxy:
-                proxy_cfg = {'server': self.proxy.get('server')}
-                if self.proxy.get('username'):
-                    proxy_cfg['username'] = self.proxy['username']
-                if self.proxy.get('password'):
-                    proxy_cfg['password'] = self.proxy['password']
-                context_args['proxy'] = proxy_cfg
-                print(f"  → Using proxy: {self.proxy.get('server')}")
             
             self._context = self._browser.new_context(**context_args)
             self._page = self._context.new_page()
@@ -125,58 +147,14 @@ class CFAutoGrabber:
             
             # Go to login page
             print(f"  → Opening Cloudflare login...")
-            page.goto("https://dash.cloudflare.com/login", wait_until="load", timeout=120000)
+            page.goto("https://dash.cloudflare.com/login", wait_until="domcontentloaded", timeout=60000)
             
-            # Wait for challenge
+            # Wait for Turnstile challenge to auto-pass (Xvfb handles this)
+            print(f"  → Page title: {page.title()}")
             if not self._wait_for_challenge():
-                return False
-            
-            # Wait for login form to appear
-            page.wait_for_timeout(3000)
-            try:
-                page.wait_for_selector('input[type="email"], input[name="email"], input[placeholder*="email"]', timeout=15000)
-            except:
-                print(f"  ❌ Login form not found")
-                return False
-            
-            # Extract sitekey from page
-            print(f"  → Extracting Turnstile sitekey...")
-            sitekey = extract_sitekey(page)
-            
-            if not sitekey:
-                print(f"  ⚠️  Could not extract sitekey, trying manual solve...")
-                # Fallback to manual approach
-                return self._login_manual_turnstile()
-            
-            print(f"  ✓ Sitekey: {sitekey[:20]}...")
-            
-            # Solve Turnstile using isolated approach
-            token = solve_turnstile_isolated(self._context, "https://dash.cloudflare.com/login", sitekey)
-            
-            if not token:
-                print(f"  ❌ Failed to solve Turnstile")
-                return False
-            
-            # Inject token into login page
-            print(f"  → Injecting Turnstile token...")
-            try:
-                page.evaluate(f'''() => {{
-                    const input = document.querySelector('[name="cf-turnstile-response"]');
-                    if (input) {{
-                        input.value = "{token}";
-                    }} else {{
-                        // Create hidden input if not exists
-                        const hidden = document.createElement("input");
-                        hidden.type = "hidden";
-                        hidden.name = "cf-turnstile-response";
-                        hidden.value = "{token}";
-                        document.body.appendChild(hidden);
-                    }}
-                }}''')
-                print(f"  ✓ Token injected")
-            except Exception as e:
-                print(f"  ❌ Failed to inject token: {e}")
-                return False
+                print(f"  ⚠️  Challenge timeout, trying manual flow...")
+                if not self._login_manual_turnstile():
+                    return False
             
             # Fill credentials
             print(f"  → Filling credentials...")
@@ -466,8 +444,8 @@ class CFAutoGrabber:
             print(f"  ❌ Get account ID error: {e}")
             return False
     
-    def create_workers_ai_token(self) -> bool:
-        """Create Workers AI API token"""
+    def create_custom_api_token(self) -> bool:
+        """Create Custom API token (legacy permission wizard approach)"""
         try:
             page = self._page
             if page is None:
@@ -583,6 +561,161 @@ class CFAutoGrabber:
             print(f"  ❌ Create token error: {e}")
             return False
     
+    def create_workers_ai_api_token(self) -> bool:
+        """Create Workers AI API Token via dedicated Workers AI page (ZemCFLare flow)
+        
+        Navigates to /ai/workers-ai/usage → REST API tab → direct token creation.
+        Simpler than the Custom Token wizard — no permission selection needed.
+        """
+        try:
+            page = self._page
+            if page is None:
+                print(f"  ❌ Browser not started")
+                return False
+            
+            if not self.account_id:
+                print(f"  ❌ No account ID available")
+                return False
+            
+            # Navigate to Workers AI usage page
+            usage_url = f"https://dash.cloudflare.com/{self.account_id}/ai/workers-ai/usage"
+            print(f"  → Navigating to Workers AI page...")
+            page.goto(usage_url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(3000)
+            
+            # Handle potential challenges
+            if "Just a moment" in page.title() or "challenge" in page.title().lower():
+                print(f"  ⏳ Turnstile challenge detected, waiting...")
+                if not self._wait_for_challenge():
+                    print(f"  ❌ Challenge timeout")
+                    return False
+            
+            # Click "REST API" tab
+            print(f"  → Switching to REST API tab...")
+            rest_tab = page.query_selector('span:has-text("REST API"), button:has-text("REST API"), a:has-text("REST API")')
+            if rest_tab:
+                rest_tab.click()
+                page.wait_for_timeout(2000)
+            else:
+                # Try by role
+                rest_tab = page.query_selector('[role="tab"]:has-text("REST API")')
+                if rest_tab:
+                    rest_tab.click()
+                    page.wait_for_timeout(2000)
+                else:
+                    print(f"  ⚠️  REST API tab not found, trying alternate selectors...")
+                    page.screenshot(path="debug_rest_api_tab.png")
+            
+            # Click "Create a Workers AI API Token" button
+            print(f"  → Creating Workers AI API Token...")
+            create_btn = page.query_selector(
+                'button:has-text("Create a Workers AI API Token"), '
+                'a:has-text("Create a Workers AI API Token"), '
+                'button:has-text("Create API Token")'
+            )
+            if create_btn:
+                create_btn.click()
+                page.wait_for_timeout(3000)
+            else:
+                # Fallback: find any create button
+                create_btn = page.query_selector(
+                    '[data-testid="create-token-button"], '
+                    'button[type="button"]:has-text("Create")'
+                )
+                if create_btn:
+                    create_btn.click()
+                    page.wait_for_timeout(3000)
+                else:
+                    print(f"  ❌ Create token button not found")
+                    page.screenshot(path="debug_create_token_btn.png")
+                    return False
+            
+            # Fill token name
+            token_name = f"WorkersAI-{self.email.split('@')[0]}-{int(time.time())}"
+            print(f"  → Token name: {token_name}")
+            
+            name_input = page.query_selector('input[name="name"], input[id="name"], input[placeholder*="name"]')
+            if name_input:
+                name_input.fill(token_name)
+                page.wait_for_timeout(500)
+            else:
+                # Try any visible text input
+                inputs = page.query_selector_all('input[type="text"]')
+                for inp in inputs:
+                    try:
+                        if inp.is_visible():
+                            inp.fill(token_name)
+                            break
+                    except:
+                        continue
+            
+            # Click "Create API Token" / "Create" button
+            print(f"  → Submitting token creation...")
+            submit_btn = page.query_selector(
+                'button:has-text("Create API Token"), '
+                'button[type="submit"]:has-text("Create"), '
+                'button:has-text("Create token")'
+            )
+            if submit_btn:
+                submit_btn.click()
+                page.wait_for_timeout(4000)
+            
+            # Copy the token — try clipboard button first
+            print(f"  → Extracting token...")
+            token_value = None
+            
+            # Method 1: Click "Copy API Token" button, read clipboard via JS
+            copy_btn = page.query_selector(
+                'button:has-text("Copy API Token"), '
+                'button:has-text("Copy"), '
+                '[data-testid="copy-token-button"]'
+            )
+            if copy_btn:
+                copy_btn.click()
+                page.wait_for_timeout(1000)
+                # Read clipboard via JS
+                try:
+                    token_value = page.evaluate("() => navigator.clipboard.readText()")
+                except:
+                    pass
+            
+            # Method 2: Look for token in input/code elements
+            if not token_value:
+                token_input = page.query_selector('input[readonly], input[name="token"], code, pre')
+                if token_input:
+                    token_value = token_input.input_value() if token_input.evaluate('el => el.tagName') == 'INPUT' else token_input.inner_text()
+            
+            # Method 3: Regex search in page
+            if not token_value:
+                page_text = page.inner_text('body')
+                token_match = re.search(r'[A-Za-z0-9_\-]{40,}', page_text)
+                if token_match:
+                    token_value = token_match.group()
+            
+            if not token_value:
+                print(f"  ❌ Could not extract token")
+                page.screenshot(path="debug_token_extract.png")
+                return False
+            
+            self.api_token = token_value.strip()
+            self.workers_ai_ok = True
+            print(f"  ✓ Workers AI Token: {self.api_token[:20]}...{self.api_token[-10:]}")
+            
+            # Click "Finish" / close button if present
+            try:
+                finish_btn = page.query_selector('button:has-text("Finish"), button:has-text("Done"), button:has-text("Close")')
+                if finish_btn:
+                    finish_btn.click()
+                    page.wait_for_timeout(1000)
+            except:
+                pass
+            
+            return True
+            
+        except Exception as e:
+            print(f"  ❌ Workers AI token creation error: {e}")
+            return False
+    
     def export(self) -> Dict:
         """Export account data"""
         self._close_browser()
@@ -649,11 +782,13 @@ def process_accounts(accounts: List[Dict[str, str]], headless: bool = True, prox
                 break
             print(f"  ✓ Account ID: {grabber.account_id}")
             
-            print(f"  [3/4] Creating API token...")
-            if not grabber.create_workers_ai_token():
-                print(f"  ❌ Failed to create token")
-                grabber._close_browser()
-                break
+            print(f"  [3/4] Creating API token (Workers AI flow)...")
+            if not grabber.create_workers_ai_api_token():
+                print(f"  ⚠️  Workers AI flow failed, trying Custom Token...")
+                if not grabber.create_custom_api_token():
+                    print(f"  ❌ Failed to create token")
+                    grabber._close_browser()
+                    break
             print(f"  ✓ Token created")
             
             print(f"  [4/4] Exporting...")
