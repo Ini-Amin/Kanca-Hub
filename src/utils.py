@@ -52,44 +52,108 @@ def load_accounts(file_path: str) -> List[Dict[str, str]]:
 
 
 def load_proxy_config(proxy_file: str) -> List[Dict]:
-    """Load proxy configuration from JSON file (supports single or multi-proxy)"""
+    """Load proxy configuration from JSON or CSV file.
+
+    JSON format (multi-proxy):
+      {"proxies": [{"server": "http://ip:port", "username": "...", "password": "...", ...}]}
+
+    JSON format (single):
+      {"server": "http://ip:port", "username": "...", "password": "..."}
+
+    CSV format:
+      Id,Proxy,Country,City,Status
+      112153,192.186.1.1:8800,US,"Buffalo, NY",Working
+
+    TXT format (one per line):
+      192.186.1.1:8800
+      http://192.186.1.2:8080
+    """
     path = Path(proxy_file)
     if not path.exists():
         print(f"Warning: Proxy file not found: {proxy_file}")
         return []
-    
+
     try:
+        # --- TXT format (ip:port per line) ---
+        if path.suffix.lower() == '.txt':
+            proxies = []
+            with open(path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    # Strip protocol prefix if present
+                    server = line
+                    if '://' in server:
+                        server = server.split('://', 1)[1]
+                    if ':' not in server:
+                        continue
+                    server_full = f"http://{server}"
+                    proxies.append({
+                        'server': server_full,
+                        'username': '',
+                        'password': '',
+                        'country': 'N/A',
+                        'city': 'N/A'
+                    })
+            if proxies:
+                print(f"Loaded {len(proxies)} proxies from TXT (ip:port)")
+            return proxies
+
+        # --- CSV format (Id,Proxy,Country,City,Status) ---
+        if path.suffix.lower() == '.csv':
+            import csv
+            proxies = []
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    proxy_str = row.get('Proxy', '')
+                    if not proxy_str or ':' not in proxy_str:
+                        continue
+                    server_full = f"http://{proxy_str}"
+                    proxies.append({
+                        'server': server_full,
+                        'username': '',
+                        'password': '',
+                        'country': row.get('Country', 'N/A'),
+                        'city': row.get('City', 'N/A')
+                    })
+            if proxies:
+                print(f"Loaded {len(proxies)} proxies from CSV")
+            return proxies
+
+        # --- JSON format ---
         with open(path, 'r') as f:
             config = json.load(f)
-        
-        # Check if it's multi-proxy format (has "proxies" array)
+
+        # Multi-proxy format
         if 'proxies' in config and isinstance(config['proxies'], list):
             proxies = []
             for p in config['proxies']:
-                if p.get('server') and p.get('username') and p.get('password'):
+                if p.get('server'):
                     proxies.append({
                         'server': p['server'],
-                        'username': p['username'],
-                        'password': p['password'],
+                        'username': p.get('username', ''),
+                        'password': p.get('password', ''),
                         'country': p.get('country', 'N/A'),
                         'city': p.get('city', 'N/A')
                     })
             return proxies
-        
+
         # Legacy single-proxy format
         elif config.get('server'):
             return [{
                 'server': config['server'],
-                'username': config.get('username'),
-                'password': config.get('password'),
+                'username': config.get('username', ''),
+                'password': config.get('password', ''),
                 'country': 'N/A',
                 'city': 'N/A'
             }]
-        
+
         else:
             print(f"Warning: Invalid proxy config format")
             return []
-            
+
     except Exception as e:
         print(f"Warning: Could not load proxy config: {e}")
         return []

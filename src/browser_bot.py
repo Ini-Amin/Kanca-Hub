@@ -45,15 +45,6 @@ class CFAutoGrabber:
                 'headless': self.headless,
             }
             
-            # Add proxy if provided
-            if self.proxy:
-                launch_args['proxy'] = {
-                    'server': self.proxy.get('server'),
-                    'username': self.proxy.get('username'),
-                    'password': self.proxy.get('password'),
-                }
-                print(f"  → Using proxy: {self.proxy.get('server')}")
-            
             self._browser = self._playwright.chromium.launch(**launch_args)
             
             # Context options
@@ -62,6 +53,16 @@ class CFAutoGrabber:
                 'locale': 'en-US',
                 'timezone_id': 'America/New_York',
             }
+            
+            # Add proxy if provided (on context, not launch — newer Playwright)
+            if self.proxy:
+                proxy_cfg = {'server': self.proxy.get('server')}
+                if self.proxy.get('username'):
+                    proxy_cfg['username'] = self.proxy['username']
+                if self.proxy.get('password'):
+                    proxy_cfg['password'] = self.proxy['password']
+                context_args['proxy'] = proxy_cfg
+                print(f"  → Using proxy: {self.proxy.get('server')}")
             
             self._context = self._browser.new_context(**context_args)
             self._page = self._context.new_page()
@@ -124,14 +125,14 @@ class CFAutoGrabber:
             
             # Go to login page
             print(f"  → Opening Cloudflare login...")
-            page.goto("https://dash.cloudflare.com/login", wait_until="domcontentloaded", timeout=60000)
+            page.goto("https://dash.cloudflare.com/login", wait_until="load", timeout=120000)
             
             # Wait for challenge
             if not self._wait_for_challenge():
                 return False
             
             # Wait for login form to appear
-            print(f"  → Waiting for login form...")
+            page.wait_for_timeout(3000)
             try:
                 page.wait_for_selector('input[type="email"], input[name="email"], input[placeholder*="email"]', timeout=15000)
             except:
