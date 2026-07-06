@@ -12,15 +12,16 @@ Automates the full pipeline:
 Usage:
     python main.py                          # Create 1 account
     python main.py --accounts 5             # Create 5 accounts
+    python main.py --fast                   # Skip Turnstile solve (submit-first)
     python main.py --proxy http://user:pass@host:port
     python main.py --config custom.json
     python main.py --validate-only --token cfut_xxx --account-id xxx
 
 Requirements:
-    - Linux with Xvfb (xvfb-run)
     - Python 3.10+
     - Google Chrome installed
-    - nodriver, opencv-python-headless, httpx
+    - nodriver, opencv-python-headless, httpx, Pillow, rich
+    - Works on Windows, Linux, macOS
 """
 
 import argparse
@@ -110,6 +111,10 @@ def parse_args():
         "--export-txt", type=str, default=None,
         help="Export valid results to a 9Router-friendly .txt file after the run"
     )
+    parser.add_argument(
+        "--fast", action="store_true",
+        help="Submit-first mode: quick Turnstile interaction, submit immediately, retry only if blocked"
+    )
     return parser.parse_args()
 
 
@@ -118,6 +123,7 @@ async def create_account(
     proxy: str = None,
     headless: bool = False,
     browser: uc.Browser = None,
+    fast: bool = False,
 ) -> dict:
     """
     Create a single Cloudflare account with API token.
@@ -164,7 +170,7 @@ async def create_account(
             
         # Phase 1: Signup
         print("  [1/4] Signing up...")
-        signup_result = await signup(page, email, password)
+        signup_result = await signup(page, email, password, retry_turnstile=not fast)
 
         if not signup_result.success:
             return {
@@ -352,6 +358,7 @@ async def main():
                 config=config,
                 proxy=proxy,
                 headless=args.headless or config.get("headless", False),
+                fast=args.fast,
             )
             if result.get("email"):
                 dashboard_state.update(worker_id, "validate", result.get("status", "done"), email=result["email"], index=index)

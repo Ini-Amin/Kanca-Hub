@@ -1,12 +1,15 @@
 """
-Cloudflare Signup Flow — Automated account creation via headless browser.
+Cloudflare Signup Flow — Submit-first strategy.
 
-Handles:
+Flow:
 1. Navigate to sign-up page
 2. Fill email + password
-3. Solve Turnstile CAPTCHA
-4. Submit form
-5. Extract Account ID from redirect URL
+3. Quick Turnstile interaction (don't block on solve)
+4. Submit form IMMEDIATELY
+5. If redirect fails → proper Turnstile solve + resubmit
+
+The insight: CF signup is lenient. A partially-interacted Turnstile
+often passes. Only fall back to full solve if the initial submit fails.
 """
 
 import asyncio
@@ -15,8 +18,7 @@ from typing import Optional
 
 import nodriver as uc
 
-from .turnstile_bypass import verify_cf, is_turnstile_present
-
+from .turnstile_bypass import solve_turnstile, is_turnstile_present
 
 CLOUDFLARE_SIGNUP_URL = "https://dash.cloudflare.com/sign-up"
 
@@ -50,6 +52,97 @@ class SignupResult:
         }
 
 
+async def _fill_form(page: uc.Tab, email: str, password: str) -> Optional[str]:
+    """Fill email + password. Returns error string or None."""
+    # Email
+    email_input = await page.select('input[name="email"]', timeout=15)
+    if not email_input:
+        return "Email input not found"
+    await email_input.click()
+    await asyncio.sleep(0.5)
+    await email_input.send_keys(email)
+    await asyncio.sleep(1)
+
+    # Password
+    pw_input = await page.select('input[name="password"]', timeout=5)
+    if not pw_input:
+        return "Password input not found"
+    await pw_input.click()
+    await asyncio.sleep(0.5)
+    await pw_input.send_keys(password)
+    await asyncio.sleep(2)
+
+    return None
+
+
+async def _try_solve_turnstile(page: uc.Tab, quick: bool = False) -> str:
+    """Try to solve Turnstile. Returns token or empty string."""
+    turnstile_present = await is_turnstile_present(page)
+    if not turnstile_present:
+        return ""
+
+    # Scroll to make Turnstile visible
+    await page.evaluate("window.scrollBy(0, 400)")
+    await asyncio.sleep(2)
+
+    return await solve_turnstile(page, quick=quick)
+
+
+async def _submit_form(page: uc.Tab) -> Optional[str]:
+    """Click submit button. Returns error string or None."""
+    submit_btn = await page.select('button[type="submit"]', timeout=5)
+    if not submit_btn:
+        return "Submit button not found"
+    await submit_btn.scroll_into_view()
+    await asyncio.sleep(1)
+    await submit_btn.click()
+    return None
+
+
+async def _wait_for_redirect(page: uc.Tab, max_wait: int = 30) -> str:
+    """Wait for signup redirect. Returns final URL."""
+    for _ in range(max_wait):
+        await asyncio.sleep(1)
+        url = await page.evaluate("location.href")
+        if "/sign-up" not in url:
+            return url
+    return await page.evaluate("location.href")
+
+
+async def _extract_account_id(page: uc.Tab, url: str) -> Optional[str]:
+    """Extract Account ID from URL or DOM."""
+    # Try URL first
+    match = re.search(r"/([a-f0-9]{32})", url)
+    if match:
+        return match.group(1)
+
+    # Try DOM
+    account_id = await page.evaluate("""
+        (() => {
+            const el = document.querySelector('[data-account-id], [data-testid="account-id"]');
+            if (el) return el.textContent || el.getAttribute('data-account-id');
+            return null;
+        })()
+    """)
+    if account_id:
+        return account_id.strip()
+
+    return None
+
+
+async def _check_errors(page: uc.Tab) -> str:
+    """Extract error messages from page."""
+    error_msgs = await page.evaluate("""
+        Array.from(document.querySelectorAll('p, [role="alert"], .error, .notification'))
+            .map(e => e.textContent.trim())
+            .filter(t => t.length > 5 && (t.includes('unable') || t.includes('limit') ||
+                t.includes('Incorrect') || t.includes('try again') || t.includes('blocked')))
+    """)
+    if error_msgs:
+        return "; ".join(error_msgs)
+    return ""
+
+
 async def signup(
     page: uc.Tab,
     email: str,
@@ -58,84 +151,53 @@ async def signup(
     retry_turnstile: bool = True,
 ) -> SignupResult:
     """
-    Execute the Cloudflare signup flow.
+    Execute Cloudflare signup with submit-first strategy.
+
+    1. Fill form
+    2. Quick Turnstile interaction (non-blocking)
+    3. Submit immediately
+    4. If still on sign-up page → proper solve + resubmit
+    5. Extract Account ID
 
     Args:
-        page: nodriver Tab (already navigated to sign-up or will navigate)
-        email: Email address for the new account
-        password: Password for the new account
-        max_wait: Max seconds to wait for redirect after submit
-        retry_turnstile: Whether to retry Turnstile if first attempt fails
+        page: nodriver Tab
+        email: Email address
+        password: Password
+        max_wait: Max seconds to wait for redirect
+        retry_turnstile: Whether to retry with proper solve on failure
 
     Returns:
         SignupResult with account_id on success
     """
-    # Navigate to signup
+    # ─── Navigate ───
     await page.get(CLOUDFLARE_SIGNUP_URL)
     await asyncio.sleep(8)
 
-    # Fill email
-    email_input = await page.select('input[name="email"]', timeout=15)
-    if not email_input:
-        return SignupResult(False, email=email, error="Email input not found")
-    await email_input.click()
-    await asyncio.sleep(0.5)
-    await email_input.send_keys(email)
-    await asyncio.sleep(1)
+    # ─── Fill Form ───
+    error = await _fill_form(page, email, password)
+    if error:
+        return SignupResult(False, email=email, error=error)
 
-    # Fill password
-    pw_input = await page.select('input[name="password"]', timeout=5)
-    if not pw_input:
-        return SignupResult(False, email=email, error="Password input not found")
-    await pw_input.click()
-    await asyncio.sleep(0.5)
-    await pw_input.send_keys(password)
-    await asyncio.sleep(2)
+    # ─── Quick Turnstile (non-blocking) ───
+    token = await _try_solve_turnstile(page, quick=True)
+    if token:
+        print(f"    ✅ Turnstile solved: {token[:20]}...")
+    else:
+        print(f"    ⚡ Turnstile quick-interact (submit-first)")
 
-    # Scroll to make Turnstile visible
-    await page.evaluate("window.scrollBy(0, 400)")
-    await asyncio.sleep(3)
+    # ─── Submit Form ───
+    error = await _submit_form(page)
+    if error:
+        return SignupResult(False, email=email, error=error)
 
-    # Solve Turnstile
-    turnstile_present = await is_turnstile_present(page)
-    if turnstile_present:
-        try:
-            token = await verify_cf(page, timeout=60)
-            print(f"    ✅ Turnstile solved: {token[:20]}...")
-        except (TimeoutError, RuntimeError) as e:
-            if retry_turnstile:
-                # Retry once
-                await asyncio.sleep(5)
-                try:
-                    token = await verify_cf(page, timeout=60)
-                    print(f"    ✅ Turnstile solved (retry): {token[:20]}...")
-                except Exception as e2:
-                    return SignupResult(False, email=email, error=f"Turnstile failed: {e2}")
-            else:
-                return SignupResult(False, email=email, error=f"Turnstile failed: {e}")
+    # ─── Wait for Redirect ───
+    url = await _wait_for_redirect(page, max_wait)
     await asyncio.sleep(5)
 
-    # Submit form
-    submit_btn = await page.select('button[type="submit"]', timeout=5)
-    if not submit_btn:
-        return SignupResult(False, email=email, error="Submit button not found")
-    await submit_btn.scroll_into_view()
-    await asyncio.sleep(1)
-    await submit_btn.click()
+    # ─── Check Result ───
+    account_id = await _extract_account_id(page, url)
 
-    # Wait for redirect
-    for _ in range(max_wait):
-        await asyncio.sleep(1)
-        url = await page.evaluate("location.href")
-        if "/sign-up" not in url:
-            break
-    await asyncio.sleep(10)  # Extra wait for dashboard to load
-
-    # Extract Account ID from URL
-    url = await page.evaluate("location.href")
-    match = re.search(r"/([a-f0-9]{32})", url)
-    if match:
-        account_id = match.group(1)
+    if account_id:
         return SignupResult(
             True,
             email=email,
@@ -144,12 +206,39 @@ async def signup(
             page_url=url,
         )
 
-    # Check for error messages
-    error_msgs = await page.evaluate("""
-        Array.from(document.querySelectorAll('p, [role="alert"]'))
-            .map(e => e.textContent.trim())
-            .filter(t => t.includes('unable') || t.includes('limit') || t.includes('Incorrect'))
-    """)
-    error = error_msgs if error_msgs else f"Redirect failed: {url[:80]}"
+    # ─── Still on sign-up page? Retry with proper solve ───
+    if retry_turnstile and "/sign-up" in url:
+        print(f"    🔄 Submit-first failed. Retry with full Turnstile solve...")
 
-    return SignupResult(False, email=email, error=str(error))
+        # Reload and refill
+        await page.get(CLOUDFLARE_SIGNUP_URL)
+        await asyncio.sleep(5)
+
+        error = await _fill_form(page, email, password)
+        if error:
+            return SignupResult(False, email=email, error=f"Retry fill failed: {error}")
+
+        token = await _try_solve_turnstile(page, quick=False)
+        print(f"    {'✅' if token else '⚠️ No token — forcing submit'} Turnstile retry")
+
+        error = await _submit_form(page)
+        if error:
+            return SignupResult(False, email=email, error=f"Retry submit failed: {error}")
+
+        url = await _wait_for_redirect(page, max_wait)
+        await asyncio.sleep(5)
+
+        account_id = await _extract_account_id(page, url)
+        if account_id:
+            return SignupResult(
+                True,
+                email=email,
+                password=password,
+                account_id=account_id,
+                page_url=url,
+            )
+
+    # ─── Final failure ───
+    error_msgs = await _check_errors(page)
+    error = error_msgs if error_msgs else f"Redirect failed: {url[:80]}"
+    return SignupResult(False, email=email, error=error)
