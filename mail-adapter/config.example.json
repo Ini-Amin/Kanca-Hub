@@ -1,0 +1,12 @@
+{
+    "temp_mail": {
+        "provider": "supabase",
+        "api_base": "https://ijrccpgiulrmfpavazsl.supabase.co/functions/v1/temp-mail-api",
+        "api_key": "REDACTED",
+        "domains": ["moymoy.me", "moyqris.me", "kintole.com", "gmilio.web.id"]
+    },
+    "server": {
+        "port": 9877,
+        "host": "0.0.0.0"
+    }
+}
