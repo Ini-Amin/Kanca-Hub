@@ -3,8 +3,8 @@
   "version": "4.0.0",
   "description": "Cloudflare Workers AI Account ID & Token Auto-Grabber — login OR signup from scratch",
   "bin": {
-    "moycf": "./cli.js",
-    "moycf-signup": "./signup_from_scratch/main.py"
+    "moycf": "cli.js",
+    "moycf-signup": "signup_from_scratch/main.py"
   },
   "files": [
     "cli.js",
@@ -30,7 +30,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mocasus/Auto-FreeCF.git"
+    "url": "git+https://github.com/mocasus/Auto-FreeCF.git"
   },
   "engines": {
     "node": ">=18.0.0"
