@@ -98,6 +98,10 @@ def parse_args():
         help="Number of concurrent account workers (default: 1; use carefully with proxies)"
     )
     parser.add_argument(
+        "--mail-api", type=str, default=None,
+        help="Mail API URL override (e.g. https://relay.example.com/new_address)"
+    )
+    parser.add_argument(
         "--no-dashboard", action="store_true",
         help="Disable Rich live dashboard even when rich is installed"
     )
@@ -125,10 +129,10 @@ async def create_account(
     domain = random.choice(config["mail_domains"])
     password = generate_password()
     token_name = config.get("token_name", "workers-ai-auto")
-    mail_api = config["mail_api"]
+    mail_api = config.get("mail_api", "https://convergence-lobby-portal-planes.trycloudflare.com/new_address")
 
     # Create temp email
-    email_gen = EmailGenerator(mail_api, config["mail_domains"])
+    email_gen = EmailGenerator(mail_api, config["mail_domains"], fallback_url=config.get("mail_fallback"))
     try:
         mail = email_gen.create(username=username, domain=domain)
         email = mail["email"]
@@ -286,6 +290,11 @@ async def main():
     num_accounts = args.accounts
     max_retry = args.retry
 
+    # Override mail API from CLI
+    if args.mail_api:
+        config["mail_api"] = args.mail_api
+        print(f"  📧 Mail API override: {args.mail_api}")
+
     # Validate-only mode
     if args.validate_only:
         if not args.token or not args.account_id:
@@ -352,6 +361,13 @@ async def main():
             ):
                 dashboard_state.update(worker_id, "failed", "Transient issue; retry cooldown", email=result.get("email", ""), index=index)
                 await asyncio.sleep(delay)
+
+            if any(
+                marker in str(result.get("error", "")).lower()
+                for marker in ("all mail relays failed", "connection refused", "connectionerror")
+            ):
+                # Network/config issue — retrying won't fix this
+                break
             else:
                 break
 

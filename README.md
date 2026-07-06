@@ -121,22 +121,21 @@ Open http://localhost:8080 in your browser.
 Create Cloudflare accounts from zero — no existing email needed:
 
 ```bash
-# 1. Setup mail adapter (once)
-cd mail-adapter
-cp config.example.json config.json
-python3 adapter.py &
+# Interactive mode (recommended)
+moycf
+# → Pick [4] Signup from scratch
+# → Pick [1] Public relay (zero setup) or [2] Custom mail API
 
-# 2. Create accounts
-cd signup_from_scratch
-cp config.example.json config.json
-# Edit config.json → set "mail_api" to "http://localhost:9877/api/new_address"
-
-# Single account
-DISPLAY=:99 python3 main.py
-
-# Bulk (5 accounts, 60s delay)
-DISPLAY=:99 python3 main.py -n 5 -d 60
+# Direct CLI
+moycf --signup --accounts 3
+moycf --signup --accounts 3 --mail-api https://your-relay.example.com/new_address
 ```
+
+**Mail providers:**
+- 🚀 **Public relay** — pre-configured, works out of the box (option `[1]`)
+- 🔌 **Custom API** — point to your own mail-adapter (option `[2]`)
+- 🏗️ **Deploy your own** — full guide via Supabase (option `[3]`)
+- 🔄 **Auto-fallback** — if primary relay fails, tool auto-tries backup + public relay (zero config needed)
 
 **Full pipeline:**
 1. Temp-mail creation → 2. CF Signup (Turnstile bypass) → 3. Email verify → 4. API token → 5. Validate

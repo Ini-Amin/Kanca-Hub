@@ -1,6 +1,15 @@
 {
-    "_comment": "Rename to config.json and fill in your values",
-    "mail_api": "http://localhost:9877/new_address",
+    "_docs": "Auto-FreeCF Signup Configuration — See README.md for full docs",
+    "_mail_providers": {
+        "_options": [
+            "1. Public relay — use the shared https://<tunnel>.trycloudflare.com endpoint (zero setup)",
+            "2. Custom API — point to your own mail-adapter instance (deploy guide in mail-adapter/)",
+            "3. External — use any temp-mail API that implements /new_address + /parsed_mails"
+        ],
+        "_cli": "Run moycf, pick Signup [4], then choose mail provider — or pass --mail-api <url>"
+    },
+    "mail_api": "https://convergence-lobby-portal-planes.trycloudflare.com/new_address",
+    "mail_fallback": "http://localhost:9877/new_address",
     "mail_domains": [
         "moymoy.me",
         "moyqris.me",

@@ -341,13 +341,16 @@ async function processBulk(filePath, proxyFile, loginMethod = 'email') {
 // ============================================================
 // SIGNUP FROM SCRATCH
 // ============================================================
-async function processSignup(numAccounts, proxyFile) {
+async function processSignup(numAccounts, proxyFile, mailApi) {
   const pyCmd = getPythonCmd();
   const signupMain = path.join(ROOT, 'signup_from_scratch', 'main.py');
   const cmdArgs = [signupMain, '--accounts', String(numAccounts || 1)];
   
   if (proxyFile) {
     cmdArgs.push('--proxy', proxyFile);
+  }
+  if (mailApi) {
+    cmdArgs.push('--mail-api', mailApi);
   }
   
   logStep(`Starting signup flow (${numAccounts || 1} account(s))...`);
@@ -401,7 +404,9 @@ async function main() {
   if (args.includes('--signup')) {
     const numIdx = args.indexOf('--accounts');
     const numAccounts = numIdx !== -1 ? parseInt(args[numIdx + 1]) || 1 : 1;
-    await processSignup(numAccounts, proxyFile);
+    const mailIdx = args.indexOf('--mail-api');
+    const mailApi = mailIdx !== -1 ? args[mailIdx + 1] : null;
+    await processSignup(numAccounts, proxyFile, mailApi);
     return;
   }
   
@@ -470,10 +475,46 @@ async function main() {
     const proxy = await question(`${colors.dim}Proxy file (optional, Enter to skip)${colors.reset}: `);
     await processBulk(filePath, proxy.trim() || null, 'email');
   } else if (choice === '4') {
+    // ---- Email Provider Selection ----
+    const defaultMailApi = 'https://convergence-lobby-portal-planes.trycloudflare.com/new_address';
+    
+    log(`\n${colors.bold}Select mail provider:${colors.reset}`);
+    log(`  ${colors.green}[1]${colors.reset} Public relay ${colors.dim}(default, zero setup)${colors.reset}`);
+    log(`  ${colors.green}[2]${colors.reset} Custom mail API ${colors.dim}(your own URL)${colors.reset}`);
+    log(`  ${colors.green}[3]${colors.reset} Deploy your own ${colors.dim}(guide)${colors.reset}\n`);
+    
+    const mailChoice = await question(`${colors.bold}Provider${colors.reset} ${colors.dim}(1-3)${colors.reset}: `);
+    let mailApi = null;
+    
+    if (mailChoice === '2') {
+      mailApi = await question(`${colors.cyan}Mail API URL${colors.reset} ${colors.dim}(e.g. https://your-relay.example.com/new_address)${colors.reset}: `);
+      if (!mailApi.trim()) {
+        logErr('URL required for custom provider');
+        rl.close();
+        process.exit(1);
+      }
+      mailApi = mailApi.trim();
+    } else if (mailChoice === '3') {
+      log(`\n${colors.bold}📘 Deploy your own mail relay:${colors.reset}`);
+      log(`  1. Create Supabase project at ${colors.cyan}https://supabase.com${colors.reset}`);
+      log(`  2. Deploy the Edge Function from ${colors.cyan}mail-adapter/${colors.reset}`);
+      log(`  3. Set your custom domain in ${colors.cyan}mail-adapter/config.json${colors.reset}`);
+      log(`  4. Run: ${colors.yellow}python3 adapter.py${colors.reset}`);
+      log(`  5. Expose via Cloudflare Tunnel or public VPS`);
+      log(`  6. Use the resulting URL as your mail_api\n`);
+      log(`${colors.dim}  Then re-run ${colors.yellow}moycf${colors.dim} and pick option [2]${colors.reset}\n`);
+      rl.close();
+      process.exit(0);
+    }
+    // Option 1 or default = public relay
+    if (mailChoice !== '2' && mailChoice !== '3') {
+      mailApi = defaultMailApi;
+    }
+    
     const numStr = await question(`${colors.cyan}Number of accounts${colors.reset} ${colors.dim}(default: 1)${colors.reset}: `);
     const numAccounts = parseInt(numStr.trim()) || 1;
     const proxy = await question(`${colors.dim}Proxy file (optional, Enter to skip)${colors.reset}: `);
-    await processSignup(numAccounts, proxy.trim() || null);
+    await processSignup(numAccounts, proxy.trim() || null, mailApi);
   } else if (choice === '5') {
     log('\nGoodbye! 👋\n');
     rl.close();

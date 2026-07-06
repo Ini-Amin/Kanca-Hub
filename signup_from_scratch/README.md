@@ -144,7 +144,8 @@ Edit `config.json`:
 
 | Field | Description |
 |-------|-------------|
-| `mail_api` | Temp email API endpoint (POST, returns `address` + `jwt`) |
+| `mail_api` | Primary temp email API endpoint (auto-falls back to `mail_fallback` then `PUBLIC_RELAY`) |
+| `mail_fallback` | Backup temp email URL (e.g. localhost for Browser Farm) |
 | `mail_domains` | Available email domains (randomly selected) |
 | `proxy` | HTTP proxy URL (`http://user:pass@host:port`) or `null` |
 | `headless` | Run Chrome without GUI (requires `xvfb-run`) |
@@ -198,6 +199,7 @@ Options:
   --headless                Run in headless mode
   --retry N                 Retry attempts per account (default: 3)
   -w, --workers N           Concurrent account workers (default: 1)
+  --mail-api URL            Override mail API URL (default: from config.json)
   --no-dashboard            Disable Rich live dashboard
   --export-txt FILE         Export valid keys to 9Router-friendly TXT
   --validate-only           Only validate an existing token
@@ -336,8 +338,9 @@ This tool is provided for **educational and security research purposes only**. U
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `Config not found: config.json` | Config file missing | `cp config.example.json config.json` then edit it |
-| `ConnectionRefusedError` for mail API | Mail server is down or wrong URL | Check `mail_api` in config, verify server is running |
-| `Email failed: 422` / `400` | Domain not supported by mail API | Make sure your mail API has the domains in `mail_domains` |
+|| `ConnectionRefusedError` for mail API | Mail server is down or wrong URL | Check `mail_api` in config, verify server is running |
+|| `WinError 10061` (Windows) | `localhost` points to your laptop, not the relay | Use public relay or set `mail_api` to the tunnel URL — run `moycf` and pick option `[1]` |
+|| `Email failed: 422` / `400` | Domain not supported by mail API | Make sure your mail API has the domains in `mail_domains` |
 | `You are unable to sign up at this time` | **Rate limited** — too many signups from same IP | Wait 2-6 hours, or use a proxy (`-p http://user:pass@host:port`) |
 | `Turnstile failed` / challenge timeout | Proxy/IP blocked or nodriver helper could not complete | Rotate to a fresh residential proxy, then retry |
 | `email_not_verified` | Cloudflare blocks token creation until email verification | Ensure your temp-mail API exposes `/parsed_mails` and returns the Cloudflare verification email |
@@ -393,21 +396,78 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Step 2: Set Up Mail API
+### Step 2: Choose Mail Provider
 
-You need a **temporary email API** that:
-- Accepts `POST /api/new_address` with `{"domain": "yourdomain.com"}`
-- Returns `{"address": "user@yourdomain.com", "jwt": "..."}`
+The tool needs a mail relay to generate temp emails for Cloudflare signup. **Three options:**
 
-Options:
-- [**Self-hosted temp mail**](https://github.com/nickspaargaren/no-google) — Self-hosted disposable mail server (recommended)
-- [**Mailinator API**](https://www.mailinator.com/) — Commercial, limited free tier
-- **Any disposable mail server** — As long as it matches the API format
+---
 
-Configure in `config.json`:
+#### Option 1: Public Relay (Zero Setup) ⭐
+
+Use the shared public relay endpoint. No deployment needed — just run `moycf` and pick option `[1]`.
+
+```bash
+moycf
+# → Pick [4] Signup from scratch
+# → Pick [1] Public relay
+```
+
+The tool ships with a public relay URL pre-configured. If the relay is down, switch to option 2.
+
+---
+
+#### Option 2: Custom Mail API
+
+Point to your own mail-adapter instance. Useful if you have a custom domain or want full privacy.
+
+```bash
+moycf
+# → Pick [4] Signup from scratch
+# → Pick [2] Custom mail API
+# → Enter your URL: https://your-relay.example.com/new_address
+```
+
+Or via CLI:
+```bash
+moycf --signup --accounts 3 --mail-api https://your-relay.example.com/new_address
+```
+
+Or in Python directly:
+```bash
+xvfb-run --auto-servernum python main.py --mail-api https://your-relay.example.com/new_address
+```
+
+---
+
+#### Option 3: Deploy Your Own
+
+Full self-hosted mail relay with Supabase:
+
+```bash
+# 1. Create a free Supabase project at https://supabase.com
+# 2. Copy the Edge Function from mail-adapter/
+# 3. Import SQL schema (maill.sql)
+# 4. Set your custom domain + JWT secret in mail-adapter/.env
+# 5. Deploy & expose publicly (Cloudflare Tunnel, ngrok, or VPS)
+
+# Then use your deployed URL as mail API:
+moycf --signup --mail-api https://your-domain.com/new_address
+```
+
+**API contract** your relay must implement:
+- `POST /new_address` ← `{"domain": "...", "name": "..."}` → returns `{"email": "...", "jwt": "...", "address": "..."}`
+- `GET /parsed_mails?userid=user%40domain.com&jwt=...` → returns `[{"subject": "...", "html": "...", "from": "..."}]`
+
+---
+
+#### ⚡ Auto-Fallback
+
+The tool automatically tries `mail_fallback` (in `config.json`) if the primary `mail_api` fails. Default fallback is `localhost:9877` (local mail-adapter for VPS users).
+
 ```json
 {
-    "mail_api": "https://your-mail-api.example.com/api/new_address",
+    "mail_api": "https://convergence-lobby-portal-planes.trycloudflare.com/new_address",
+    "mail_fallback": "http://localhost:9877/new_address",
     "mail_domains": ["yourdomain.com"]
 }
 ```
