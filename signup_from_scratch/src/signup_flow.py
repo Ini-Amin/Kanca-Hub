@@ -23,6 +23,13 @@ from .turnstile_bypass import solve_turnstile, is_turnstile_present
 CLOUDFLARE_SIGNUP_URL = "https://dash.cloudflare.com/sign-up"
 
 
+def _unwrap(val):
+    """Unwrap nodriver evaluate result dict to primitive value."""
+    if isinstance(val, dict) and "value" in val:
+        return val["value"]
+    return val
+
+
 class SignupResult:
     """Result of a signup attempt."""
 
@@ -54,8 +61,13 @@ class SignupResult:
 
 async def _fill_form(page: uc.Tab, email: str, password: str) -> Optional[str]:
     """Fill email + password. Returns error string or None."""
-    # Email
-    email_input = await page.select('input[name="email"]', timeout=15)
+    # Email input — retry with delay (CF React form slow to mount in headless)
+    email_input = None
+    for attempt in range(6):
+        email_input = await page.select('input[name="email"]', timeout=10)
+        if email_input:
+            break
+        await asyncio.sleep(3)
     if not email_input:
         return "Email input not found"
     await email_input.click()
@@ -64,7 +76,12 @@ async def _fill_form(page: uc.Tab, email: str, password: str) -> Optional[str]:
     await asyncio.sleep(1)
 
     # Password
-    pw_input = await page.select('input[name="password"]', timeout=5)
+    pw_input = None
+    for attempt in range(4):
+        pw_input = await page.select('input[name="password"]', timeout=5)
+        if pw_input:
+            break
+        await asyncio.sleep(2)
     if not pw_input:
         return "Password input not found"
     await pw_input.click()
@@ -103,10 +120,10 @@ async def _wait_for_redirect(page: uc.Tab, max_wait: int = 30) -> str:
     """Wait for signup redirect. Returns final URL."""
     for _ in range(max_wait):
         await asyncio.sleep(1)
-        url = await page.evaluate("location.href")
+        url = str(_unwrap(await page.evaluate("location.href")))
         if "/sign-up" not in url:
             return url
-    return await page.evaluate("location.href")
+    return str(_unwrap(await page.evaluate("location.href")))
 
 
 async def _extract_account_id(page: uc.Tab, url: str) -> Optional[str]:
@@ -117,13 +134,13 @@ async def _extract_account_id(page: uc.Tab, url: str) -> Optional[str]:
         return match.group(1)
 
     # Try DOM
-    account_id = await page.evaluate("""
+    account_id = _unwrap(await page.evaluate("""
         (() => {
             const el = document.querySelector('[data-account-id], [data-testid="account-id"]');
             if (el) return el.textContent || el.getAttribute('data-account-id');
             return null;
         })()
-    """)
+    """))
     if account_id:
         return account_id.strip()
 
@@ -132,14 +149,14 @@ async def _extract_account_id(page: uc.Tab, url: str) -> Optional[str]:
 
 async def _check_errors(page: uc.Tab) -> str:
     """Extract error messages from page."""
-    error_msgs = await page.evaluate("""
+    error_msgs = _unwrap(await page.evaluate("""
         Array.from(document.querySelectorAll('p, [role="alert"], .error, .notification'))
-            .map(e => e.textContent.trim())
+            .map(e => (e.textContent || '').trim())
             .filter(t => t.length > 5 && (t.includes('unable') || t.includes('limit') ||
                 t.includes('Incorrect') || t.includes('try again') || t.includes('blocked')))
-    """)
-    if error_msgs:
-        return "; ".join(error_msgs)
+    """))
+    if error_msgs and isinstance(error_msgs, list):
+        return "; ".join([str(_unwrap(m)) for m in error_msgs])
     return ""
 
 
