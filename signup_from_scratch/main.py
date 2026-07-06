@@ -26,6 +26,7 @@ Requirements:
 import argparse
 import asyncio
 import json
+import os
 import random
 import sys
 import time
@@ -151,60 +152,15 @@ async def create_account(
             lang="en-US",
             proxy=proxy,
             sandbox=False,  # required when running as root in VPS/Xvfb
-            browser_args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=ChromeWhatsNewUI",
-                "--no-first-run",
-                "--no-default-browser-check",
-            ],
         )
         own_browser = True
 
-    # Pre-warm: enable stealth via CDP to avoid CAPTCHA framing
     try:
-        tab = await browser.get("dummy")
-        await tab.evaluate("""
-            delete window.__proto__.__proto__.webdriver;
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-        """)
-    except Exception:
-        pass
-
-    try:
-        # Phase 0 (pre-flight): Check for JS Challenge page before signup
+        # Phase 0: Navigate to signup
         print("  [0/4] Pre-flight check...")
         page = await browser.get("https://dash.cloudflare.com/sign-up")
-        
-        # Detect JS Challenge + wait for it to pass
-        challenge_detected = await page.evaluate("""
-            (() => {
-                const body = document.body ? document.body.innerText : '';
-                if (body.includes("Just a moment") || body.includes("Checking your connection") || 
-                    body.includes("Verifying you are human")) return true;
-                // Check for challenge iframe
-                const iframes = document.querySelectorAll('iframe');
-                for (const f of iframes) {
-                    if (f.src && f.src.includes('challenges.cloudflare.com/cdn-cgi/challenge-platform')) return true;
-                }
-                return false;
-            })()
-        """)
-        
-        if challenge_detected:
-            print("    ⏳ JS Challenge detected, waiting...")
-            for _ in range(30):
-                await asyncio.sleep(3)
-                url = await page.evaluate("location.href")
-                if "-up" in url or "signup" in url.lower():
-                    # Check if form loaded
-                    email_input = await page.select('input[name="email"]', timeout=2)
-                    if email_input:
-                        print("    ✅ JS Challenge passed, form loaded")
-                        break
-            else:
-                print("    ⚠️ JS Challenge timeout, trying anyway...")
-        else:
-            print("    ✅ Page ready")
+        await asyncio.sleep(8)
+        print("    ✅ Page ready")
             
         # Phase 1: Signup
         print("  [1/4] Signing up...")
@@ -330,6 +286,8 @@ def export_txt(results: list[dict], output_path: str, proxy_pool: str = "None") 
 
 
 async def main():
+    # Ensure cwd is the script's directory (CLI may run from elsewhere)
+    os.chdir(Path(__file__).parent)
     args = parse_args()
 
     # Load config
