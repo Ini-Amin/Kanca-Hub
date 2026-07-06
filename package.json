@@ -1,6 +1,6 @@
 {
   "name": "auto-freecf",
-  "version": "4.2.0",
+  "version": "4.2.1",
   "description": "Cloudflare AI Account Manager — Login & Signup from scratch, all from one CLI",
   "bin": {
     "moycf": "cli.js"
