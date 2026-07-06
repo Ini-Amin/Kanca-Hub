@@ -27,10 +27,18 @@ def generate_username(prefix: str = "cf", length: int = 5) -> str:
 
 
 def load_config(config_path: str = "config.json") -> dict:
-    """Load configuration from JSON file."""
+    """Load configuration from JSON file. Falls back to example config."""
     path = Path(config_path)
     if not path.exists():
+        # Try relative to this script's directory
+        script_dir = Path(__file__).resolve().parent.parent  # src/.. → signup_from_scratch/
+        path = script_dir / config_path
+    if not path.exists():
         path = Path(config_path.replace(".json", ".example.json"))
+    if not path.exists():
+        # Try example in script directory
+        script_dir = Path(__file__).resolve().parent.parent
+        path = script_dir / config_path.replace(".json", ".example.json")
     if not path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
     with open(path) as f:
