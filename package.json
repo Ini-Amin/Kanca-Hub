@@ -1,9 +1,10 @@
 {
   "name": "auto-freecf",
-  "version": "3.3.15",
-  "description": "Cloudflare Workers AI Account ID & Token Auto-Grabber",
+  "version": "4.0.0",
+  "description": "Cloudflare Workers AI Account ID & Token Auto-Grabber — login OR signup from scratch",
   "bin": {
-    "moycf": "./cli.js"
+    "moycf": "cli.js",
+    "moycf-signup": "signup_from_scratch/main.py"
   },
   "files": [
     "cli.js",
@@ -11,6 +12,9 @@
     "web_ui.py",
     "terminal_ui.py",
     "requirements.txt",
+    "signup_from_scratch/",
+    "mail-adapter/",
+    "deploy-browserfarm.sh",
     "assets/"
   ],
   "keywords": [
@@ -18,13 +22,15 @@
     "workers-ai",
     "automation",
     "browser",
-    "token"
+    "token",
+    "signup",
+    "turnstile"
   ],
   "author": "mocasus",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mocasus/Auto-FreeCF.git"
+    "url": "git+https://github.com/mocasus/Auto-FreeCF.git"
   },
   "engines": {
     "node": ">=18.0.0"

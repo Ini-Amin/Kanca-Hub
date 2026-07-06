@@ -6,7 +6,7 @@
 
 ### Cloudflare Workers AI Account ID & Token Auto-Grabber
 
-<img alt="Version" src="https://img.shields.io/badge/version-v3.3.14-5865F2?style=flat-square">
+<img alt="Version" src="https://img.shields.io/badge/version-v4.0.0-5865F2?style=flat-square">
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
 <img alt="Node" src="https://img.shields.io/badge/node-%3E=18.0.0-339933?style=flat-square">
 <img alt="Python" src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square">
@@ -46,14 +46,26 @@ moycf
 
 ```
 Auto-FreeCF/
-├── src/                    # Core source code
+├── src/                    # Core source code (login flow)
 │   ├── __init__.py
 │   ├── browser_bot.py      # Main browser automation logic
 │   ├── turnstile_solver.py # Turnstile challenge solver
 │   └── utils.py            # Utility functions
-├── tests/                  # Test files
-├── docs/                   # Documentation
-├── assets/                 # Static assets
+├── signup_from_scratch/    # 🔥 NEW: Auto signup from zero
+│   ├── main.py             # Orchestrator
+│   ├── src/
+│   │   ├── signup_flow.py      # CF signup with Turnstile
+│   │   ├── email_verifier.py   # Email verification
+│   │   ├── email_generator.py  # Temp-mail creation
+│   │   ├── token_creator.py    # API token creation
+│   │   ├── token_validator.py  # Token validation
+│   │   ├── turnstile_bypass.py # Advanced Turnstile solver
+│   │   └── utils.py
+│   └── config.example.json
+├── mail-adapter/           # Temp-mail bridge (Supabase API)
+│   ├── adapter.py
+│   └── config.example.json
+├── deploy-browserfarm.sh   # VPS deployment script
 ├── cli.js                  # CLI entry point
 ├── terminal_ui.py          # Terminal UI
 ├── web_ui.py               # Web UI
@@ -104,6 +116,39 @@ python web_ui.py
 
 Open http://localhost:8080 in your browser.
 
+### 🔥 Signup From Scratch (NEW)
+
+Create Cloudflare accounts from zero — no existing email needed:
+
+```bash
+# 1. Setup mail adapter (once)
+cd mail-adapter
+cp config.example.json config.json
+python3 adapter.py &
+
+# 2. Create accounts
+cd signup_from_scratch
+cp config.example.json config.json
+# Edit config.json → set "mail_api" to "http://localhost:9877/api/new_address"
+
+# Single account
+DISPLAY=:99 python3 main.py
+
+# Bulk (5 accounts, 60s delay)
+DISPLAY=:99 python3 main.py -n 5 -d 60
+```
+
+**Full pipeline:**
+1. Temp-mail creation → 2. CF Signup (Turnstile bypass) → 3. Email verify → 4. API token → 5. Validate
+
+**Output format:** `account_id:workers_ai_token` in `results.json`
+
+### VPS Deployment
+
+```bash
+./deploy-browserfarm.sh
+```
+
 ## 🔧 Development
 
 ### Project Structure
@@ -111,6 +156,8 @@ Open http://localhost:8080 in your browser.
 - **src/browser_bot.py**: Main CFAutoGrabber class with login, token creation logic
 - **src/turnstile_solver.py**: Turnstile challenge solving (isolated page approach)
 - **src/utils.py**: Helper functions (load_accounts, load_proxy_config, save_results)
+- **signup_from_scratch/**: Standalone signup pipeline (no existing email needed)
+- **mail-adapter/**: Temp-mail API bridge for signup pipeline
 - **browser_bot.py**: Backward compatibility wrapper for existing scripts
 
 ### Running Tests
