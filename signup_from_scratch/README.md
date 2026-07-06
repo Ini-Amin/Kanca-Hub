@@ -81,13 +81,40 @@ This tool automates the **entire lifecycle** of creating Cloudflare accounts wit
 
 ### How Turnstile Handling Works
 
-This project uses nodriver's built-in Cloudflare helper:
+This project uses a **4-layer defense** against Cloudflare's bot detection:
 
+**1. Anti-Detection (Browser Level)**
+```python
+browser = await uc.start(
+    sandbox=False,
+    browser_args=[
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=ChromeWhatsNewUI",
+    ],
+)
+# Strip webdriver flag via CDP
+await tab.evaluate("delete window.__proto__.__proto__.webdriver")
+```
+
+**2. Turnstile Solving (nodriver built-in)**
 ```python
 await page.verify_cf()
 ```
 
-The helper drives the Cloudflare/Turnstile challenge from the browser session and avoids brittle image-template or OS-click logic. Keep the same authenticated `page` object after signup; opening a fresh tab/browser can lose dashboard session state.
+**3. Token Injection (`signup_flow.py`)**
+After `verify_cf()` solves the challenge, we extract the `cf-turnstile-response` from the DOM and force-inject it into all hidden form inputs. This handles cases where the Turnstile JS callback didn't fire properly in headless mode.
+
+```python
+token = await extract_turnstile_token(page, timeout=15)  # 3-method extraction
+if token:
+    await inject_turnstile_token(page, token)  # inject into all inputs
+```
+
+**4. Post-Submit Challenge Handling (`signup_flow.py`)**
+After form submission, Cloudflare may show a *second* Turnstile or JS Challenge. We detect and re-solve it, then re-submit the form.
+
+**5. JS Challenge Pre-Flight (`main.py`)**
+Before signup, we navigate to the page and detect/wait for any JS Challenge ("Checking your connection...") to clear. This ensures the signup form is fully loaded.
 
 **Requires:** `xvfb-run` to provide a virtual display server in VPS/headless environments. When running as root, browser startup uses `sandbox=False`.
 
@@ -280,7 +307,7 @@ cloudflare-auto-signup/
 ├── src/
 │   ├── __init__.py              # Package init
 │   ├── email_generator.py       # Temp email API client
-│   ├── turnstile_bypass.py      # OpenCV-based Turnstile solver
+│   ├── turnstile_bypass.py      # Turnstile solver + token extraction (nodriver)
 │   ├── signup_flow.py           # Signup automation (form + Turnstile)
 │   ├── token_creator.py         # Account API Token creation
 │   ├── token_validator.py       # Token validation via REST API
