@@ -322,14 +322,49 @@ async function processBulk(filePath, proxyFile, loginMethod = 'email') {
 }
 
 // ============================================================
-// MAIN
+// SIGNUP FROM SCRATCH
 // ============================================================
+async function processSignup(numAccounts, proxyFile) {
+  const pyCmd = getPythonCmd();
+  const signupMain = path.join(ROOT, 'signup_from_scratch', 'main.py');
+  const cmdArgs = [signupMain, '--accounts', String(numAccounts || 1)];
+  
+  if (proxyFile) {
+    cmdArgs.push('--proxy', proxyFile);
+  }
+  
+  logStep(`Starting signup flow (${numAccounts || 1} account(s))...`);
+  const success = await runAsync(pyCmd, cmdArgs);
+  process.exit(success ? 0 : 1);
+}
+
+// Signup setup — install signup_from_scratch dependencies
+async function setupSignup() {
+  const signupReqPath = path.join(ROOT, 'signup_from_scratch', 'requirements.txt');
+  if (!fs.existsSync(signupReqPath)) return;
+  
+  const markerPath = path.join(VENV_DIR, '.signup_installed');
+  if (fs.existsSync(markerPath)) return;
+  
+  logStep('Installing signup dependencies...');
+  const pipResult = runCapture(PYTHON_EXE, ['-m', 'pip', 'install', '-q', '-r', signupReqPath], {
+    timeout: 300000
+  });
+  
+  if (pipResult.success) {
+    fs.writeFileSync(markerPath, new Date().toISOString());
+    logOk('Signup dependencies installed');
+  } else {
+    logErr('Failed to install signup dependencies');
+    if (pipResult.stderr) log(`${colors.dim}${pipResult.stderr}${colors.reset}`);
+  }
+}
 async function main() {
   log(`${colors.cyan}${colors.bold}`);
   log('╔══════════════════════════════════════════════════════════╗');
   log('║                                                          ║');
   log('║   🚀 Auto-FreeCF                                         ║');
-  log('║   Cloudflare Workers AI Account ID & Token Grabber       ║');
+  log('║   Cloudflare AI Account — Login & Signup                 ║');
   log('║                                                          ║');
   log('╚══════════════════════════════════════════════════════════╝');
   log(`${colors.reset}${colors.magenta}   By mmoaa${colors.reset}`);
@@ -337,11 +372,21 @@ async function main() {
   
   await setup();
   
+  await setupSignup();
+  
   // Parse arguments
   const args = process.argv.slice(2);
   const proxyArg = args.find(a => a.startsWith('--proxy='));
   const proxyFile = proxyArg ? proxyArg.split('=')[1] : null;
   const loginMethod = args.includes('--google') ? 'google' : 'email';
+  
+  // --signup flag for direct CLI signup
+  if (args.includes('--signup')) {
+    const numIdx = args.indexOf('--accounts');
+    const numAccounts = numIdx !== -1 ? parseInt(args[numIdx + 1]) || 1 : 1;
+    await processSignup(numAccounts, proxyFile);
+    return;
+  }
   
   const fileArg = args.find(a => !a.startsWith('--') && (a.endsWith('.txt') || a.endsWith('.json')));
   const singleArg = args.find(a => !a.startsWith('--') && a.includes('@') && a.includes(':'));
@@ -371,12 +416,13 @@ async function main() {
   const question = (prompt) => new Promise(resolve => rl.question(prompt, resolve));
   
   log(`\n${colors.bold}Choose mode:${colors.reset}`);
-  log(`  ${colors.green}[1]${colors.reset} Single account ${colors.dim}(email:password)${colors.reset}`);
-  log(`  ${colors.green}[2]${colors.reset} Single account ${colors.dim}(Google OAuth)${colors.reset}`);
-  log(`  ${colors.green}[3]${colors.reset} Bulk accounts ${colors.dim}(from file)${colors.reset}`);
-  log(`  ${colors.green}[4]${colors.reset} Exit\n`);
+  log(`  ${colors.green}[1]${colors.reset} Login — Single ${colors.dim}(email:password)${colors.reset}`);
+  log(`  ${colors.green}[2]${colors.reset} Login — Google OAuth ${colors.dim}(google email)${colors.reset}`);
+  log(`  ${colors.green}[3]${colors.reset} Login — Bulk ${colors.dim}(from file)${colors.reset}`);
+  log(`  ${colors.green}[4]${colors.reset} Signup — Create new account ${colors.dim}(from scratch)${colors.reset}`);
+  log(`  ${colors.green}[5]${colors.reset} Exit\n`);
   
-  const choice = await question(`${colors.bold}Select${colors.reset} ${colors.dim}(1-4)${colors.reset}: `);
+  const choice = await question(`${colors.bold}Select${colors.reset} ${colors.dim}(1-5)${colors.reset}: `);
   
   if (choice === '1') {
     const emailPass = await question(`${colors.cyan}Enter email:password${colors.reset}: `);
@@ -407,6 +453,11 @@ async function main() {
     const proxy = await question(`${colors.dim}Proxy file (optional, Enter to skip)${colors.reset}: `);
     await processBulk(filePath, proxy.trim() || null, 'email');
   } else if (choice === '4') {
+    const numStr = await question(`${colors.cyan}Number of accounts${colors.reset} ${colors.dim}(default: 1)${colors.reset}: `);
+    const numAccounts = parseInt(numStr.trim()) || 1;
+    const proxy = await question(`${colors.dim}Proxy file (optional, Enter to skip)${colors.reset}: `);
+    await processSignup(numAccounts, proxy.trim() || null);
+  } else if (choice === '5') {
     log('\nGoodbye! 👋\n');
     rl.close();
     process.exit(0);

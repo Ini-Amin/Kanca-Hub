@@ -1,10 +1,9 @@
 {
   "name": "auto-freecf",
-  "version": "4.1.0",
-  "description": "Cloudflare Workers AI Account ID & Token Auto-Grabber — login OR signup from scratch",
+  "version": "4.2.0",
+  "description": "Cloudflare AI Account Manager — Login & Signup from scratch, all from one CLI",
   "bin": {
-    "moycf": "cli.js",
-    "moycf-signup": "signup_from_scratch/main.py"
+    "moycf": "cli.js"
   },
   "files": [
     "cli.js",
