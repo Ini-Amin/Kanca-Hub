@@ -43,6 +43,23 @@ const colors = {
   magenta: '\x1b[35m',
 };
 
+// ============================================================
+// AUTO-DETECT XVFB DISPLAY (for headless VPS running Xvfb)
+// ============================================================
+function detectXvfb() {
+  if (IS_WIN) return;
+  if (process.env.DISPLAY) return; // already set
+  const result = spawnSync('pgrep', ['-a', 'Xvfb'], { encoding: 'utf8' });
+  if (result.status === 0 && result.stdout.trim()) {
+    const match = result.stdout.match(/:(\d+)/);
+    if (match) {
+      process.env.DISPLAY = `:${match[1]}`;
+      // Silently set — will appear in child processes
+    }
+  }
+}
+detectXvfb();  // Run immediately on startup
+
 function log(msg) { console.log(msg); }
 function logOk(msg) { console.log(`${colors.green}✓${colors.reset} ${msg}`); }
 function logInfo(msg) { console.log(`${colors.cyan}ℹ${colors.reset} ${msg}`); }
