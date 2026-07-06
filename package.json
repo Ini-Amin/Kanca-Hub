@@ -1,6 +1,6 @@
 {
   "name": "auto-freecf",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Cloudflare Workers AI Account ID & Token Auto-Grabber — login OR signup from scratch",
   "bin": {
     "moycf": "cli.js",
