@@ -15,7 +15,7 @@ from typing import Optional
 
 import nodriver as uc
 
-from .turnstile_bypass import verify_cf, is_turnstile_present
+from .turnstile_bypass import verify_cf, is_turnstile_present, is_managed_challenge, is_rate_limited
 
 
 CLOUDFLARE_SIGNUP_URL = "https://dash.cloudflare.com/sign-up"
@@ -72,10 +72,32 @@ async def signup(
     """
     # Navigate to signup
     await page.get(CLOUDFLARE_SIGNUP_URL)
-    await asyncio.sleep(8)
+    await asyncio.sleep(5)
+
+    # ---- Phase 0: Bypass CF JS Challenge ("Just a moment...") ----
+    # If the page shows the JS Challenge interstitial, use Patchright
+    # to get cf_clearance, then reload with cookies set.
+    body_check = await page.evaluate("document.body.innerText.slice(0, 200)")
+    if "Just a moment" in body_check or "Verifying" in body_check:
+        print("    🔐 JS Challenge detected, bypassing with Patchright...")
+        try:
+            from .js_challenge_bypass import bypass_js_challenge, load_cookies_into_nodriver
+            bypass_result = bypass_js_challenge()
+            if bypass_result:
+                load_cookies_into_nodriver(page, bypass_result["cookie_file"])
+                await page.get(CLOUDFLARE_SIGNUP_URL)
+                await asyncio.sleep(5)
+                print("    ✅ JS Challenge bypassed, signup form should load now")
+        except Exception as e:
+            print(f"    ⚠️ JS Challenge bypass skipped: {e}")
+    await asyncio.sleep(3)
 
     # Fill email
     email_input = await page.select('input[name="email"]', timeout=15)
+    if not email_input:
+        # Retry once after a longer wait (CF may be slow)
+        await asyncio.sleep(8)
+        email_input = await page.select('input[name="email"]', timeout=10)
     if not email_input:
         return SignupResult(False, email=email, error="Email input not found")
     await email_input.click()
@@ -99,9 +121,27 @@ async def signup(
     # Solve Turnstile
     turnstile_present = await is_turnstile_present(page)
     if turnstile_present:
+        # Check if this is a managed challenge that requires human
+        if await is_managed_challenge(page):
+            print("    ⚠️ Managed Challenge detected — requires human click (phone-in-the-loop)")
+            return SignupResult(
+                False, email=email,
+                error="Managed challenge: requires human intervention (phone-in-the-loop)"
+            )
+
+        # Check rate limit before attempting Turnstile
+        if await is_rate_limited(page):
+            return SignupResult(
+                False, email=email,
+                error="Rate limited: IP flagged by Cloudflare (try residential proxy)"
+            )
+
         try:
             token = await verify_cf(page, timeout=60)
-            print(f"    ✅ Turnstile solved: {token[:20]}...")
+            if token:
+                print(f"    ✅ Turnstile solved: {token[:20]}...")
+            else:
+                print("    ⚠️ verify_cf returned empty — Turnstile may not have been solved")
         except (TimeoutError, RuntimeError) as e:
             if retry_turnstile:
                 # Retry once

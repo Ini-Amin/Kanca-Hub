@@ -1,5 +1,5 @@
 {
-    "_comment": "Rename to config.json and fill in your values",
+    "_comment": "Auto-FreeCF Signup Config — Temp-mail defaults",
     "mail_api": "http://localhost:9877/new_address",
     "mail_domains": [
         "moymoy.me",

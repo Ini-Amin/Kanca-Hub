@@ -129,7 +129,8 @@ python3 adapter.py &
 # 2. Create accounts
 cd signup_from_scratch
 cp config.example.json config.json
-# Edit config.json → set "mail_api" to "http://localhost:9877/api/new_address"
+# Edit config.json → set "mail_api" to "http://localhost:9877/new_address"
+# Default domains: moymoy.me, moyqris.me, kintole.com, gmilio.web.id
 
 # Single account
 DISPLAY=:99 python3 main.py
@@ -139,7 +140,13 @@ DISPLAY=:99 python3 main.py -n 5 -d 60
 ```
 
 **Full pipeline:**
-1. Temp-mail creation → 2. CF Signup (Turnstile bypass) → 3. Email verify → 4. API token → 5. Validate
+1. Temp-mail creation → 2. CF JS Challenge bypass (Patchright) → 3. CF Signup (Turnstile) → 4. Email verify → 5. API token → 6. Validate
+
+**CF Protection Layers Handled:**
+- ✅ JS Challenge ("Just a moment…") — auto-bypass via Patchright + Chrome stealth
+- ✅ Turnstile widget (iframe) — nodriver verify_cf()
+- ⚠️ Managed Challenge ("Let us know you are human") — detected, requires phone-in-the-loop
+- ⚠️ Rate Limit (429) — detected, try residential proxy
 
 **Output format:** `account_id:workers_ai_token` in `results.json`
 
