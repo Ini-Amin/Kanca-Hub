@@ -6,7 +6,7 @@
 
 ### Cloudflare Workers AI Account ID & Token Auto-Grabber
 
-<img alt="Version" src="https://img.shields.io/badge/version-v4.0.0-5865F2?style=flat-square">
+<img alt="Version" src="https://img.shields.io/badge/version-v4.0.1-5865F2?style=flat-square">
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
 <img alt="Node" src="https://img.shields.io/badge/node-%3E=18.0.0-339933?style=flat-square">
 <img alt="Python" src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square">
@@ -55,6 +55,7 @@ Auto-FreeCF/
 │   ├── main.py             # Orchestrator
 │   ├── src/
 │   │   ├── signup_flow.py      # CF signup with Turnstile
+│   │   ├── js_challenge_bypass.py  # JS Challenge bypass (stealth flags)
 │   │   ├── email_verifier.py   # Email verification
 │   │   ├── email_generator.py  # Temp-mail creation
 │   │   ├── token_creator.py    # API token creation
@@ -140,10 +141,10 @@ DISPLAY=:99 python3 main.py -n 5 -d 60
 ```
 
 **Full pipeline:**
-1. Temp-mail creation → 2. CF JS Challenge bypass (Patchright) → 3. CF Signup (Turnstile) → 4. Email verify → 5. API token → 6. Validate
+1. Temp-mail creation → 2. CF JS Challenge bypass (Chrome stealth flags) → 3. CF Signup (Turnstile) → 4. Email verify → 5. API token → 6. Validate
 
 **CF Protection Layers Handled:**
-- ✅ JS Challenge ("Just a moment…") — auto-bypass via Patchright + Chrome stealth
+- ✅ JS Challenge ("Just a moment…") — auto-bypass via Chrome stealth flags (`disable-blink-features` + Chrome 150 UA)
 - ✅ Turnstile widget (iframe) — nodriver verify_cf()
 - ⚠️ Managed Challenge ("Let us know you are human") — detected, requires phone-in-the-loop
 - ⚠️ Rate Limit (429) — detected, try residential proxy
