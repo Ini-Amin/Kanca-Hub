@@ -6,7 +6,7 @@
 
 ### Cloudflare Workers AI Account ID & Token Auto-Grabber
 
-<img alt="Version" src="https://img.shields.io/badge/version-v3.3.14-5865F2?style=flat-square">
+<img alt="Version" src="https://img.shields.io/badge/version-v4.0.0-5865F2?style=flat-square">
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
 <img alt="Node" src="https://img.shields.io/badge/node-%3E=18.0.0-339933?style=flat-square">
 <img alt="Python" src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square">
@@ -156,6 +156,8 @@ DISPLAY=:99 python3 main.py -n 5 -d 60
 - **src/browser_bot.py**: Main CFAutoGrabber class with login, token creation logic
 - **src/turnstile_solver.py**: Turnstile challenge solving (isolated page approach)
 - **src/utils.py**: Helper functions (load_accounts, load_proxy_config, save_results)
+- **signup_from_scratch/**: Standalone signup pipeline (no existing email needed)
+- **mail-adapter/**: Temp-mail API bridge for signup pipeline
 - **browser_bot.py**: Backward compatibility wrapper for existing scripts
 
 ### Running Tests

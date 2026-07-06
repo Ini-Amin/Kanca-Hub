@@ -1,6 +1,6 @@
 {
     "_comment": "Rename to config.json and fill in your values",
-    "mail_api": "http://localhost:9877/api/new_address",
+    "mail_api": "http://localhost:9877/new_address",
     "mail_domains": [
         "moymoy.me",
         "moyqris.me",
