@@ -366,12 +366,65 @@ def cmd_stack(a) -> int:
 
 
 def _stack_signup(a, py, pip) -> int:
-    # Prefer the one-shot pipeline (signup -> verify -> inject) when injecting.
-    if not a.no_inject:
-        cmd = [py, str(pip), "-n", str(a.accounts), "--output", a.output]
-        proxy = a.gateway or a.proxy
-        if a.gateway:
-            cmd += ["--gateway", a.gateway]
+    # Optionally bring WARP up for a clean Cloudflare egress, tear it down after.
+    warp_was_down = False
+    if getattr(a, "warp", False):
+        wm = AUTO_FREECF / "scripts" / "warp_manager.py"
+        st = subprocess.run([py, str(wm), "status"], capture_output=True, text=True)
+        if "up" not in st.stdout:
+            warp_was_down = True
+        print(col("cyan", "Bringing up WARP tunnel for clean egress…"))
+        if run([py, str(wm), "up"]) != 0:
+            print(col("yellow", "⚠️ WARP up failed — continuing without it"))
+        else:
+            # Let routing/DNS settle, then warm up the exact hosts the run will
+            # use (WARP's first connection on a fresh tunnel is often reset).
+            import time as _t
+            print(col("dim", "Waiting for WARP route to settle…"))
+            _t.sleep(8)
+            hosts = [
+                "https://api.ipify.org",
+                "https://dash.cloudflare.com/sign-up",
+            ]
+            # include the configured mail backend host if available
+            try:
+                cfg = json.loads((AUTO_FREECF / "signup_from_scratch" / "config.json").read_text())
+                api = cfg.get("mail_api") or ""
+                if api:
+                    from urllib.parse import urlparse
+                    hosts.append(f"{urlparse(api).scheme}://{urlparse(api).netloc}")
+            except Exception:
+                pass
+            for h in hosts:
+                for attempt in range(3):
+                    try:
+                        req = urllib.request.Request(h, headers={"User-Agent": "Mozilla/5.0"})
+                        urllib.request.urlopen(req, timeout=15).read(1)
+                        break
+                    except Exception:
+                        _t.sleep(2)
+            print(col("green", "✓ egress warmed up"))
+
+    try:
+        # Prefer the one-shot pipeline (signup -> verify -> inject) when injecting.
+        if not a.no_inject:
+            cmd = [py, str(pip), "-n", str(a.accounts), "--output", a.output]
+            if a.gateway:
+                cmd += ["--gateway", a.gateway]
+            if a.proxy:
+                cmd += ["--proxy", a.proxy]
+            if a.proxy_pool:
+                cmd += ["--proxy-pool", a.proxy_pool]
+            if a.headless:
+                cmd += ["--headless"]
+            if a.fast:
+                cmd += ["--fast"]
+            if a.workers:
+                cmd += ["--workers", str(a.workers)]
+            return run(cmd, cwd=AUTO_FREECF)
+
+        # Signup-only path: call signup main directly (supports --export-txt).
+        cmd = [py, "main.py", "--accounts", str(a.accounts), "--output", a.output]
         if a.proxy:
             cmd += ["--proxy", a.proxy]
         if a.proxy_pool:
@@ -382,23 +435,13 @@ def _stack_signup(a, py, pip) -> int:
             cmd += ["--fast"]
         if a.workers:
             cmd += ["--workers", str(a.workers)]
-        return run(cmd, cwd=AUTO_FREECF)
-
-    # Signup-only path: call signup main directly (supports --export-txt).
-    cmd = [py, "main.py", "--accounts", str(a.accounts), "--output", a.output]
-    if a.proxy:
-        cmd += ["--proxy", a.proxy]
-    if a.proxy_pool:
-        cmd += ["--proxy-pool", a.proxy_pool]
-    if a.headless:
-        cmd += ["--headless"]
-    if a.fast:
-        cmd += ["--fast"]
-    if a.workers:
-        cmd += ["--workers", str(a.workers)]
-    if a.export_txt:
-        cmd += ["--export-txt", a.export_txt]
-    return run(cmd, cwd=AUTO_FREECF / "signup_from_scratch")
+        if a.export_txt:
+            cmd += ["--export-txt", a.export_txt]
+        return run(cmd, cwd=AUTO_FREECF / "signup_from_scratch")
+    finally:
+        if getattr(a, "warp", False) and warp_was_down:
+            print(col("dim", "Tearing down WARP tunnel…"))
+            run([py, str(AUTO_FREECF / "scripts" / "warp_manager.py"), "down"])
 
 
 def _stack_login(a, py) -> int:
@@ -497,6 +540,25 @@ def cmd_k12(a) -> int:
     return 1
 
 
+# ═══════════════════════════════════════════════════════════════ warp
+
+def cmd_warp(a) -> int:
+    py = pick_python()
+    wm = AUTO_FREECF / "scripts" / "warp_manager.py"
+    if not wm.exists():
+        print(col("red", f"✗ warp_manager.py not found at {wm}"))
+        return 1
+    sub = a.warp_cmd or "status"
+    if sub == "up":
+        return run([py, str(wm), "up"])
+    if sub == "down":
+        return run([py, str(wm), "down"])
+    if sub == "gen":
+        return run([py, str(wm), "gen"])
+    # status
+    return run([py, str(wm), "status"])
+
+
 # ═══════════════════════════════════════════════════════════════ yowes
 
 def cmd_yowes(a) -> int:
@@ -580,6 +642,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="group")
     sub.add_parser("doctor", help="health + dependency check")
 
+    # ---- warp ----
+    wp = sub.add_parser("warp", help="Cloudflare WARP tunnel (clean egress IPs)")
+    ws = wp.add_subparsers(dest="warp_cmd")
+    ws.add_parser("up", help="bring the WARP tunnel up")
+    ws.add_parser("down", help="bring the WARP tunnel down")
+    ws.add_parser("gen", help="generate a fresh WARP profile")
+    ws.add_parser("status", help="show tunnel state + egress IP (default)")
+
     # ---- proxy ----
     pp = sub.add_parser("proxy", help="PetaniProxy: harvest/gateway/warp/farm/...")
     ps = pp.add_subparsers(dest="proxy_cmd")
@@ -653,6 +723,8 @@ def build_parser() -> argparse.ArgumentParser:
     sg.add_argument("--workers", type=int, default=None)
     sg.add_argument("--headless", action="store_true")
     sg.add_argument("--fast", action="store_true")
+    sg.add_argument("--warp", action="store_true",
+                    help="bring WARP tunnel up first (clean Cloudflare egress), down after")
     sg.add_argument("--no-inject", action="store_true", help="skip 9Router injection")
     sg.add_argument("--export-txt", default=None, help="9Router-friendly txt (signup-only mode)")
     sg.add_argument("--output", default="results.json")
@@ -735,6 +807,8 @@ def main() -> int:
 
     if g == "doctor":
         return cmd_doctor(args)
+    if g == "warp":
+        return cmd_warp(args)
     if g == "proxy":
         if not getattr(args, "proxy_cmd", None):
             p.parse_args(["proxy", "--help"])
