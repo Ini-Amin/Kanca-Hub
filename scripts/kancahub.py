@@ -2,43 +2,68 @@
 """
 KancaHub — one CLI for the whole account-farming toolkit.
 
-Wraps four tools into a single, friendly command surface:
+Unifies four projects behind a single command surface, exposing their real
+features (not just pass-throughs):
 
-  stack     Auto-FreeCF   — Cloudflare Workers AI account + token pipeline
-  proxy     PetaniProxy   — rotating proxy gateway, harvest, WARP, Webshare hunter
-  k12       ChatGPT K-12  — SheerID teacher verification flow
-  yowes     Yowes         — teacher document generator (13 countries)
+  stack   Auto-FreeCF + PetaniProxy-aware Cloudflare pipeline
+            signup (create accounts) · login (existing accounts/Google) ·
+            validate · 9Router TXT export · manage (cf_workerai_manager)
+  proxy   PetaniProxy
+            harvest · fast · gateway/serve · daemon · residential (Webshare) ·
+            warp · grok (xAI farm) · pipeline · sync9r · export · stats · api
+  k12     ChatGPT K-12 teacher verification (SheerID)
+            auto (full account+verify) · verify (URL) · modes
+  yowes   13-country teacher document generator
+            list · schools · make · k12 (US teacher docs) · gui · mcp
+  doctor  health/dependency check across everything
 
-Examples:
-    kancahub doctor                 # check every tool's health/deps
-    kancahub proxy harvest           # harvest fresh public proxies
-    kancahub proxy gateway           # start rotating gateway on :8888
-    kancahub proxy residential       # Webshare hunter -> fresh residential IPs
-    kancahub stack run -n 3          # signup -> verify -> inject (9Router)
-    kancahub stack run -n 3 --gateway
-    kancahub k12 run <verify-url> --proxy 127.0.0.1:8888
-    kancahub yowes list              # countries + document types
-    kancahub yowes make --country us --first John --last Doe \
-        --school "Thomas Jefferson" --position Teacher --dob 1985-03-15
+Examples
+--------
+  kancahub doctor
+  kancahub proxy harvest --country US --protocol socks5 --target 30
+  kancahub proxy daemon                    # 24/7 auto-healing gateway :8888
+  kancahub proxy residential -n 2          # Webshare hunter -> 20 residential IPs
+  kancahub proxy warp                       # Cloudflare WARP profile
+  kancahub proxy grok -n 3                  # farm Grok accounts
+  kancahub proxy export --to-pool           # harvested proxies -> Auto-FreeCF pool
+  kancahub proxy stats                      # live gateway stats
+  kancahub stack signup -n 3 --proxy http://127.0.0.1:8888
+  kancahub stack login email@x.com:pass
+  kancahub stack login --bulk accounts.txt --google
+  kancahub stack validate --token cfut_x --account-id abc
+  kancahub stack manage --token cfut_x --out-csv out.csv
+  kancahub k12 auto                         # ChatGPT signup + SheerID verify
+  kancahub k12 verify <sheerid-url> --gateway
+  kancahub yowes list
+  kancahub yowes make --country us --first John --last Doe \
+      --school "Norton Elementary" --dob 1985-03-15
+  kancahub yowes gui                        # legacy desktop GUI
 
-Run `kancahub <group> --help` for per-group options.
+Run `kancahub <group> <cmd> --help` for options.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
 PETANI = HOME / "petani-proxy"
-K12_DIR = PETANI / "Farm-Acc-ChatGPT-K-12-Teachers" / "PyRuntime_64"
+K12_ROOT = PETANI / "Farm-Acc-ChatGPT-K-12-Teachers"
+K12_DIR = K12_ROOT / "PyRuntime_64"
 YOWES = PETANI / "yowes"
+NINE_ROUTER_DB = HOME / ".9router" / "db" / "data.sqlite"
 VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
+
+GATEWAY_DEFAULT = "http://127.0.0.1:8888"
+RES_GW_DEFAULT = "http://127.0.0.1:8899"
 
 C = {
     "reset": "\x1b[0m", "bold": "\x1b[1m", "dim": "\x1b[2m",
@@ -53,9 +78,9 @@ def col(name: str, text: str) -> str:
 
 def banner(title: str) -> None:
     print()
-    print(col("cyan", "═" * 64))
+    print(col("cyan", "═" * 68))
     print(col("bold", f"  {title}"))
-    print(col("cyan", "═" * 64))
+    print(col("cyan", "═" * 68))
 
 
 def pick_python() -> str:
@@ -66,219 +91,427 @@ def pick_python() -> str:
 
 
 def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> int:
-    print(col("dim", f"$ {' '.join(cmd)}" + (f"   (cwd={cwd})" if cwd else "")))
+    print(col("dim", f"$ {' '.join(str(c) for c in cmd)}" + (f"   (cwd={cwd})" if cwd else "")))
     e = os.environ.copy()
     if env:
         e.update(env)
     try:
-        return subprocess.call(cmd, cwd=str(cwd) if cwd else None, env=e)
+        return subprocess.call([str(c) for c in cmd], cwd=str(cwd) if cwd else None, env=e)
     except FileNotFoundError as ex:
         print(col("red", f"✗ {ex}"))
         return 127
 
 
-# ---------------------------------------------------------------- doctor
+def _gw_get(path: str, gateway: str = GATEWAY_DEFAULT) -> dict | None:
+    try:
+        with urllib.request.urlopen(gateway.rstrip("/") + path, timeout=6) as r:
+            return json.loads(r.read().decode())
+    except Exception as e:  # noqa: BLE001
+        print(col("red", f"✗ gateway {path}: {e}"))
+        return None
 
-def cmd_doctor(_args) -> int:
-    banner("KancaHub doctor — checking the toolkit")
+
+def _gateway_alive(gateway: str = GATEWAY_DEFAULT) -> bool:
+    try:
+        with urllib.request.urlopen(gateway.rstrip("/") + "/api/status", timeout=4):
+            return True
+    except Exception:
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════ doctor
+
+def cmd_doctor(_a) -> int:
+    banner("KancaHub doctor")
     py = pick_python()
-    print(f"  python : {py}")
+    print(f"  python : {py}\n")
 
-    checks = [
+    files = [
         ("Auto-FreeCF dir", AUTO_FREECF.exists()),
+        ("  signup main.py", (AUTO_FREECF / "signup_from_scratch" / "main.py").exists()),
+        ("  cli.js (moycf)", (AUTO_FREECF / "cli.js").exists()),
+        ("  web_ui.py", (AUTO_FREECF / "web_ui.py").exists()),
         ("  pipeline.py", (AUTO_FREECF / "scripts" / "pipeline.py").exists()),
         ("  inject_9router.py", (AUTO_FREECF / "scripts" / "inject_9router.py").exists()),
+        ("  residential_gateway.py", (AUTO_FREECF / "scripts" / "residential_gateway.py").exists()),
+        ("  cf_workerai_manager.py", (AUTO_FREECF / "cf_workerai_manager.py").exists()),
         ("PetaniProxy dir", PETANI.exists()),
         ("  main.py", (PETANI / "main.py").exists()),
-        ("K-12 tool", (K12_DIR / "script.py").exists()),
+        ("  core/server.py", (PETANI / "core" / "server.py").exists()),
+        ("K-12 script.py", (K12_DIR / "script.py").exists()),
+        ("K-12 auto_k12_flow.py", (K12_DIR / "auto_k12_flow.py").exists()),
+        ("K-12 gen doc bridge", (K12_ROOT / "generate_teacher_doc.py").exists()),
         ("Yowes dir", YOWES.exists()),
         ("  countries/", (YOWES / "countries").exists()),
-        ("9Router DB", (HOME / ".9router" / "db" / "data.sqlite").exists()),
+        ("  main_gui.py", (YOWES / "main_gui.py").exists()),
+        ("9Router DB", NINE_ROUTER_DB.exists()),
         ("Secrets .env", (HOME / ".config" / "auto-freecf" / ".env").exists()),
         ("Proxies pool", (AUTO_FREECF / "signup_from_scratch" / "proxies.txt").exists()),
     ]
-    for label, ok in checks:
+    for label, ok in files:
         print(f"  {'✅' if ok else '❌'} {label}")
 
-    print(col("bold", "\n  Python modules (venv):"))
+    print(col("bold", "\n  Python modules:"))
     for mod in ("nodriver", "patchright", "httpx", "requests", "curl_cffi",
                 "cloudscraper", "DrissionPage", "speech_recognition", "pydub",
-                "PIL"):
+                "PIL", "mcp", "customtkinter", "rich"):
         r = subprocess.run([py, "-c", f"import {mod}"], capture_output=True)
         print(f"  {'✅' if r.returncode == 0 else '❌'} {mod}")
 
-    print(col("bold", "\n  External binaries:"))
-    for b in ("google-chrome", "ffmpeg", "git"):
-        print(f"  {'✅' if shutil.which(b) else '❌'} {b}")
+    print(col("bold", "\n  Binaries:"))
+    for b in ("google-chrome", "ffmpeg", "git", "adb", "wg"):
+        print(f"  {'✅' if shutil.which(b) else '➖'} {b}")
 
-    gw = False
-    try:
-        import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:8888", timeout=2):
-            gw = True
-    except Exception:
-        pass
-    print(f"  {'✅' if gw else '➖'} rotating gateway on :8888 {'(running)' if gw else '(not running)'}")
+    petani_gw = _gateway_alive(GATEWAY_DEFAULT)
+    print(f"\n  {'✅' if petani_gw else '➖'} PetaniProxy gateway :8888 {'(running)' if petani_gw else '(not running)'}")
     return 0
 
 
-# ---------------------------------------------------------------- proxy
+# ═══════════════════════════════════════════════════════════════ proxy
 
-def cmd_proxy(args) -> int:
+def cmd_proxy(a) -> int:
     py = pick_python()
-    main = PETANI / "main.py"
-    if not main.exists():
+    petani = PETANI / "main.py"
+    if not petani.exists():
         print(col("red", f"✗ PetaniProxy not found at {PETANI}"))
         return 1
+    sub = a.proxy_cmd
 
-    sub = args.proxy_cmd
+    def petani_cmd(extra: list[str]) -> int:
+        return run([py, str(petani)] + [str(x) for x in extra], cwd=PETANI)
+
     if sub == "harvest":
-        cmd = [py, "main.py", "--target", str(args.target),
-               "--max", str(args.max), "--workers", str(args.workers)]
-        if args.country:
-            cmd += ["--country", args.country]
-        if args.protocol:
-            cmd += ["--protocol", args.protocol]
-        return run(cmd, cwd=PETANI)
+        cmd = ["--target", a.target, "--max", a.max, "--workers", a.workers,
+               "--timeout", a.timeout]
+        if a.protocol:
+            cmd += ["--protocol", a.protocol]
+        if a.country:
+            cmd += ["--country", a.country]
+        if a.anonymity:
+            cmd += ["--anonymity", a.anonymity]
+        if a.target_url:
+            cmd += ["--target-url", a.target_url]
+        if a.loop:
+            cmd += ["--loop", a.loop]
+        if a.sync_9router:
+            cmd += ["--sync-9router", a.sync_9router]
+        if a.serve:
+            cmd += ["--serve", a.serve]
+        return petani_cmd(cmd)
 
-    if sub == "gateway":
-        print(col("yellow", f"Starting rotating gateway on :{args.port} (Ctrl-C to stop)…"))
-        return run([py, "main.py", "--serve", str(args.port),
-                    "--target", str(args.target)], cwd=PETANI)
+    if sub == "fast":
+        cmd = ["--fast-harvest", a.target, "--max-latency", a.max_latency]
+        return petani_cmd(cmd)
+
+    if sub == "serve" or sub == "gateway":
+        print(col("yellow", f"Rotating gateway + REST API + dashboard on :{a.port}"))
+        print(col("dim", f"  dashboard: http://127.0.0.1:{a.port}/dashboard"))
+        print(col("dim", f"  PAC:       http://127.0.0.1:{a.port}/proxy.pac"))
+        return petani_cmd(["--serve", a.port, "--target", a.target])
 
     if sub == "daemon":
-        print(col("yellow", "Starting 24/7 auto-healing gateway on :8888…"))
-        return run([py, "main.py", "--daemon-gateway"], cwd=PETANI)
+        print(col("yellow", "24/7 auto-healing gateway on :8888 (Ctrl-C to stop)"))
+        return petani_cmd(["--daemon-gateway"])
 
     if sub == "residential":
-        return run([py, "main.py", "-W", str(args.accounts)], cwd=PETANI)
+        if a.headless:
+            return petani_cmd(["--webshare", a.accounts, "--headless"])
+        return petani_cmd(["--webshare", a.accounts])
 
     if sub == "warp":
-        return run([py, "main.py", "-C"], cwd=PETANI)
+        return petani_cmd(["--warp"])
+
+    if sub == "grok":
+        cmd = ["--grok-farm", a.accounts]
+        if a.headless:
+            cmd += ["--headless"]
+        if a.mail_provider:
+            cmd += ["--mail-provider", a.mail_provider]
+        return petani_cmd(cmd)
+
+    if sub == "pipeline":
+        cmd = ["--pipeline", a.accounts]
+        if a.headless:
+            cmd += ["--headless"]
+        return petani_cmd(cmd)
+
+    if sub == "sync9r":
+        path = a.db or "auto"
+        print(col("cyan", f"Syncing harvested proxies into 9Router DB ({path})"))
+        return petani_cmd(["--target", a.target, "--sync-9router", path])
 
     if sub == "export":
-        src = PETANI / "output" / "live_elite.txt"
-        if not src.exists():
-            src = PETANI / "output" / "live_all.txt"
-        if not src.exists():
-            print(col("red", "✗ No harvested proxies found. Run `kancahub proxy harvest` first."))
-            return 1
-        dst = AUTO_FREECF / "signup_from_scratch" / "proxies.txt"
-        lines = [l.strip() for l in src.read_text().splitlines() if l.strip()]
-        dst.write_text("\n".join(lines) + "\n")
-        print(col("green", f"✓ Exported {len(lines)} proxies -> {dst}"))
-        return 0
+        return _proxy_export(a)
 
     if sub == "test":
-        dst = AUTO_FREECF / "signup_from_scratch" / "proxies.txt"
-        if not dst.exists():
-            print(col("red", f"✗ {dst} not found"))
-            return 1
-        lines = [l.strip() for l in dst.read_text().splitlines() if l.strip()]
-        ok = 0
-        for p in lines:
-            ip = subprocess.run(
-                ["curl", "-s", "-m", "10", "-x", p, "https://api.ipify.org"],
-                capture_output=True, text=True).stdout.strip()
-            print(f"  {'✅' if ip else '❌'} {ip or 'dead'}")
-            ok += bool(ip)
-        print(col("green", f"\n  {ok}/{len(lines)} live"))
-        return 0
+        return _proxy_test_pool(a)
+
+    if sub == "stats":
+        return _proxy_stats(a)
+
+    if sub == "api":
+        return _proxy_api(a)
 
     print(col("red", "✗ unknown proxy command"))
     return 1
 
 
-# ---------------------------------------------------------------- stack
-
-def cmd_stack(args) -> int:
-    py = pick_python()
-    pipeline = AUTO_FREECF / "scripts" / "pipeline.py"
-    if not pipeline.exists():
-        print(col("red", f"✗ pipeline.py not found at {pipeline}"))
+def _proxy_export(a) -> int:
+    src = PETANI / "output" / "live_elite.txt"
+    if not src.exists():
+        src = PETANI / "output" / "live_all.txt"
+    if not src.exists():
+        print(col("red", "✗ no harvested proxies — run `kancahub proxy harvest`"))
         return 1
+    dst = AUTO_FREECF / "signup_from_scratch" / "proxies.txt"
+    lines = [l.strip() for l in src.read_text().splitlines() if l.strip()]
+    if a.to_pool:
+        dst.write_text("\n".join(lines) + "\n")
+        print(col("green", f"✓ {len(lines)} proxies -> {dst}"))
+    else:
+        for l in lines[:a.limit]:
+            print(" ", l)
+        print(col("dim", f"({len(lines)} total; use --to-pool to write the Auto-FreeCF pool)"))
+    return 0
 
-    sub = args.stack_cmd
-    if sub == "run":
-        cmd = [py, str(pipeline), "-n", str(args.accounts)]
-        if args.gateway:
-            cmd += ["--gateway", args.gateway]
-        if args.proxy:
-            cmd += ["--proxy", args.proxy]
-        if args.proxy_pool:
-            cmd += ["--proxy-pool", args.proxy_pool]
-        if args.headless:
-            cmd += ["--headless"]
-        if args.fast:
-            cmd += ["--fast"]
-        if args.workers:
-            cmd += ["--workers", str(args.workers)]
-        if args.no_inject:
-            cmd += ["--no-inject"]
-        if args.output:
-            cmd += ["--output", args.output]
-        return run(cmd, cwd=AUTO_FREECF)
+
+def _proxy_test_pool(a) -> int:
+    dst = Path(a.pool) if a.pool else (AUTO_FREECF / "signup_from_scratch" / "proxies.txt")
+    if not dst.exists():
+        print(col("red", f"✗ pool not found: {dst}"))
+        return 1
+    lines = [l.strip() for l in dst.read_text().splitlines() if l.strip()]
+    ok = 0
+    for p in lines:
+        ip = subprocess.run(["curl", "-s", "-m", "10", "-x", p, "https://api.ipify.org"],
+                            capture_output=True, text=True).stdout.strip()
+        print(f"  {'✅' if ip else '❌'} {ip or 'dead'}")
+        ok += bool(ip)
+    print(col("green", f"\n  {ok}/{len(lines)} live"))
+    return 0
+
+
+def _proxy_stats(a) -> int:
+    gw = a.gateway
+    banner(f"Gateway stats ({gw})")
+    st = _gw_get("/api/status", gw)
+    if st:
+        print(json.dumps(st, indent=2)[:2000])
+    else:
+        print(col("yellow", "Gateway not reachable. Start it: kancahub proxy daemon"))
+    return 0
+
+
+def _proxy_api(a) -> int:
+    gw = a.gateway
+    path = a.path
+    if not path.startswith("/"):
+        path = "/" + path
+    data = _gw_get(path, gw)
+    if data is not None:
+        print(json.dumps(data, indent=2)[:4000])
+        return 0
+    return 1
+
+
+# ═══════════════════════════════════════════════════════════════ stack
+
+def cmd_stack(a) -> int:
+    py = pick_python()
+    pip = AUTO_FREECF / "scripts" / "pipeline.py"
+    inj = AUTO_FREECF / "scripts" / "inject_9router.py"
+    signup_main = AUTO_FREECF / "signup_from_scratch" / "main.py"
+    sub = a.stack_cmd
+
+    if sub == "signup":
+        return _stack_signup(a, py, pip)
+
+    if sub == "login":
+        return _stack_login(a, py)
 
     if sub == "inject":
-        inject = AUTO_FREECF / "scripts" / "inject_9router.py"
-        cmd = [py, str(inject)]
-        if args.input:
-            cmd += ["-i", args.input]
-        if not args.no_verify:
-            cmd.append("--verify")
+        cmd = [py, str(inj)]
+        if a.input:
+            cmd += ["-i", a.input]
+        if a.model:
+            cmd += ["--model", a.model]
+        if a.db:
+            cmd += ["--db", a.db]
+        if a.dry_run:
+            cmd += ["--dry-run"]
+        if not a.no_verify:
+            cmd += ["--verify"]
+        return run(cmd, cwd=AUTO_FREECF)
+
+    if sub == "validate":
+        if not a.token or not a.account_id:
+            print(col("red", "✗ validate needs --token and --account-id"))
+            return 1
+        cmd = [py, str(signup_main), "--validate-only",
+               "--token", a.token, "--account-id", a.account_id]
+        return run(cmd, cwd=AUTO_FREECF / "signup_from_scratch")
+
+    if sub == "manage":
+        return _stack_manage(a, py)
+
+    if sub == "web":
+        print(col("cyan", f"Starting Auto-FreeCF Web UI on :{a.port}"))
+        cmd = [py, "web_ui.py", "--port", str(a.port)]
+        if a.open:
+            cmd += ["--open"]
         return run(cmd, cwd=AUTO_FREECF)
 
     print(col("red", "✗ unknown stack command"))
     return 1
 
 
-# ---------------------------------------------------------------- k12
+def _stack_signup(a, py, pip) -> int:
+    # Prefer the one-shot pipeline (signup -> verify -> inject) when injecting.
+    if not a.no_inject:
+        cmd = [py, str(pip), "-n", str(a.accounts), "--output", a.output]
+        proxy = a.gateway or a.proxy
+        if a.gateway:
+            cmd += ["--gateway", a.gateway]
+        if a.proxy:
+            cmd += ["--proxy", a.proxy]
+        if a.proxy_pool:
+            cmd += ["--proxy-pool", a.proxy_pool]
+        if a.headless:
+            cmd += ["--headless"]
+        if a.fast:
+            cmd += ["--fast"]
+        if a.workers:
+            cmd += ["--workers", str(a.workers)]
+        return run(cmd, cwd=AUTO_FREECF)
 
-def cmd_k12(args) -> int:
-    py = pick_python()
-    script = K12_DIR / "script.py"
-    if not script.exists():
-        print(col("red", f"✗ K-12 script not found at {script}"))
+    # Signup-only path: call signup main directly (supports --export-txt).
+    cmd = [py, "main.py", "--accounts", str(a.accounts), "--output", a.output]
+    if a.proxy:
+        cmd += ["--proxy", a.proxy]
+    if a.proxy_pool:
+        cmd += ["--proxy-pool", a.proxy_pool]
+    if a.headless:
+        cmd += ["--headless"]
+    if a.fast:
+        cmd += ["--fast"]
+    if a.workers:
+        cmd += ["--workers", str(a.workers)]
+    if a.export_txt:
+        cmd += ["--export-txt", a.export_txt]
+    return run(cmd, cwd=AUTO_FREECF / "signup_from_scratch")
+
+
+def _stack_login(a, py) -> int:
+    """Login to EXISTING Cloudflare accounts (email/password or Google)."""
+    browser_bot = AUTO_FREECF / "browser_bot.py"
+    if a.bulk:
+        cmd = [py, str(browser_bot), "--accounts", a.bulk]
+    elif a.account:
+        cmd = [py, str(browser_bot), "--single", a.account]
+    else:
+        print(col("red", "✗ provide an account (email:password) or --bulk <file>"))
         return 1
+    if a.google:
+        cmd += ["--login-method", "google"]
+    if a.proxy:
+        cmd += ["--proxy", a.proxy]
+    if a.visible:
+        cmd += ["--visible"]
+    return run(cmd, cwd=AUTO_FREECF)
 
-    sub = args.k12_cmd
-    if sub == "run":
-        if not args.url:
-            print(col("red", "✗ verification URL required: kancahub k12 run <url>"))
+
+def _stack_manage(a, py) -> int:
+    mgr = AUTO_FREECF / "cf_workerai_manager.py"
+    cmd = [py, str(mgr)]
+    if a.token:
+        cmd += ["--token", a.token]
+    if a.token_file:
+        cmd += ["--token-file", a.token_file]
+    if a.model:
+        cmd += ["--model", a.model]
+    if a.out_json:
+        cmd += ["--out-json", a.out_json]
+    if a.out_csv:
+        cmd += ["--out-csv", a.out_csv]
+    if a.no_test:
+        cmd += ["--no-test"]
+    return run(cmd, cwd=AUTO_FREECF)
+
+
+# ═══════════════════════════════════════════════════════════════ k12
+
+def cmd_k12(a) -> int:
+    py = pick_python()
+    sub = a.k12_cmd
+
+    if sub == "verify":
+        script = K12_DIR / "script.py"
+        if not script.exists():
+            print(col("red", f"✗ {script} not found"))
             return 1
-        cmd = [py, str(script), args.url]
-        if args.proxy:
-            cmd += ["--proxy", args.proxy]
-        elif args.gateway:
-            cmd += ["--proxy", "127.0.0.1:8888"]
-        if args.debug:
+        if not a.url:
+            print(col("red", "✗ url required: kancahub k12 verify <sheerid-url>"))
+            return 1
+        cmd = [py, str(script), a.url]
+        proxy = a.proxy
+        if not proxy and a.gateway:
+            proxy = "127.0.0.1:8888"
+        if proxy:
+            cmd += ["--proxy", proxy]
+        if a.debug:
             cmd += ["--debug"]
-        if args.email:
-            cmd += ["--email", args.email]
-        if args.no_temp_email:
+        if a.email:
+            cmd += ["--email", a.email]
+        if a.no_temp_email:
             cmd += ["--no-temp-email"]
+        if a.ask_email:
+            cmd += ["--ask-email"]
         return run(cmd, cwd=K12_DIR)
+
+    if sub == "auto":
+        flow = K12_DIR / "auto_k12_flow.py"
+        if not flow.exists():
+            print(col("red", f"✗ {flow} not found"))
+            return 1
+        print(col("cyan", "Full auto flow: ChatGPT signup -> OTP -> SheerID verify"))
+        print(col("dim", f"  credentials appended to {K12_DIR / 'created_k12_accounts.txt'}"))
+        return run([py, str(flow)], cwd=K12_DIR)
+
+    if sub == "modes":
+        print(col("bold", "\nK-12 connection modes (maps to run_cmd.bat [1]-[12]):"))
+        rows = [
+            ("1", "direct + temp email", "kancahub k12 verify <url>"),
+            ("2", "proxy ip:port", "kancahub k12 verify <url> --proxy IP:PORT"),
+            ("3", "proxy auth", "kancahub k12 verify <url> --proxy user:pass@IP:PORT"),
+            ("4", "debug no proxy", "kancahub k12 verify <url> --debug"),
+            ("7", "no temp email", "kancahub k12 verify <url> --no-temp-email"),
+            ("10", "manual email", "kancahub k12 verify <url> --email you@x.com"),
+            ("--", "use local gateway", "kancahub k12 verify <url> --gateway"),
+            ("--", "full auto account", "kancahub k12 auto"),
+        ]
+        for n, label, ex in rows:
+            print(f"  [{n:>2}] {label:22s} {col('dim', ex)}")
+        return 0
 
     print(col("red", "✗ unknown k12 command"))
     return 1
 
 
-# ---------------------------------------------------------------- yowes
+# ═══════════════════════════════════════════════════════════════ yowes
 
-def cmd_yowes(args) -> int:
+def cmd_yowes(a) -> int:
     py = pick_python()
     if not YOWES.exists():
         print(col("red", f"✗ Yowes not found at {YOWES}"))
         return 1
-
-    sub = args.yowes_cmd
+    sub = a.yowes_cmd
 
     if sub == "list":
         script = (
             "import sys; sys.path.insert(0,'.');"
             "from countries import list_countries, get_country;"
-            "print('Available countries:');"
-            "[print('  ', c, '->', ', '.join(get_country(c)().get_document_types())) for c in list_countries()]"
+            "print('Countries & document types:');"
+            "[print(f'  {c:14s} {get_country(c)().get_country_name():14s} -> ' + ', '.join(get_country(c)().get_document_types())) for c in list_countries()]"
         )
         return run([py, "-c", script], cwd=YOWES)
 
@@ -286,32 +519,47 @@ def cmd_yowes(args) -> int:
         script = (
             "import sys; sys.path.insert(0,'.');"
             "from countries import get_country;"
-            f"gen=get_country('{args.country}')();"
+            f"gen=get_country('{a.country}')();"
+            "print(f'{len(gen.schools)} schools for', gen.get_country_name());"
             "[print('  ', s['name']) for s in gen.schools]"
         )
         return run([py, "-c", script], cwd=YOWES)
 
     if sub == "make":
-        types = args.types.split(",") if args.types else None
+        types = a.types.split(",") if a.types else None
         script = f"""
 import sys; sys.path.insert(0,'.')
 from mcp_server import generate_documents
 res = generate_documents(
-    country={args.country!r},
-    first_name={args.first!r},
-    last_name={args.last!r},
-    school_name={args.school!r},
-    position={args.position!r},
-    date_of_birth={args.dob!r},
-    gender={args.gender!r},
-    document_types={types!r},
-    output_dir={args.out!r},
+    country={a.country!r}, first_name={a.first!r}, last_name={a.last!r},
+    school_name={a.school!r}, position={a.position!r}, date_of_birth={a.dob!r},
+    gender={a.gender!r}, document_types={types!r}, output_dir={a.out!r},
 )
 print('✓ generated', res['count'], 'document(s) ->', res['output_dir'])
-for f in res['files']:
-    print('   ', f)
+for f in res['files']: print('   ', f)
 """
         return run([py, "-c", script], cwd=YOWES)
+
+    if sub == "k12":
+        # Bridge: use Tool A's generate_teacher_doc.py (wraps yowes USGenerator)
+        bridge = K12_ROOT / "generate_teacher_doc.py"
+        if not bridge.exists():
+            print(col("red", f"✗ {bridge} not found"))
+            return 1
+        cmd = [py, str(bridge)]
+        if a.first:
+            cmd += ["--first", a.first]
+        if a.last:
+            cmd += ["--last", a.last]
+        if a.school:
+            cmd += ["--school", a.school]
+        if a.out:
+            cmd += ["--out", a.out]
+        return run(cmd, cwd=K12_ROOT)
+
+    if sub == "gui":
+        gui = YOWES / "main_gui.py"
+        return run([py, str(gui)], cwd=YOWES)
 
     if sub == "mcp":
         return run([py, "mcp_server.py"], cwd=YOWES)
@@ -320,64 +568,141 @@ for f in res['files']:
     return 1
 
 
-# ---------------------------------------------------------------- parser
+# ═══════════════════════════════════════════════════════════════ parser
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="kancahub",
-        description="KancaHub — one CLI for Cloudflare farming, proxies, K-12 & docs",
+        description="KancaHub — unified CLI: Cloudflare farming, proxies, K-12 verification & docs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     sub = p.add_subparsers(dest="group")
+    sub.add_parser("doctor", help="health + dependency check")
 
-    sub.add_parser("doctor", help="check every tool's health and dependencies")
-
-    pp = sub.add_parser("proxy", help="PetaniProxy: harvest / gateway / residential / warp")
+    # ---- proxy ----
+    pp = sub.add_parser("proxy", help="PetaniProxy: harvest/gateway/warp/farm/...")
     ps = pp.add_subparsers(dest="proxy_cmd")
-    h = ps.add_parser("harvest", help="harvest + validate public proxies")
-    h.add_argument("--target", type=int, default=20)
-    h.add_argument("--max", type=int, default=400)
-    h.add_argument("--workers", type=int, default=100)
-    h.add_argument("--country", default=None, help="ISO code, e.g. US, SG, ID")
-    h.add_argument("--protocol", choices=["all", "http", "socks4", "socks5"], default=None)
-    g = ps.add_parser("gateway", help="start rotating forward proxy")
-    g.add_argument("--port", type=int, default=8888)
-    g.add_argument("--target", type=int, default=30)
-    ps.add_parser("daemon", help="24/7 auto-healing gateway")
-    r = ps.add_parser("residential", help="Webshare hunter -> fresh residential IPs")
-    r.add_argument("-n", "--accounts", type=int, default=1)
-    ps.add_parser("warp", help="generate Cloudflare WARP profile")
-    ps.add_parser("export", help="export harvested proxies -> Auto-FreeCF pool")
-    ps.add_parser("test", help="validate the Auto-FreeCF proxy pool")
 
-    sp = sub.add_parser("stack", help="Auto-FreeCF: signup -> verify -> inject")
+    h = ps.add_parser("harvest", help="harvest + validate public proxies")
+    h.add_argument("--target", type=int, default=15)
+    h.add_argument("--max", type=int, default=250)
+    h.add_argument("--workers", type=int, default=50)
+    h.add_argument("--timeout", type=float, default=3.0)
+    h.add_argument("--protocol", choices=["all", "http", "socks4", "socks5"], default=None)
+    h.add_argument("--country", default=None, help="ISO code (US, SG, ID…)")
+    h.add_argument("--anonymity", choices=["all", "elite", "anonymous", "transparent"], default=None)
+    h.add_argument("--target-url", default=None)
+    h.add_argument("--loop", type=int, default=None, help="auto-refresh every N minutes")
+    h.add_argument("--sync-9router", default=None, help="9Router data.sqlite path or 'auto'")
+    h.add_argument("--serve", type=int, default=None, help="also start gateway on port")
+
+    f = ps.add_parser("fast", help="ultra-fast aiohttp harvester")
+    f.add_argument("--target", type=int, default=15)
+    f.add_argument("--max-latency", type=int, default=1200)
+
+    for name in ("serve", "gateway"):
+        g = ps.add_parser(name, help="start rotating gateway + REST API + dashboard")
+        g.add_argument("--port", type=int, default=8888)
+        g.add_argument("--target", type=int, default=30)
+
+    ps.add_parser("daemon", help="24/7 auto-healing gateway on :8888")
+
+    r = ps.add_parser("residential", help="Webshare residential hunter")
+    r.add_argument("-n", "--accounts", type=int, default=1)
+    r.add_argument("--headless", action="store_true")
+
+    ps.add_parser("warp", help="generate Cloudflare WARP WireGuard profile")
+
+    gr = ps.add_parser("grok", help="farm Grok xAI accounts")
+    gr.add_argument("-n", "--accounts", type=int, default=1)
+    gr.add_argument("--headless", action="store_true")
+    gr.add_argument("--mail-provider", choices=["duckmail", "gmail"], default=None)
+
+    pl = ps.add_parser("pipeline", help="async pipeline: Webshare + Grok concurrently")
+    pl.add_argument("-n", "--accounts", type=int, default=10)
+    pl.add_argument("--headless", action="store_true")
+
+    s9 = ps.add_parser("sync9r", help="harvest and sync straight into 9Router DB")
+    s9.add_argument("--target", type=int, default=20)
+    s9.add_argument("--db", default=None)
+
+    e = ps.add_parser("export", help="export harvested proxies")
+    e.add_argument("--to-pool", action="store_true", help="write Auto-FreeCF proxies.txt")
+    e.add_argument("--limit", type=int, default=20)
+
+    t = ps.add_parser("test", help="validate a proxy pool")
+    t.add_argument("--pool", default=None, help="pool file (default: Auto-FreeCF pool)")
+
+    st = ps.add_parser("stats", help="live gateway stats")
+    st.add_argument("--gateway", default=GATEWAY_DEFAULT)
+
+    ap = ps.add_parser("api", help="call a gateway REST endpoint")
+    ap.add_argument("path", help="e.g. /api/all or /api/leak-test")
+    ap.add_argument("--gateway", default=GATEWAY_DEFAULT)
+
+    # ---- stack ----
+    sp = sub.add_parser("stack", help="Auto-FreeCF: signup/login/validate/manage")
     ss = sp.add_subparsers(dest="stack_cmd")
-    sr = ss.add_parser("run", help="run the full pipeline")
-    sr.add_argument("-n", "--accounts", type=int, default=1)
-    sr.add_argument("--gateway", nargs="?", const="http://127.0.0.1:8888", default=None)
-    sr.add_argument("--proxy", default=None)
-    sr.add_argument("--proxy-pool", default=None)
-    sr.add_argument("--workers", type=int, default=None)
-    sr.add_argument("--headless", action="store_true")
-    sr.add_argument("--fast", action="store_true")
-    sr.add_argument("--no-inject", action="store_true")
-    sr.add_argument("--output", default=None)
+
+    sg = ss.add_parser("signup", help="create new Cloudflare accounts + tokens")
+    sg.add_argument("-n", "--accounts", type=int, default=1)
+    sg.add_argument("--gateway", nargs="?", const=GATEWAY_DEFAULT, default=None)
+    sg.add_argument("--proxy", default=None)
+    sg.add_argument("--proxy-pool", default=None)
+    sg.add_argument("--workers", type=int, default=None)
+    sg.add_argument("--headless", action="store_true")
+    sg.add_argument("--fast", action="store_true")
+    sg.add_argument("--no-inject", action="store_true", help="skip 9Router injection")
+    sg.add_argument("--export-txt", default=None, help="9Router-friendly txt (signup-only mode)")
+    sg.add_argument("--output", default="results.json")
+
+    sl = ss.add_parser("login", help="login to EXISTING accounts (email or Google)")
+    sl.add_argument("account", nargs="?", help="email:password")
+    sl.add_argument("--bulk", default=None, help="file of email:password lines")
+    sl.add_argument("--google", action="store_true", help="Google OAuth login")
+    sl.add_argument("--proxy", default=None, help="proxy config JSON file")
+    sl.add_argument("--visible", action="store_true", help="show browser window")
+
     si = ss.add_parser("inject", help="inject existing results into 9Router")
     si.add_argument("-i", "--input", default=None)
+    si.add_argument("--model", default=None)
+    si.add_argument("--db", default=None)
     si.add_argument("--no-verify", action="store_true")
+    si.add_argument("--dry-run", action="store_true")
 
+    sv = ss.add_parser("validate", help="validate a single cfut_ token")
+    sv.add_argument("--token", required=True)
+    sv.add_argument("--account-id", required=True)
+
+    sm = ss.add_parser("manage", help="verify/list CF tokens (cf_workerai_manager)")
+    sm.add_argument("--token", default=None)
+    sm.add_argument("--token-file", default=None)
+    sm.add_argument("--model", default=None)
+    sm.add_argument("--out-json", default=None)
+    sm.add_argument("--out-csv", default=None)
+    sm.add_argument("--no-test", action="store_true")
+
+    sw = ss.add_parser("web", help="launch Auto-FreeCF web UI")
+    sw.add_argument("--port", type=int, default=8080)
+    sw.add_argument("--open", action="store_true")
+
+    # ---- k12 ----
     kp = sub.add_parser("k12", help="ChatGPT K-12 teacher verification")
     ks = kp.add_subparsers(dest="k12_cmd")
-    kr = ks.add_parser("run", help="run verification for a SheerID URL")
-    kr.add_argument("url", nargs="?", help="SheerID verification URL")
-    kr.add_argument("--proxy", default=None, help="IP:port or user:pass@ip:port")
-    kr.add_argument("--gateway", action="store_true", help="use 127.0.0.1:8888")
-    kr.add_argument("--debug", action="store_true")
-    kr.add_argument("--email", default=None)
-    kr.add_argument("--no-temp-email", action="store_true")
+    kv = ks.add_parser("verify", help="verify a SheerID URL")
+    kv.add_argument("url", nargs="?")
+    kv.add_argument("--proxy", default=None, help="IP:port or user:pass@ip:port")
+    kv.add_argument("--gateway", action="store_true", help="use 127.0.0.1:8888")
+    kv.add_argument("--debug", action="store_true")
+    kv.add_argument("--email", default=None)
+    kv.add_argument("--no-temp-email", action="store_true")
+    kv.add_argument("--ask-email", action="store_true")
+    ks.add_parser("auto", help="full auto: ChatGPT signup + OTP + SheerID verify")
+    ks.add_parser("modes", help="show the 12 connection modes")
 
-    yp = sub.add_parser("yowes", help="teacher document generator")
+    # ---- yowes ----
+    yp = sub.add_parser("yowes", help="teacher document generator (13 countries)")
     ys = yp.add_subparsers(dest="yowes_cmd")
     ys.add_parser("list", help="list countries + document types")
     ysch = ys.add_parser("schools", help="list schools for a country")
@@ -390,8 +715,14 @@ def build_parser() -> argparse.ArgumentParser:
     ym.add_argument("--position", default="Teacher")
     ym.add_argument("--dob", default="1985-03-15")
     ym.add_argument("--gender", default="Random", choices=["Random", "Male", "Female"])
-    ym.add_argument("--types", default=None, help="comma list, e.g. teacher_id,employment_letter")
+    ym.add_argument("--types", default=None, help="comma list e.g. teacher_id,employment_letter")
     ym.add_argument("--out", default="")
+    yk = ys.add_parser("k12", help="US teacher docs via the K-12 bridge")
+    yk.add_argument("--first", default=None)
+    yk.add_argument("--last", default=None)
+    yk.add_argument("--school", default=None)
+    yk.add_argument("--out", default=None)
+    ys.add_parser("gui", help="launch the legacy desktop GUI")
     ys.add_parser("mcp", help="run the yowes MCP server (stdio)")
 
     return p
@@ -400,25 +731,26 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     p = build_parser()
     args = p.parse_args()
+    g = args.group
 
-    if args.group == "doctor":
+    if g == "doctor":
         return cmd_doctor(args)
-    if args.group == "proxy":
+    if g == "proxy":
         if not getattr(args, "proxy_cmd", None):
             p.parse_args(["proxy", "--help"])
             return 1
         return cmd_proxy(args)
-    if args.group == "stack":
+    if g == "stack":
         if not getattr(args, "stack_cmd", None):
             p.parse_args(["stack", "--help"])
             return 1
         return cmd_stack(args)
-    if args.group == "k12":
+    if g == "k12":
         if not getattr(args, "k12_cmd", None):
             p.parse_args(["k12", "--help"])
             return 1
         return cmd_k12(args)
-    if args.group == "yowes":
+    if g == "yowes":
         if not getattr(args, "yowes_cmd", None):
             p.parse_args(["yowes", "--help"])
             return 1
