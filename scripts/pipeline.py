@@ -83,6 +83,10 @@ def main() -> int:
     ap.add_argument("-p", "--proxy", default=None, help="proxy URL for signup")
     ap.add_argument("--proxy-pool", default=None,
                     help="file with one proxy per line; rotates per account")
+    ap.add_argument("--gateway", nargs="?", const="http://127.0.0.1:8888", default=None,
+                    metavar="URL",
+                    help="use a local rotating proxy gateway (default http://127.0.0.1:8888, "
+                         "e.g. PetaniProxy). Verifies the gateway is up before running.")
     ap.add_argument("--headless", action="store_true", help="run browser headless")
     ap.add_argument("--fast", action="store_true", help="submit-first Turnstile mode")
     ap.add_argument("--retry", type=int, default=1, help="retries per account (default 1)")
@@ -104,6 +108,23 @@ def main() -> int:
     print("Auto-FreeCF pipeline: signup -> verify -> inject")
     print(f"  python : {py}")
 
+    # ---------- gateway health check ----------
+    if args.gateway:
+        import urllib.request
+        import urllib.error
+        print(f"  gateway: {args.gateway} (checking…)")
+        try:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": args.gateway, "https": args.gateway})
+            )
+            with opener.open("https://api.ipify.org", timeout=20) as r:
+                ip = r.read().decode().strip()
+            print(f"  gateway OK — exit IP: {ip}")
+        except Exception as e:  # noqa: BLE001
+            print(f"✗ gateway not reachable at {args.gateway}: {e}")
+            print("  Start it first (e.g. PetaniProxy: `python main.py --serve 8888`).")
+            return 1
+
     # ---------- 1. SIGNUP ----------
     if args.skip_signup:
         banner("1/3 SIGNUP — skipped (--skip-signup)")
@@ -115,8 +136,10 @@ def main() -> int:
                "--output", args.output,
                "--retry", str(args.retry),
                "--workers", str(args.workers)]
-        if args.proxy:
-            cmd += ["--proxy", args.proxy]
+        # A local rotating gateway is used as a single proxy URL.
+        effective_proxy = args.gateway or args.proxy
+        if effective_proxy:
+            cmd += ["--proxy", effective_proxy]
         if args.proxy_pool:
             cmd += ["--proxy-pool", args.proxy_pool]
         if args.headless:

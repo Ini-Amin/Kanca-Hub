@@ -69,7 +69,13 @@ def load_proxy_pool(path: str | None) -> list[str]:
     """
     if not path:
         return []
-    p = Path(path)
+    candidates = [Path(path)]
+    # The CLI may pass a path relative to the repo root even though main.py
+    # chdir()s into signup_from_scratch before running.
+    script_dir = Path(__file__).resolve().parent
+    candidates.append(script_dir / path)
+    candidates.append(script_dir.parent / path)
+    p = next((c for c in candidates if c.exists()), candidates[0])
     if not p.exists():
         print(f"  ⚠️  Proxy pool file not found: {path}")
         return []
@@ -195,11 +201,18 @@ async def create_account(
     # Use provided browser or create new one
     own_browser = False
     if browser is None:
+        # nodriver's top-level `proxy=` kwarg is not honoured by the browser
+        # launch path, so pass it as an explicit Chrome arg. This works for a
+        # local rotating gateway (e.g. PetaniProxy on 127.0.0.1:8888) and for
+        # regular http/socks proxies alike.
+        browser_args = []
+        if proxy:
+            browser_args.append(f"--proxy-server={proxy}")
         browser = await uc.start(
             headless=headless,
             lang="en-US",
-            proxy=proxy,
             sandbox=False,  # required when running as root in VPS/Xvfb
+            browser_args=browser_args or None,
         )
         own_browser = True
 
@@ -207,8 +220,22 @@ async def create_account(
         # Phase 0: Navigate to signup
         print("  [0/4] Pre-flight check...")
         page = await browser.get("https://dash.cloudflare.com/sign-up")
-        await asyncio.sleep(8)
-        print("    ✅ Page ready")
+        # Wait for the email field to actually mount (slow residential proxies
+        # can need well over the old fixed 8s). Poll up to ~45s.
+        ready = False
+        for _ in range(45):
+            try:
+                el = await page.select('input[name="email"]', timeout=3)
+                if el:
+                    ready = True
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+        if ready:
+            print("    ✅ Page ready")
+        else:
+            print("    ⚠️ Page slow to load; continuing anyway")
             
         # Phase 1: Signup
         print("  [1/4] Signing up...")
