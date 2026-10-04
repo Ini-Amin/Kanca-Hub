@@ -98,3 +98,6 @@ supabase/config.toml
 
 # Real proxy pool (credentials)
 signup_from_scratch/proxies.txt
+
+# Run outputs (contain real tokens)
+*_test.json
