@@ -46,7 +46,7 @@ def _sudo(cmd: list[str]) -> subprocess.CompletedProcess:
 
 
 def generate() -> bool:
-    """Generate a fresh WARP profile via PetaniProxy."""
+    """Generate a fresh WARP profile via PetaniProxy (honours the region profile)."""
     if not (PETANI / "core" / "warp_generator.py").exists():
         print(f"{C_RED}✗{C_RST} PetaniProxy warp_generator not found")
         return False
@@ -60,9 +60,41 @@ def generate() -> bool:
     r = subprocess.run([py, "-c", code], cwd=str(PETANI), capture_output=True, text=True)
     ok = "OK" in r.stdout
     print(f"{C_GREEN+'✓'+C_RST if ok else C_RED+'✗'+C_RST} WARP profile -> {WARP_CONF}")
+
+    # Apply the region profile's endpoint override if set.
+    ep = _region_endpoint()
+    if ok and ep:
+        try:
+            txt = WARP_CONF.read_text()
+            lines = [l for l in txt.splitlines() if not l.startswith("Endpoint =")]
+            lines.append(f"Endpoint = {ep}")
+            WARP_CONF.write_text("\n".join(lines) + "\n")
+            print(f"{C_GREEN}✓{C_RST} endpoint pinned to {ep} (region profile)")
+        except Exception as e:  # noqa: BLE001
+            print(f"{C_YEL}•{C_RST} endpoint override skipped: {e}")
+
     if not ok:
         print(C_DIM + (r.stdout + r.stderr)[-400:] + C_RST)
     return ok
+
+
+def _region_endpoint() -> str | None:
+    """Read the current region profile's WARP endpoint (if any)."""
+    try:
+        cfg = Path.home() / ".config" / "auto-freecf" / "region.json"
+        if not cfg.exists():
+            return None
+        name = json.loads(cfg.read_text()).get("profile", "any")
+        table = {
+            "us": "162.159.192.1:2408", "uk": "162.159.192.1:2408",
+            "sg": "162.159.193.10:2408", "id": "162.159.193.10:2408",
+            "de": "162.159.192.1:2408", "jp": "162.159.193.10:2408",
+            "in": "162.159.193.10:2408", "br": "162.159.192.1:2408",
+            "au": "162.159.193.10:2408", "ca": "162.159.192.1:2408",
+        }
+        return table.get(name)
+    except Exception:
+        return None
 
 
 def is_up() -> bool:

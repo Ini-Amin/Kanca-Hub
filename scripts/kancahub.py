@@ -7,10 +7,14 @@ features (not just pass-throughs):
 
   stack   Auto-FreeCF + PetaniProxy-aware Cloudflare pipeline
             signup (create accounts) · login (existing accounts/Google) ·
-            validate · 9Router TXT export · manage (cf_workerai_manager)
+            validate · sync (prune dead 9Router conns) · manage · web
   proxy   PetaniProxy
             harvest · fast · gateway/serve · daemon · residential (Webshare) ·
             warp · grok (xAI farm) · pipeline · sync9r · export · stats · api
+  warp    Cloudflare WARP tunnel (clean egress IPs for signup)
+  region  signup region profiles (promo/bonus targeting: US/UK/SG/ID/…)
+  thk     TokenHarbor (harbor): create keys + inject/sync with 9Router
+  grok    Grok xAI farm (grok-register: SSO risk gate, 5 mail providers, pool)
   k12     ChatGPT K-12 teacher verification (SheerID)
             auto (full account+verify) · verify (URL) · modes
   yowes   13-country teacher document generator
@@ -20,24 +24,17 @@ features (not just pass-throughs):
 Examples
 --------
   kancahub doctor
-  kancahub proxy harvest --country US --protocol socks5 --target 30
-  kancahub proxy daemon                    # 24/7 auto-healing gateway :8888
-  kancahub proxy residential -n 2          # Webshare hunter -> 20 residential IPs
-  kancahub proxy warp                       # Cloudflare WARP profile
-  kancahub proxy grok -n 3                  # farm Grok accounts
-  kancahub proxy export --to-pool           # harvested proxies -> Auto-FreeCF pool
-  kancahub proxy stats                      # live gateway stats
-  kancahub stack signup -n 3 --proxy http://127.0.0.1:8888
-  kancahub stack login email@x.com:pass
-  kancahub stack login --bulk accounts.txt --google
-  kancahub stack validate --token cfut_x --account-id abc
-  kancahub stack manage --token cfut_x --out-csv out.csv
-  kancahub k12 auto                         # ChatGPT signup + SheerID verify
-  kancahub k12 verify <sheerid-url> --gateway
-  kancahub yowes list
+  kancahub warp up                          # clean Cloudflare egress
+  kancahub region set us                     # target US promos
+  kancahub stack signup -n 3 --warp          # full pipeline on WARP
+  kancahub stack sync --prune                # drop dead 9Router connections
+  kancahub proxy daemon                       # 24/7 auto-healing gateway :8888
+  kancahub proxy residential -n 2             # Webshare hunter
+  kancahub thk batch 3 && kancahub thk inject # TokenHarbor keys -> 9Router
+  kancahub grok run                           # grok-register farm (CLI)
+  kancahub k12 auto                           # ChatGPT signup + SheerID verify
   kancahub yowes make --country us --first John --last Doe \
-      --school "Norton Elementary" --dob 1985-03-15
-  kancahub yowes gui                        # legacy desktop GUI
+      --school "Norton Elementary"
 
 Run `kancahub <group> <cmd> --help` for options.
 """
@@ -59,6 +56,8 @@ PETANI = HOME / "petani-proxy"
 K12_ROOT = PETANI / "Farm-Acc-ChatGPT-K-12-Teachers"
 K12_DIR = K12_ROOT / "PyRuntime_64"
 YOWES = PETANI / "yowes"
+HARBOR = HOME / "harbor"
+GROK_REG = HOME / "grok-register"
 NINE_ROUTER_DB = HOME / ".9router" / "db" / "data.sqlite"
 VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
 
@@ -144,9 +143,15 @@ def cmd_doctor(_a) -> int:
         ("Yowes dir", YOWES.exists()),
         ("  countries/", (YOWES / "countries").exists()),
         ("  main_gui.py", (YOWES / "main_gui.py").exists()),
+        ("harbor (TokenHarbor)", (HARBOR / "tools" / "tokenharbor").exists()),
+        ("grok-register", (GROK_REG / "grok_register_ttk.py").exists()),
+        ("  registration_flow", (GROK_REG / "registration_flow.py").exists()),
+        ("turnstilePatch", (PETANI / "core" / "turnstilePatch").exists()),
         ("9Router DB", NINE_ROUTER_DB.exists()),
         ("Secrets .env", (HOME / ".config" / "auto-freecf" / ".env").exists()),
         ("Proxies pool", (AUTO_FREECF / "signup_from_scratch" / "proxies.txt").exists()),
+        ("WARP config", (PETANI / "output" / "warp" / "warp.conf").exists()),
+        ("Region profile", (HOME / ".config" / "auto-freecf" / "region.json").exists()),
     ]
     for label, ok in files:
         print(f"  {'✅' if ok else '❌'} {label}")
@@ -154,16 +159,27 @@ def cmd_doctor(_a) -> int:
     print(col("bold", "\n  Python modules:"))
     for mod in ("nodriver", "patchright", "httpx", "requests", "curl_cffi",
                 "cloudscraper", "DrissionPage", "speech_recognition", "pydub",
-                "PIL", "mcp", "customtkinter", "rich"):
+                "PIL", "mcp", "customtkinter", "rich", "tomllib", "fastapi"):
         r = subprocess.run([py, "-c", f"import {mod}"], capture_output=True)
         print(f"  {'✅' if r.returncode == 0 else '❌'} {mod}")
 
     print(col("bold", "\n  Binaries:"))
-    for b in ("google-chrome", "ffmpeg", "git", "adb", "wg"):
+    for b in ("google-chrome", "ffmpeg", "git", "adb", "wg", "sing-box"):
         print(f"  {'✅' if shutil.which(b) else '➖'} {b}")
 
     petani_gw = _gateway_alive(GATEWAY_DEFAULT)
     print(f"\n  {'✅' if petani_gw else '➖'} PetaniProxy gateway :8888 {'(running)' if petani_gw else '(not running)'}")
+
+    # WARP
+    try:
+        import subprocess as _sp
+        wm = AUTO_FREECF / "scripts" / "warp_manager.py"
+        if wm.exists():
+            r = _sp.run([py, str(wm), "status"], capture_output=True, text=True)
+            up = "🟢 up" in r.stdout
+            print(f"  {'✅' if up else '➖'} WARP tunnel {'(up)' if up else '(down)'}")
+    except Exception:
+        pass
     return 0
 
 
@@ -351,6 +367,19 @@ def cmd_stack(a) -> int:
                "--token", a.token, "--account-id", a.account_id]
         return run(cmd, cwd=AUTO_FREECF / "signup_from_scratch")
 
+    if sub == "sync":
+        sync = AUTO_FREECF / "scripts" / "sync_9router.py"
+        cmd = [py, str(sync)]
+        if a.db:
+            cmd += ["--db", a.db]
+        if a.prune:
+            cmd += ["--prune"]
+        if a.deactivate:
+            cmd += ["--deactivate"]
+        if a.export_clean:
+            cmd += ["--export-clean", a.export_clean]
+        return run(cmd, cwd=AUTO_FREECF)
+
     if sub == "manage":
         return _stack_manage(a, py)
 
@@ -421,6 +450,10 @@ def _stack_signup(a, py, pip) -> int:
                 cmd += ["--fast"]
             if a.workers:
                 cmd += ["--workers", str(a.workers)]
+            if getattr(a, "delay", None) is not None:
+                cmd += ["--delay", str(a.delay)]
+            if getattr(a, "retry", None) is not None:
+                cmd += ["--retry", str(a.retry)]
             return run(cmd, cwd=AUTO_FREECF)
 
         # Signup-only path: call signup main directly (supports --export-txt).
@@ -479,6 +512,177 @@ def _stack_manage(a, py) -> int:
     if a.no_test:
         cmd += ["--no-test"]
     return run(cmd, cwd=AUTO_FREECF)
+
+
+# ═══════════════════════════════════════════════════════════════ thk
+
+def cmd_thk(a) -> int:
+    py = pick_python()
+    sub = a.thk_cmd
+    harbor = HARBOR / "tools" / "tokenharbor"
+
+    if sub in ("setup", "batch", "create-key", "test-key", "enable-free",
+               "check-proxies", "status"):
+        if not harbor.exists():
+            print(col("red", f"✗ harbor not found at {HARBOR}"))
+            return 1
+        cfg = harbor / "config.toml"
+        if not cfg.exists():
+            (harbor / "config.toml").write_text((harbor / "example.config.toml").read_text())
+            print(col("yellow", f"• created {cfg} from example — set [tempik].base_url + capsolver key"))
+        cmd = [py, "-m", "tools.tokenharbor.cli", sub]
+        # pass through common optionals
+        for flag, val in (("--email", getattr(a, "email", None)),
+                          ("--password", getattr(a, "password", None)),
+                          ("--label", getattr(a, "label", None))):
+            if val:
+                cmd += [flag, val]
+        if sub == "batch" and getattr(a, "count", None):
+            cmd = [py, "-m", "tools.tokenharbor.cli", "batch", str(a.count)]
+        if sub == "test-key" and getattr(a, "key", None):
+            cmd = [py, "-m", "tools.tokenharbor.cli", "test-key", a.key]
+        return run(cmd, cwd=HARBOR)
+
+    if sub == "inject":
+        inj = AUTO_FREECF / "scripts" / "inject_thk_9router.py"
+        cmd = [py, str(inj)]
+        if a.input:
+            cmd += ["-i", a.input]
+        if a.model:
+            cmd += ["--model", a.model]
+        if a.verify:
+            cmd.append("--verify")
+        if a.dry_run:
+            cmd.append("--dry-run")
+        return run(cmd, cwd=AUTO_FREECF)
+
+    if sub == "sync":
+        return _thk_sync(a, py)
+
+    print(col("red", "✗ unknown thk command"))
+    return 1
+
+
+def _thk_sync(a, py) -> int:
+    """Verify + prune TokenHarbor connections in 9Router."""
+    import sqlite3
+    db = Path(a.db or NINE_ROUTER_DB)
+    if not db.exists():
+        print(col("red", f"✗ 9Router DB not found: {db}"))
+        return 1
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    node = None
+    for nid, data in con.execute("SELECT id, data FROM providerNodes"):
+        try:
+            if json.loads(data or "{}").get("prefix") == "THK":
+                node = nid
+        except Exception:
+            pass
+    if not node:
+        print(col("yellow", "No TokenHarbor node in 9Router — run `kancahub thk inject` first."))
+        con.close()
+        return 0
+    rows = list(con.execute("SELECT id, name, data FROM providerConnections WHERE provider=?", (node,)))
+    print(f"Testing {len(rows)} TokenHarbor connection(s)…")
+    dead = []
+    for r in rows:
+        dd = json.loads(r["data"]); key = dd["apiKey"]; model = dd.get("defaultModel") or "deepseek-v4.1-flash:free"
+        url = f"https://tokenharbor.ai/v1/chat/completions"
+        body = json.dumps({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}).encode()
+        req = urllib.request.Request(url, data=body, method="POST",
+                                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                ok = resp.status == 200
+        except Exception as e:
+            ok = False
+        print(f"  {'✅' if ok else '❌'} {r['name']:34s}")
+        if not ok:
+            dead.append(r["id"])
+    if a.prune and dead:
+        for cid in dead:
+            con.execute("DELETE FROM providerConnections WHERE id=?", (cid,))
+        con.commit()
+        print(f"  ✓ removed {len(dead)} dead")
+    con.close()
+    return 0
+
+
+# ═══════════════════════════════════════════════════════════════ grok
+
+def cmd_grok(a) -> int:
+    """Grok farm — grok-register backend (preferred) or PetaniProxy fallback."""
+    py = pick_python()
+    sub = a.grok_cmd or "run"
+
+    if sub == "run":
+        if (GROK_REG / "grok_register_ttk.py").exists() and not a.petani:
+            cmd = [py, "grok_register_ttk.py", "cli"]
+            print(col("cyan", "Using grok-register backend (SSO risk gate, 5 mail providers, pool export)"))
+            return run(cmd, cwd=GROK_REG)
+        # fallback to PetaniProxy
+        petani = PETANI / "main.py"
+        cmd = [py, str(petani), "--grok-farm", str(getattr(a, "accounts", 1))]
+        if getattr(a, "headless", False):
+            cmd += ["--headless"]
+        print(col("yellow", "Using PetaniProxy grok farm fallback"))
+        return run(cmd, cwd=PETANI)
+
+    if sub == "web":
+        if not (GROK_REG / "web").exists():
+            print(col("red", "✗ grok-register web/ not found"))
+            return 1
+        print(col("cyan", "Grok-register WebUI -> http://127.0.0.1:8092"))
+        return run([py, "-m", "web.server"], cwd=GROK_REG)
+
+    if sub == "gui":
+        return run([py, "grok_register_ttk.py"], cwd=GROK_REG)
+
+    if sub == "retry":
+        if not a.pending:
+            print(col("red", "✗ retry needs --pending <file.jsonl>"))
+            return 1
+        cmd = [py, "grok_register_ttk.py", "retry-pending", a.pending]
+        if a.out:
+            cmd.append(a.out)
+        return run(cmd, cwd=GROK_REG)
+
+    if sub == "pool":
+        # show grok2api local token pool if present
+        tk = GROK_REG / "token.json"
+        if tk.exists():
+            data = json.loads(tk.read_text())
+            n = len(data.get("ssoBasic", []))
+            print(col("green", f"grok2api local pool: {n} token(s) -> {tk}"))
+        else:
+            print(col("dim", f"no grok2api pool yet ({tk})"))
+        return 0
+
+    print(col("red", "✗ unknown grok command"))
+    return 1
+
+
+# ═══════════════════════════════════════════════════════════════ region
+
+def cmd_region(a) -> int:
+    py = pick_python()
+    reg = AUTO_FREECF / "scripts" / "regions.py"
+    if not reg.exists():
+        print(col("red", f"✗ regions.py not found"))
+        return 1
+    if a.region_cmd in (None, "current"):
+        return run([py, str(reg), "current"])
+    if a.region_cmd == "list":
+        return run([py, str(reg), "list"])
+    if a.region_cmd == "set":
+        return run([py, str(reg), "set", a.name])
+    if a.region_cmd == "clear":
+        return run([py, str(reg), "clear"])
+    if a.region_cmd == "show":
+        return run([py, str(reg), "show", a.name])
+    print(col("red", "✗ unknown region command"))
+    return 1
 
 
 # ═══════════════════════════════════════════════════════════════ k12
@@ -650,6 +854,52 @@ def build_parser() -> argparse.ArgumentParser:
     ws.add_parser("gen", help="generate a fresh WARP profile")
     ws.add_parser("status", help="show tunnel state + egress IP (default)")
 
+    # ---- region ----
+    rp = sub.add_parser("region", help="signup region profile (promo/bonus targeting)")
+    rs = rp.add_subparsers(dest="region_cmd")
+    rs.add_parser("list", help="list available regions")
+    rs.add_parser("current", help="show the active region (default)")
+    rset = rs.add_parser("set", help="set the active region")
+    rset.add_argument("name")
+    rsh = rs.add_parser("show", help="show one region's details")
+    rsh.add_argument("name")
+    rs.add_parser("clear", help="reset to auto (nearest)")
+
+    # ---- thk (TokenHarbor via harbor) ----
+    tp = sub.add_parser("thk", help="TokenHarbor (harbor): create keys + inject to 9Router")
+    ts = tp.add_subparsers(dest="thk_cmd")
+    ts.add_parser("setup", help="full setup on TokenHarbor (interactive)")
+    tb = ts.add_parser("batch", help="create N TokenHarbor accounts")
+    tb.add_argument("count", nargs="?", type=int, default=1)
+    ts.add_parser("create-key", help="create an API key for an existing account")
+    tk = ts.add_parser("test-key", help="test a thk_ key")
+    tk.add_argument("key")
+    ts.add_parser("enable-free", help="enable free models for an account")
+    ts.add_parser("check-proxies", help="scan configured proxies")
+    ts.add_parser("status", help="account free-tier status")
+    ti = ts.add_parser("inject", help="inject thk_ keys into 9Router")
+    ti.add_argument("-i", "--input", default=None)
+    ti.add_argument("--model", default=None)
+    ti.add_argument("--verify", action="store_true")
+    ti.add_argument("--dry-run", action="store_true")
+    tsy = ts.add_parser("sync", help="verify + prune TokenHarbor connections")
+    tsy.add_argument("--db", default=None)
+    tsy.add_argument("--prune", action="store_true")
+
+    # ---- grok (xAI) ----
+    gp = sub.add_parser("grok", help="Grok xAI account farm (grok-register)")
+    gs = gp.add_subparsers(dest="grok_cmd")
+    gr = gs.add_parser("run", help="run the registration flow")
+    gr.add_argument("-n", "--accounts", type=int, default=1)
+    gr.add_argument("--headless", action="store_true")
+    gr.add_argument("--petani", action="store_true", help="use PetaniProxy farm instead")
+    gs.add_parser("web", help="launch the WebUI (127.0.0.1:8092)")
+    gs.add_parser("gui", help="launch the Tk GUI")
+    grt = gs.add_parser("retry", help="retry a pending file")
+    grt.add_argument("--pending", default=None)
+    grt.add_argument("--out", default=None)
+    gs.add_parser("pool", help="show the grok2api token pool")
+
     # ---- proxy ----
     pp = sub.add_parser("proxy", help="PetaniProxy: harvest/gateway/warp/farm/...")
     ps = pp.add_subparsers(dest="proxy_cmd")
@@ -728,6 +978,8 @@ def build_parser() -> argparse.ArgumentParser:
     sg.add_argument("--no-inject", action="store_true", help="skip 9Router injection")
     sg.add_argument("--export-txt", default=None, help="9Router-friendly txt (signup-only mode)")
     sg.add_argument("--output", default="results.json")
+    sg.add_argument("--delay", type=int, default=None, help="seconds between accounts")
+    sg.add_argument("--retry", type=int, default=None, help="retry attempts per account")
 
     sl = ss.add_parser("login", help="login to EXISTING accounts (email or Google)")
     sl.add_argument("account", nargs="?", help="email:password")
@@ -746,6 +998,12 @@ def build_parser() -> argparse.ArgumentParser:
     sv = ss.add_parser("validate", help="validate a single cfut_ token")
     sv.add_argument("--token", required=True)
     sv.add_argument("--account-id", required=True)
+
+    sy = ss.add_parser("sync", help="verify + prune dead 9Router connections")
+    sy.add_argument("--db", default=None)
+    sy.add_argument("--prune", action="store_true", help="remove dead connections")
+    sy.add_argument("--deactivate", action="store_true", help="with --prune: deactivate instead of delete")
+    sy.add_argument("--export-clean", default=None, help="write working keys to a file")
 
     sm = ss.add_parser("manage", help="verify/list CF tokens (cf_workerai_manager)")
     sm.add_argument("--token", default=None)
@@ -809,6 +1067,14 @@ def main() -> int:
         return cmd_doctor(args)
     if g == "warp":
         return cmd_warp(args)
+    if g == "region":
+        return cmd_region(args)
+    if g == "thk":
+        if not getattr(args, "thk_cmd", None):
+            p.parse_args(["thk", "--help"]); return 1
+        return cmd_thk(args)
+    if g == "grok":
+        return cmd_grok(args)
     if g == "proxy":
         if not getattr(args, "proxy_cmd", None):
             p.parse_args(["proxy", "--help"])
