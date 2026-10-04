@@ -32,7 +32,7 @@ class EmailGenerator:
         self,
         api_url: str,
         domains: list[str],
-        timeout: int = 30,
+        timeout: int = 60,
         fallback_url: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
@@ -99,24 +99,36 @@ class EmailGenerator:
             tier = "primary" if url == self.api_url else (
                 "fallback" if url == self.fallback_url else "public-relay"
             )
-            try:
-                result = self._try_create(url, username, domain)
-                self._active_url = url
-                self._tier_used = tier
-                if tier != "primary":
-                    print(f"  ⚠️  Using {tier} relay: {url}")
-                return result
-            except httpx.ConnectError as e:
-                errors.append(f"{tier} ({url}): connection refused")
+            # Retry transient network errors (fresh WARP tunnels often reset the
+            # first connection): up to 3 tries with backoff.
+            last_exc = None
+            for attempt in range(3):
+                try:
+                    result = self._try_create(url, username, domain)
+                    self._active_url = url
+                    self._tier_used = tier
+                    if tier != "primary":
+                        print(f"  ⚠️  Using {tier} relay: {url}")
+                    return result
+                except httpx.HTTPStatusError as e:
+                    # Endpoint-level error — don't fallback, surface immediately.
+                    raise RuntimeError(
+                        f"Mail API returned HTTP {e.response.status_code} from {tier} ({url})"
+                    ) from e
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+                        httpx.RemoteProtocolError, httpx.ReadError) as e:
+                    last_exc = e
+                    if attempt < 2:
+                        import time as _t
+                        _t.sleep(2 * (attempt + 1))
+                        continue
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_exc = e
+                    break
+            if last_exc is not None:
+                errors.append(f"{tier} ({url}): {type(last_exc).__name__}")
                 continue
-            except httpx.ConnectTimeout:
-                errors.append(f"{tier} ({url}): timeout")
-                continue
-            except httpx.HTTPStatusError as e:
-                # HTTP errors are endpoint-level — don't fallback, surface immediately
-                raise RuntimeError(
-                    f"Mail API returned HTTP {e.response.status_code} from {tier} ({url})"
-                ) from e
 
         # All URLs failed
         raise ConnectionError(
