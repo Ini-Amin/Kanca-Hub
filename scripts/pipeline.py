@@ -81,6 +81,8 @@ def main() -> int:
     ap.add_argument("-n", "--accounts", type=int, default=1, help="accounts to create (default 1)")
     ap.add_argument("-c", "--config", default="config.json", help="signup config file")
     ap.add_argument("-p", "--proxy", default=None, help="proxy URL for signup")
+    ap.add_argument("--proxy-pool", default=None,
+                    help="file with one proxy per line; rotates per account")
     ap.add_argument("--headless", action="store_true", help="run browser headless")
     ap.add_argument("--fast", action="store_true", help="submit-first Turnstile mode")
     ap.add_argument("--retry", type=int, default=1, help="retries per account (default 1)")
@@ -115,6 +117,8 @@ def main() -> int:
                "--workers", str(args.workers)]
         if args.proxy:
             cmd += ["--proxy", args.proxy]
+        if args.proxy_pool:
+            cmd += ["--proxy-pool", args.proxy_pool]
         if args.headless:
             cmd += ["--headless"]
         if args.fast:

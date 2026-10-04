@@ -57,6 +57,38 @@ from src.utils import (
 )
 
 
+def load_proxy_pool(path: str | None) -> list[str]:
+    """Load a proxy list from a file.
+
+    Supports lines of the form:
+        http://user:pass@host:port
+        http://host:port
+        host:port:user:pass
+        user:pass@host:port
+    Blank lines and lines starting with '#' are ignored.
+    """
+    if not path:
+        return []
+    p = Path(path)
+    if not p.exists():
+        print(f"  ⚠️  Proxy pool file not found: {path}")
+        return []
+
+    proxies: list[str] = []
+    for raw in p.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # host:port:user:pass  ->  http://user:pass@host:port
+        if "://" not in line and line.count(":") == 3:
+            host, port, user, pw = line.split(":", 3)
+            line = f"http://{user}:{pw}@{host}:{port}"
+        elif "://" not in line:
+            line = f"http://{line}"
+        proxies.append(line)
+    return proxies
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Automated Cloudflare account creation with Workers AI tokens"
@@ -71,7 +103,12 @@ def parse_args():
     )
     parser.add_argument(
         "--proxy", "-p", type=str, default=None,
-        help="Proxy URL (http://user:pass@host:port)"
+        help="Proxy URL (http://user:pass@host:port). Used for every account unless --proxy-pool is set."
+    )
+    parser.add_argument(
+        "--proxy-pool", type=str, default=None,
+        help="File with one proxy URL per line; each account rotates to the next. "
+             "Accepts 'http://user:pass@host:port' or 'host:port:user:pass' lines."
     )
     parser.add_argument(
         "--output", "-o", type=str, default=None,
@@ -314,6 +351,8 @@ async def main():
     # Load config
     config = load_config(args.config)
     proxy = args.proxy or config.get("proxy")
+    # Proxy pool (rotation): CLI flag, else config "proxy_pool" (file path).
+    proxy_pool = load_proxy_pool(args.proxy_pool or config.get("proxy_pool"))
     output_file = args.output or config.get("output_file", "results.json")
     delay = args.delay if args.delay is not None else config.get("delay_between_accounts", 300)
     num_accounts = args.accounts
@@ -341,7 +380,10 @@ async def main():
     print("☁️  Cloudflare Auto Signup — Workers AI Token Creator")
     print("=" * 60)
     print(f"  Accounts to create: {num_accounts}")
-    print(f"  Proxy: {proxy or 'None (direct)'}")
+    if proxy_pool:
+        print(f"  Proxy: pool of {len(proxy_pool)} (rotating per account)")
+    else:
+        print(f"  Proxy: {proxy or 'None (direct)'}")
     print(f"  Delay between: {delay}s")
     print(f"  Output: {output_file}")
     print(f"  Headless: {args.headless or config.get('headless', False)}")
@@ -358,12 +400,24 @@ async def main():
     for i in range(num_accounts):
         queue.put_nowait(i + 1)
 
+    # Round-robin index for proxy rotation (each account advances it).
+    proxy_idx = 0
+
+    def next_proxy() -> str | None:
+        nonlocal proxy_idx
+        if proxy_pool:
+            p = proxy_pool[proxy_idx % len(proxy_pool)]
+            proxy_idx += 1
+            return p
+        return proxy
+
     dashboard_state = DashboardState(total=num_accounts, workers=workers)
 
     async def run_one(worker_id: int, index: int) -> dict:
         dashboard_state.update(worker_id, "signup", "Starting signup", index=index)
         result: dict = {"status": "error", "error": "not_started"}
         success = False
+        account_proxy = next_proxy()
         for attempt in range(max_retry):
             if attempt > 0:
                 dashboard_state.update(worker_id, "signup", f"Retry {attempt}/{max_retry - 1}", index=index)
@@ -371,7 +425,7 @@ async def main():
 
             result = await create_account(
                 config=config,
-                proxy=proxy,
+                proxy=account_proxy,
                 headless=args.headless or config.get("headless", False),
                 fast=args.fast,
             )
