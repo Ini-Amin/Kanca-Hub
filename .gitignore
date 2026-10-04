@@ -95,3 +95,6 @@ supabase/config.toml.local
 
 # Real supabase config (project ref)
 supabase/config.toml
+
+# Real proxy pool (credentials)
+signup_from_scratch/proxies.txt
