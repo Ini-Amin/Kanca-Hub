@@ -716,13 +716,41 @@ def cmd_k12(a) -> int:
         return run(cmd, cwd=K12_DIR)
 
     if sub == "auto":
-        flow = K12_DIR / "auto_k12_flow.py"
+        flow = AUTO_FREECF / "scripts" / "auto_k12_flow_kancahub.py"
         if not flow.exists():
-            print(col("red", f"✗ {flow} not found"))
+            flow = K12_DIR / "auto_k12_flow.py"
+        if not flow.exists():
+            print(col("red", "✗ auto_k12_flow not found"))
             return 1
-        print(col("cyan", "Full auto flow: ChatGPT signup -> OTP -> SheerID verify"))
-        print(col("dim", f"  credentials appended to {K12_DIR / 'created_k12_accounts.txt'}"))
+        print(col("cyan", "Full auto flow: ChatGPT signup -> OTP -> session capture -> SheerID verify"))
+        print(col("dim", "  sessions -> k12_sessions.json  |  creds -> created_k12_accounts.txt"))
+        # run from the K-12 dir so `from script import K12Verifier` resolves
         return run([py, str(flow)], cwd=K12_DIR)
+
+    if sub == "inject":
+        inj = AUTO_FREECF / "scripts" / "chatgpt_9router.py"
+        if not inj.exists():
+            print(col("red", "✗ chatgpt_9router.py not found"))
+            return 1
+        sess = a.session
+        if not sess:
+            for cand in (K12_DIR / "k12_sessions.json", Path.cwd() / "k12_sessions.json"):
+                if cand.exists():
+                    sess = str(cand); break
+        if not sess:
+            print(col("red", "✗ no session file. Run `kancahub k12 auto` first, or pass --session <file>"))
+            return 1
+        cmd = [py, str(inj), "inject", "--session", sess]
+        if a.dry_run:
+            cmd.append("--dry-run")
+        return run(cmd, cwd=AUTO_FREECF)
+
+    if sub == "sync":
+        inj = AUTO_FREECF / "scripts" / "chatgpt_9router.py"
+        cmd = [py, str(inj), "sync"]
+        if a.prune:
+            cmd.append("--prune")
+        return run(cmd, cwd=AUTO_FREECF)
 
     if sub == "modes":
         print(col("bold", "\nK-12 connection modes (maps to run_cmd.bat [1]-[12]):"))
@@ -1028,7 +1056,12 @@ def build_parser() -> argparse.ArgumentParser:
     kv.add_argument("--email", default=None)
     kv.add_argument("--no-temp-email", action="store_true")
     kv.add_argument("--ask-email", action="store_true")
-    ks.add_parser("auto", help="full auto: ChatGPT signup + OTP + SheerID verify")
+    ks.add_parser("auto", help="full auto: ChatGPT signup + OTP + session capture + SheerID verify")
+    ki = ks.add_parser("inject", help="inject captured ChatGPT sessions into 9Router (codex)")
+    ki.add_argument("--session", default=None, help="session json (default: auto-detect k12_sessions.json)")
+    ki.add_argument("--dry-run", action="store_true")
+    ksy = ks.add_parser("sync", help="verify + prune ChatGPT (codex) connections")
+    ksy.add_argument("--prune", action="store_true")
     ks.add_parser("modes", help="show the 12 connection modes")
 
     # ---- yowes ----
