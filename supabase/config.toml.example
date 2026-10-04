@@ -1,0 +1,6 @@
+project_id = "<PROJECT_REF>"
+
+[functions.temp-mail-api]
+# The function does its own auth (x-api-key for temp-mail actions,
+# x-ingest-secret for the Cloudflare Worker), so platform JWT is off.
+verify_jwt = false

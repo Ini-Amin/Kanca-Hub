@@ -1,0 +1,10 @@
+name = "auto-freecf-email-ingest"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Secrets (set with `wrangler secret put`, never committed):
+#   npx wrangler secret put MAIL_INGEST_SECRET
+#
+# Set SUPABASE_URL to your project: https://<project-ref>.supabase.co
+[vars]
+SUPABASE_URL = "https://<PROJECT_REF>.supabase.co"
