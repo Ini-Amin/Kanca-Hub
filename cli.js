@@ -69,30 +69,41 @@ function logErr(msg) { console.log(`${colors.red}✗${colors.reset} ${msg}`); }
 // ============================================================
 // FIND PYTHON - Resolve to FULL PATH (critical for Windows)
 // ============================================================
-function findPython() {
-  const candidates = IS_WIN ? ['python', 'py'] : ['python3', 'python'];
-  
+function findPython({ strict = false } = {}) {
+  // Prefer concrete, stable versioned interpreters before the generic `python3`,
+  // because a rolling distro may point `python3` at a pre-release build (e.g.
+  // 3.15.0rc2) whose stricter source-decoding rules break dependencies such as
+  // nodriver. In strict mode we additionally reject pre-release versions.
+  const candidates = IS_WIN
+    ? ['py', 'python']
+    : ['python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3', 'python'];
+
   for (const cmd of candidates) {
     try {
       // Step 1: Resolve to full path using 'where' (Win) or 'which' (Linux)
       const whereCmd = IS_WIN ? 'where' : 'which';
       const whereResult = spawnSync(whereCmd, [cmd], { encoding: 'utf8' });
-      
+
       if (whereResult.status !== 0 || !whereResult.stdout.trim()) continue;
-      
+
       // Get first match (full path)
       const fullPath = whereResult.stdout.trim().split(/\r?\n/)[0].trim();
       if (!fullPath) continue;
-      
+
       // Step 2: Verify it's Python 3.x
       // IMPORTANT: No shell:true here - pass full path directly
       const versionResult = spawnSync(fullPath, ['--version'], { encoding: 'utf8' });
-      
+
       if (versionResult.status === 0) {
         const version = (versionResult.stdout || versionResult.stderr || '').trim();
-        if (version.match(/Python 3\./)) {
+        const isPython3 = version.match(/Python 3\./);
+        const isPrerelease = /(a|b|rc)\d+/i.test(version);
+        if (isPython3 && (!strict || !isPrerelease)) {
           logInfo(`Found ${version} at ${fullPath}`);
           return fullPath;
+        }
+        if (isPython3 && strict && isPrerelease) {
+          logInfo(`Skipping pre-release ${version} (use a stable Python 3.10+)`);
         }
       }
     } catch {}
@@ -185,7 +196,15 @@ function removeDir(dirPath) {
 // SETUP
 // ============================================================
 async function setup() {
-  const pythonExe = findPython();
+  // Prefer a stable Python; only fall back to pre-release builds as a last resort.
+  let pythonExe = findPython({ strict: true });
+  if (!pythonExe) {
+    pythonExe = findPython();
+    if (pythonExe) {
+      logErr('Only a pre-release Python was found — dependencies may fail to install.');
+      logInfo('Install a stable Python 3.10–3.13 if setup errors occur.');
+    }
+  }
   if (!pythonExe) {
     logErr('Python 3 not found! Please install Python 3.10+');
     logInfo('Download from: https://www.python.org/downloads/');

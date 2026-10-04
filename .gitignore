@@ -70,3 +70,28 @@ proxy.json
 proxies.json
 proxy_list.txt
 accounts.txt
+
+# Cloudflare Workers
+.wrangler/
+cloudflare/**/node_modules/
+
+# Deno
+deno.lock
+
+# mail-adapter local config (contains API key)
+mail-adapter/config.json
+mail-adapter/token_map.json
+
+# Supabase CLI local state
+supabase/.temp/
+
+# Pipeline run outputs
+pipeline_run.json
+signup_from_scratch/pipeline_run.json
+results*.json
+
+# Local Supabase config (project ref)
+supabase/config.toml.local
+
+# Real supabase config (project ref)
+supabase/config.toml

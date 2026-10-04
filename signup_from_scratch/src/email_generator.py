@@ -34,14 +34,20 @@ class EmailGenerator:
         domains: list[str],
         timeout: int = 30,
         fallback_url: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
         self.api_url = api_url
         self.fallback_url = fallback_url
         self.domains = domains
         self.timeout = timeout
+        self.api_key = api_key
         self._client: Optional[httpx.Client] = None
         self._active_url: str = api_url
         self._tier_used: str = "primary"
+
+    def _headers(self) -> dict:
+        """Auth headers for a private backend (e.g. Supabase temp-mail-api)."""
+        return {"x-api-key": self.api_key} if self.api_key else {}
 
     @property
     def client(self) -> httpx.Client:
@@ -55,7 +61,7 @@ class EmailGenerator:
         if username:
             payload["name"] = username
 
-        r = self.client.post(url, json=payload)
+        r = self.client.post(url, json=payload, headers=self._headers())
         r.raise_for_status()
         data = r.json()
 
@@ -122,10 +128,11 @@ class EmailGenerator:
     def check_inbox(self, jwt: str, limit: int = 20, offset: int = 0) -> list:
         """Check inbox for received emails."""
         base = self._active_url.replace("/new_address", "")
+        headers = {"Authorization": f"Bearer {jwt}", **self._headers()}
         r = self.client.get(
             f"{base}/parsed_mails",
             params={"limit": limit, "offset": offset},
-            headers={"Authorization": f"Bearer {jwt}"},
+            headers=headers,
         )
         r.raise_for_status()
         data = r.json()
@@ -136,9 +143,10 @@ class EmailGenerator:
     def get_mail(self, jwt: str, mail_id: str | int) -> dict:
         """Get a parsed email by id."""
         base = self._active_url.replace("/new_address", "")
+        headers = {"Authorization": f"Bearer {jwt}", **self._headers()}
         r = self.client.get(
             f"{base}/parsed_mail/{mail_id}",
-            headers={"Authorization": f"Bearer {jwt}"},
+            headers=headers,
         )
         r.raise_for_status()
         return r.json()

@@ -1,3 +1,11 @@
-signup_from_scratch/config.json
-signup_from_scratch/results.json
+# Config contains the mail API key — never commit.
+config.json
+config.local.json
+
+# Run outputs
+results.json
+results*.json
+
+# Python
 __pycache__/
+*.pyc

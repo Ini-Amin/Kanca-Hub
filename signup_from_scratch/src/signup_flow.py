@@ -41,6 +41,7 @@ class SignupResult:
         account_id: str = "",
         error: str = "",
         page_url: str = "",
+        account_created: bool = False,
     ):
         self.success = success
         self.email = email
@@ -48,6 +49,10 @@ class SignupResult:
         self.account_id = account_id
         self.error = error
         self.page_url = page_url
+        # True when Cloudflare accepted the signup (account exists) even if the
+        # 32-char account id could not be resolved yet (e.g. redirect to
+        # /?to=%2F%3Aaccount%2Fhome — user still needs to verify email first).
+        self.account_created = account_created
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +61,7 @@ class SignupResult:
             "password": self.password,
             "account_id": self.account_id,
             "error": self.error,
+            "account_created": self.account_created,
         }
 
 
@@ -117,7 +123,7 @@ async def _submit_form(page: uc.Tab) -> Optional[str]:
 
 
 async def _wait_for_redirect(page: uc.Tab, max_wait: int = 30) -> str:
-    """Wait for signup redirect. Returns final URL."""
+    """Wait for signup to leave the sign-up page. Returns final URL."""
     for _ in range(max_wait):
         await asyncio.sleep(1)
         url = str(_unwrap(await page.evaluate("location.href")))
@@ -126,25 +132,84 @@ async def _wait_for_redirect(page: uc.Tab, max_wait: int = 30) -> str:
     return str(_unwrap(await page.evaluate("location.href")))
 
 
-async def _extract_account_id(page: uc.Tab, url: str) -> Optional[str]:
-    """Extract Account ID from URL or DOM."""
-    # Try URL first
-    match = re.search(r"/([a-f0-9]{32})", url)
+# Redirect targets that mean "signup accepted, account exists".
+_ACCOUNT_CREATED_MARKERS = (
+    "account/home",      # /?to=%2F%3Aaccount%2Fhome
+    "%3aaccount%2fhome", # encoded form
+    "/account/",         # any account-scoped page
+    "/email-verification",
+    "verify-email",
+    "unintended-registration",
+)
+
+
+def _looks_account_created(url: str) -> bool:
+    """True if the post-submit URL implies Cloudflare created the account."""
+    low = url.lower()
+    if "/sign-up" in low:
+        return False
+    return any(m in low for m in _ACCOUNT_CREATED_MARKERS)
+
+
+async def _resolve_account_id(page: uc.Tab, url: str) -> str:
+    """Try hard to resolve the 32-char account id from URL, DOM, then API."""
+    # 1) URL
+    match = re.search(r"/([a-f0-9]{32})(?:/|$|\?)", url)
     if match:
         return match.group(1)
 
-    # Try DOM
-    account_id = _unwrap(await page.evaluate("""
-        (() => {
-            const el = document.querySelector('[data-account-id], [data-testid="account-id"]');
-            if (el) return el.textContent || el.getAttribute('data-account-id');
-            return null;
-        })()
-    """))
-    if account_id:
-        return account_id.strip()
+    # 2) API: list accounts for the authenticated session.
+    try:
+        raw = await page.evaluate(
+            """
+            (async () => {
+                try {
+                    const r = await fetch('/api/v4/accounts?per_page=50', {
+                        credentials: 'include',
+                        headers: {'Accept': 'application/json'}
+                    });
+                    const text = await r.text();
+                    return JSON.stringify({status: r.status, body: text});
+                } catch (e) {
+                    return JSON.stringify({status: 0, body: String(e)});
+                }
+            })()
+            """,
+            await_promise=True,
+            return_by_value=True,
+        )
+        data = _unwrap(raw)
+        if isinstance(data, str):
+            import json as _json
+            data = _json.loads(data)
+        if isinstance(data, dict) and data.get("status") == 200:
+            import json as _json
+            body = _json.loads(data.get("body") or "{}")
+            accounts = body.get("result") or []
+            if accounts and accounts[0].get("id"):
+                return accounts[0]["id"]
+    except Exception:
+        pass
 
-    return None
+    # 3) DOM
+    try:
+        account_id = _unwrap(await page.evaluate("""
+            (() => {
+                const el = document.querySelector('[data-account-id], [data-testid="account-id"]');
+                return el ? (el.textContent || el.getAttribute('data-account-id')) : null;
+            })()
+        """))
+        if account_id:
+            return str(account_id).strip()
+    except Exception:
+        pass
+
+    return ""
+
+
+async def _extract_account_id(page: uc.Tab, url: str) -> Optional[str]:
+    """Backward-compatible wrapper around _resolve_account_id."""
+    return await _resolve_account_id(page, url) or None
 
 
 async def _check_errors(page: uc.Tab) -> str:
@@ -212,7 +277,7 @@ async def signup(
     await asyncio.sleep(5)
 
     # ─── Check Result ───
-    account_id = await _extract_account_id(page, url)
+    account_id = await _resolve_account_id(page, url)
 
     if account_id:
         return SignupResult(
@@ -221,6 +286,20 @@ async def signup(
             password=password,
             account_id=account_id,
             page_url=url,
+            account_created=True,
+        )
+
+    # Account was accepted by Cloudflare (redirected away from /sign-up) but the
+    # 32-char id isn't resolvable until the email is verified. Treat as created.
+    if _looks_account_created(url):
+        print(f"    ✅ Account created (email verification pending); url={url[:70]}")
+        return SignupResult(
+            True,
+            email=email,
+            password=password,
+            account_id="",
+            page_url=url,
+            account_created=True,
         )
 
     # ─── Still on sign-up page? Retry with proper solve ───
@@ -245,14 +324,15 @@ async def signup(
         url = await _wait_for_redirect(page, max_wait)
         await asyncio.sleep(5)
 
-        account_id = await _extract_account_id(page, url)
-        if account_id:
+        account_id = await _resolve_account_id(page, url)
+        if account_id or _looks_account_created(url):
             return SignupResult(
                 True,
                 email=email,
                 password=password,
                 account_id=account_id,
                 page_url=url,
+                account_created=True,
             )
 
     # ─── Final failure ───

@@ -42,7 +42,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.email_generator import EmailGenerator
 from src.signup_flow import signup
 from src.email_verifier import verify_cloudflare_email
-from src.token_creator import create_token, create_token_api
+from src.token_creator import create_token, create_token_api, get_account_id
 from src.token_validator import validate_token
 from src.live_dashboard import DashboardState, LiveDashboard
 from src.utils import (
@@ -139,7 +139,12 @@ async def create_account(
     mail_api = config.get("mail_api", "https://convergence-lobby-portal-planes.trycloudflare.com/new_address")
 
     # Create temp email
-    email_gen = EmailGenerator(mail_api, config["mail_domains"], fallback_url=config.get("mail_fallback"))
+    email_gen = EmailGenerator(
+        mail_api,
+        config["mail_domains"],
+        fallback_url=config.get("mail_fallback"),
+        api_key=config.get("mail_api_key"),
+    )
     try:
         mail = email_gen.create(username=username, domain=domain)
         email = mail["email"]
@@ -181,7 +186,10 @@ async def create_account(
             }
 
         account_id = signup_result.account_id
-        print(f"  🆔 Account ID: {account_id}")
+        if account_id:
+            print(f"  🆔 Account ID: {account_id}")
+        else:
+            print(f"  🆔 Account created (id resolves after email verification)")
 
         # Verify Cloudflare email from temp inbox before token creation.
         # Cloudflare rejects final token creation for fresh direct-signup accounts otherwise.
@@ -192,9 +200,16 @@ async def create_account(
             jwt=mail.get("jwt", ""),
             timeout=config.get("email_verify_timeout", 120),
             poll_interval=config.get("email_verify_poll_interval", 5),
+            api_key=config.get("mail_api_key"),
         )
         if verify_result.success:
             print("  ✅ Email verified")
+            # Now that the session is authenticated, resolve the account id if we
+            # didn't have it from the signup redirect.
+            if not account_id:
+                account_id = await get_account_id(page, "") or ""
+                if account_id:
+                    print(f"  🆔 Account ID resolved: {account_id}")
         else:
             print(f"  ⚠️ Email verification failed: {verify_result.error}")
 
