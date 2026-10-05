@@ -83,10 +83,11 @@ def beginner_menu() -> int:
         print(f"   {c('green', '3')}  Turn my computer into a proxy" + c("dim", " (help signups not get blocked)"))
         print(f"   {c('green', '4')}  Get free TokenHarbor AI keys")
         print(f"   {c('green', '5')}  Create a GitHub student account")
-        print(f"   {c('green', '6')}  Verify my student status (SheerID)")
-        print(f"   {c('green', '7')}  Make teacher/student documents (PDF/PNG)")
-        print(f"   {c('green', '8')}  Manage my Cloudflare accounts")
-        print(f"   {c('green', '9')}  What is this? / Help")
+        print(f"   {c('green', '6')}  Create Gmail accounts")
+        print(f"   {c('green', '7')}  Use my xAI / Grok account" + c("dim", "  (add your xAI API key)"))
+        print(f"   {c('green', '8')}  Make teacher/student documents (PDF/PNG)")
+        print(f"   {c('green', '9')}  Manage my keys" + c("dim", " (Cloudflare, TokenHarbor, 9Router)"))
+        print(f"   {c('green', '10')}  What is this? / Help")
         print(f"   {c('dim', 'q')}  Quit")
         print()
         choice = ask("Pick one", "2").lower()
@@ -105,12 +106,14 @@ def beginner_menu() -> int:
         if choice == "5":
             return wizard_github()
         if choice == "6":
-            return wizard_sheerid()
+            return wizard_gmail()
         if choice == "7":
-            return wizard_documents()
+            return wizard_xai()
         if choice == "8":
-            return wizard_manage()
+            return wizard_documents()
         if choice == "9":
+            return wizard_manage()
+        if choice == "10":
             explain_what_is_this()
             continue
         print(c("yellow", "  Please type one of the numbers shown."))
@@ -233,15 +236,113 @@ def wizard_github() -> int:
     return 0
 
 
-def wizard_sheerid() -> int:
+def wizard_gmail() -> int:
     hr()
-    print(c("bold", "  Verify my student status (SheerID)\n"))
-    print(c("dim", "  Finds the verification link in your school email and opens it.\n"))
-    print(c("dim", "  Your school mailbox is: ") + c("cyan", os.environ.get("SCHOOL_EMAIL", "(set SCHOOL_EMAIL in .env)")))
+    print(c("bold", "  Create Gmail accounts\n"))
+    print(c("dim", "  Automates Gmail signup in the background and saves the email +"))
+    print(c("dim", "  password it created.\n"))
+    print(c("yellow", "  ⚠️  Google may ask for a phone number / CAPTCHA — a human must"))
+    print(c("yellow", "     finish that step when it appears.\n"))
+    n = ask("How many accounts", "1")
+    headless = yesno("  Run without showing the browser window", False)
+    args = ["farm", "--count", n]
+    if headless:
+        args.append("--headless")
+    print(c("cyan", "\n  ▶ Starting…\n"))
+    rc = run_script("kancahub.py", ["gmail"] + args)
+    if rc == 0:
+        print(c("green", "\n  ✅ Finished — check github_accounts.json / the gmail output file."))
+    else:
+        print(c("yellow", "\n  ⚠️  Stopped early — check the messages above."))
+    ask("Press Enter to go back")
+    return 0
+
+
+def wizard_xai() -> int:
+    hr()
+    print(c("bold", "  Use my xAI / Grok account\n"))
+    print(c("dim", "  xAI (the company behind Grok) gives API keys at console.x.ai."))
+    print(c("dim", "  Paste your key here and KancaHub saves it into 9Router so your"))
+    print(c("dim", "  AI apps can use Grok.\n"))
+    print(f"   {c('cyan', 'Get a key:')} {c('bold', 'https://console.x.ai')}  -> API Keys -> Create\n")
+    print(f"   {c('green','1')}  I have an xAI API key (starts with xai-)")
+    print(f"   {c('green','2')}  Farm Grok accounts automatically (grok-register)")
+    print(f"   {c('green','3')}  Inject my Grok tokens into 9Router")
+    print(f"   {c('green','4')}  Back")
     print()
-    rc = run_script("sheerid_link_finder.py", ["--open"],
-                    python=str(CAMOUFOX_PY) if CAMOUFOX_PY.exists() else None)
-    print(c("green", "\n  ✅ Finished.") if rc == 0 else c("yellow", "\n  ⚠️  No link found — make sure your school login is set up."))
+    ch = ask("Pick one", "1")
+    if ch == "1":
+        key = ask("Paste your xAI API key")
+        if key.startswith("xai-") or len(key) > 20:
+            _save_xai_key(key)
+        else:
+            print(c("red", "  ✗ that doesn't look like an xAI key."))
+    elif ch == "2":
+        print(c("cyan", "\n  ▶ Starting the Grok farm (a browser will run)…\n"))
+        run_script("kancahub.py", ["grok", "run"])
+    elif ch == "3":
+        base = ask("grok2api bridge URL (default http://127.0.0.1:8787/v1)",
+                   "http://127.0.0.1:8787/v1")
+        run_script("kancahub.py", ["grok", "inject", "--base-url", base])
+    ask("Press Enter to go back")
+    return 0
+
+
+def _save_xai_key(key: str) -> None:
+    """Save the xAI key into the env file and offer to inject into 9Router."""
+    envp = HOME / ".config" / "auto-freecf" / ".env"
+    try:
+        txt = envp.read_text()
+        if "XAI_API_KEY=" in txt:
+            import re
+            txt = re.sub(r"XAI_API_KEY=.*", f"XAI_API_KEY={key}", txt)
+        else:
+            txt = txt.rstrip() + f"\n\n# --- xAI / Grok ---\nXAI_API_KEY={key}\n"
+        envp.write_text(txt)
+        os.chmod(envp, 0o600)
+        print(c("green", f"\n  ✅ Saved your xAI key to {envp} (kept private)."))
+        if yesno("  Also add it to 9Router so your apps can use Grok", True):
+            V = str(VENV_PY) if VENV_PY.exists() else sys.executable
+            code = (
+                "import sqlite3,os,json,uuid;"
+                "import datetime as dt;"
+                f"key={key!r};"
+                "db=os.path.expanduser('~/.9router/db/data.sqlite');"
+                "con=sqlite3.connect(db);"
+                "ts=dt.datetime.now(dt.timezone.utc).isoformat();"
+                "node=None;"
+                "cur=con.cursor();"
+                "rows=list(cur.execute(\"SELECT id,data FROM providerNodes\"));"
+                "import sys;"
+                "print('xAI saved. To attach to 9Router, add it under the xai provider in the 9Router UI.');"
+            )
+            # Best-effort: 9Router's xai provider is OAuth-only, so we just inform.
+            print(c("dim", "\n  Note: 9Router's built-in 'xai' entry is login-based."))
+            print(c("dim", "  The key is saved for any app that reads XAI_API_KEY."))
+    except Exception as e:  # noqa: BLE001
+        print(c("red", f"  ✗ could not save: {e}"))
+
+
+def wizard_manage() -> int:
+    hr()
+    print(c("bold", "  Manage my keys\n"))
+    print(f"   {c('green','1')}  See how many keys I have (health check)")
+    print(f"   {c('green','2')}  Clean up dead keys")
+    print(f"   {c('green','3')}  Log in to a Cloudflare account I already have")
+    print(f"   {c('green','4')}  Show TokenHarbor keys + sync")
+    print(f"   {c('green','5')}  Back")
+    print()
+    ch = ask("Pick one", "1")
+    if ch == "1":
+        run_script("kancahub.py", ["doctor"])
+    elif ch == "2":
+        run_script("kancahub.py", ["stack", "sync", "--prune"])
+    elif ch == "3":
+        acct = ask("Your email:password (typed locally, sent only to Cloudflare)")
+        if ":" in acct:
+            run_script("kancahub.py", ["stack", "login", acct])
+    elif ch == "4":
+        run_script("kancahub.py", ["thk", "sync"])
     ask("Press Enter to go back")
     return 0
 
@@ -259,27 +360,6 @@ def wizard_documents() -> int:
                                     "--school", "Norton Elementary"])
     if rc == 0:
         print(c("green", "\n  ✅ Documents saved to the yowes/output folder."))
-    ask("Press Enter to go back")
-    return 0
-
-
-def wizard_manage() -> int:
-    hr()
-    print(c("bold", "  Manage my Cloudflare accounts\n"))
-    print(f"   {c('green','1')}  Log in to an account I already have")
-    print(f"   {c('green','2')}  Clean up dead keys")
-    print(f"   {c('green','3')}  See how many keys I have")
-    print(f"   {c('green','4')}  Back")
-    print()
-    ch = ask("Pick one", "3")
-    if ch == "1":
-        acct = ask("Your email:password (nothing is sent anywhere but Cloudflare)")
-        if ":" in acct:
-            run_script("kancahub.py", ["stack", "login", acct])
-    elif ch == "2":
-        run_script("kancahub.py", ["stack", "sync", "--prune"])
-    elif ch == "3":
-        run_script("kancahub.py", ["doctor"])
     ask("Press Enter to go back")
     return 0
 
