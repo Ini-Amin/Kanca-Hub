@@ -125,6 +125,18 @@ except ImportError:
         async def apply_gateway_session(page_or_ctx, s=None):  # type: ignore
             return False
 
+# Proxy & clean egress helpers (defensive import)
+try:
+    from proxy_lib import check_gateway_egress, ensure_clean_egress, get_my_ip, stop_gateway
+except ImportError:
+    try:
+        from scripts.proxy_lib import check_gateway_egress, ensure_clean_egress, get_my_ip, stop_gateway
+    except Exception:
+        def check_gateway_egress(*a, **kw): return None
+        def ensure_clean_egress(*a, **kw): return None, None
+        def get_my_ip(*a, **kw): return None
+        def stop_gateway(*a, **kw): pass
+
 
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
@@ -961,7 +973,7 @@ def build_email(index: int) -> str:
 
 
 async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
-              dry_run: bool) -> int:
+              dry_run: bool, no_proxy: bool = False) -> int:
     if AsyncCamoufox is None:
         print("=" * 60, flush=True)
         print("  ✗ Camoufox is not importable in this interpreter.", flush=True)
@@ -975,7 +987,32 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
     email = build_email(index)
     username = gen_username()
     password = gen_password()
-    chosen_proxy, proxy_src = pick_proxy(proxy, pool, index)
+
+    gateway_proc = None
+    if proxy:
+        chosen_proxy, proxy_src = proxy, "explicit --proxy"
+    elif pool:
+        chosen_proxy, proxy_src = pick_proxy(None, pool, index)
+    elif no_proxy:
+        chosen_proxy, proxy_src = None, "direct (--no-proxy)"
+    else:
+        print("  [egress] No proxy specified; acquiring clean proxy gateway…", flush=True)
+        prefer_pool = AUTO_FREECF / "signup_from_scratch" / "proxies.txt"
+        gw_url, proc = ensure_clean_egress(prefer_pool=prefer_pool)
+        if gw_url and proc:
+            chosen_proxy = gw_url
+            proxy_src = "auto clean egress gateway"
+            gateway_proc = proc
+        else:
+            print("  [egress] ⚠ Could not acquire clean proxy gateway; continuing direct", flush=True)
+            chosen_proxy = None
+            proxy_src = "direct (clean egress failed)"
+
+    # Resolve active egress IP for visibility
+    if chosen_proxy:
+        egress_ip = check_gateway_egress(chosen_proxy, retries=2, timeout=5.0) or "(gateway exit)"
+    else:
+        egress_ip = get_my_ip(timeout=4.0) or "(direct host)"
 
     print("=" * 60, flush=True)
     print("  GITHUB FARM (Camoufox / Playwright)", flush=True)
@@ -987,6 +1024,7 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
     print(f"  dry-run   : {dry_run}", flush=True)
     print(f"  headless  : {headless}", flush=True)
     print(f"  egress    : {chosen_proxy or '(direct)'}  [{proxy_src}]", flush=True)
+    print(f"  egress IP : {egress_ip}", flush=True)
     print(f"  gateway   : {is_gateway(chosen_proxy)}", flush=True)
     print("-" * 60, flush=True)
 
@@ -1070,6 +1108,10 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
         record["error"] = f"{type(e).__name__}: {e}"
         # do not persist a record for a crashed flow
         return 1
+    finally:
+        if gateway_proc is not None:
+            stop_gateway(gateway_proc)
+            print("  [egress] Stopped clean egress gateway.", flush=True)
 
 
 def main() -> int:
@@ -1084,13 +1126,15 @@ def main() -> int:
                     help="proxy URL; supports the KancaHub gateway http://127.0.0.1:8888 (X-Session-ID)")
     ap.add_argument("--pool", default=None,
                     help="proxy list file; one chosen per --index for rotation")
+    ap.add_argument("--no-proxy", action="store_true",
+                    help="force direct connection (bypass auto clean egress gateway)")
     ap.add_argument("--dry-run", action="store_true",
                     help="walk the signup flow, screenshot, but do not submit/create")
     args = ap.parse_args()
 
     if args.check:
         return run_check()
-    return asyncio.run(run(args.index, args.headless, args.proxy, args.pool, args.dry_run))
+    return asyncio.run(run(args.index, args.headless, args.proxy, args.pool, args.dry_run, no_proxy=args.no_proxy))
 
 
 if __name__ == "__main__":

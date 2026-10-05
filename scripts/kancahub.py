@@ -273,6 +273,19 @@ def cmd_doctor(_a) -> int:
     petani_gw = _gateway_alive(GATEWAY_DEFAULT)
     print(f"\n  {'✅' if petani_gw else '➖'} PetaniProxy gateway :8888 {'(running)' if petani_gw else '(not running)'}")
 
+    # ── proxy backend ─────────────────────────────────────────────
+    native_lib = AUTO_FREECF / "scripts" / "proxy_lib.py"
+    native_gateway = AUTO_FREECF / "scripts" / "proxy_gateway.py"
+    native_ok = native_lib.exists() and native_gateway.exists()
+    petani_ok = (PETANI / "main.py").exists()
+    backend = ("native (scripts/proxy_lib.py)" if native_ok else
+               "petani (petani-proxy/main.py)" if petani_ok else "MISSING")
+    print(col("bold", f"\n  Proxy backend: {backend}"))
+    print(f"  {'✅' if native_ok else '❌'} native proxy_lib.py ({native_lib})")
+    print(f"  {'✅' if native_gateway.exists() else '❌'} native proxy_gateway.py ({native_gateway})")
+    print(f"  {'✅' if petani_ok else '➖'} PetaniProxy legacy fallback ({PETANI})")
+    print(col("dim", "    native commands: kancahub proxy nharvest | nhealth | ngateway"))
+
     # WARP
     try:
         import subprocess as _sp
@@ -417,11 +430,20 @@ def cmd_doctor(_a) -> int:
 
 def cmd_proxy(a) -> int:
     py = pick_python()
+    sub = a.proxy_cmd
+
+    # ── NATIVE backend (scripts/proxy_lib.py): self-contained, no PetaniProxy TUI ──
+    if sub == "nharvest":
+        return _proxy_native_harvest(a, py)
+    if sub == "nhealth":
+        return _proxy_native_health(a, py)
+    if sub == "ngateway":
+        return _proxy_native_gateway(a, py)
+
     petani = PETANI / "main.py"
     if not petani.exists():
         print(col("red", f"✗ PetaniProxy not found at {PETANI}"))
         return 1
-    sub = a.proxy_cmd
 
     def petani_cmd(extra: list[str]) -> int:
         return run([py, str(petani)] + [str(x) for x in extra], cwd=PETANI)
@@ -565,6 +587,47 @@ def _proxy_api(a) -> int:
         print(json.dumps(data, indent=2)[:4000])
         return 0
     return 1
+
+
+# ── native proxy backend (scripts/proxy_lib.py) ──────────────────
+
+def _native_proxy_lib() -> Path:
+    return AUTO_FREECF / "scripts" / "proxy_lib.py"
+
+
+def _proxy_native_harvest(a, py: str) -> int:
+    lib = _native_proxy_lib()
+    if not lib.exists():
+        print(col("red", f"✗ native proxy lib not found at {lib}"))
+        return 1
+    cmd = [py, str(lib), "harvest", "--target", str(a.target),
+           "--protocol", a.protocol, "--timeout", str(a.timeout), "--workers", str(a.workers)]
+    if a.out_txt:
+        cmd += ["--out-txt", a.out_txt]
+    if a.out_json:
+        cmd += ["--out-json", a.out_json]
+    print(col("cyan", f"Native harvest ({a.protocol}) target={a.target}"))
+    return run(cmd, cwd=AUTO_FREECF)
+
+
+def _proxy_native_health(a, py: str) -> int:
+    lib = _native_proxy_lib()
+    if not lib.exists():
+        print(col("red", f"✗ native proxy lib not found at {lib}"))
+        return 1
+    print(col("cyan", f"Native pool health: {a.pool}"))
+    return run([py, str(lib), "health", str(a.pool)], cwd=AUTO_FREECF)
+
+
+def _proxy_native_gateway(a, py: str) -> int:
+    lib = _native_proxy_lib()
+    if not lib.exists():
+        print(col("red", f"✗ native proxy lib not found at {lib}"))
+        return 1
+    cmd = [py, str(lib), "gateway", "--pool", str(a.pool), "--port", str(a.port),
+           "--scheme", a.scheme]
+    print(col("cyan", f"Native rotating gateway on 127.0.0.1:{a.port} (Ctrl-C to stop)"))
+    return run(cmd, cwd=AUTO_FREECF)
 
 
 # ═══════════════════════════════════════════════════════════════ stack
@@ -1513,6 +1576,23 @@ def build_parser() -> argparse.ArgumentParser:
     rg.add_argument("--pool", required=True, help="file with proxy URLs (one per line)")
     rg.add_argument("--port", type=int, default=8899, help="local port to listen on (default 8899)")
     rg.add_argument("--scheme", choices=["auto", "http", "socks5", "socks4", "https"], default="auto")
+
+    # ---- native backend (scripts/proxy_lib.py) ----
+    nh = ps.add_parser("nharvest", help="[native] harvest + validate public proxies")
+    nh.add_argument("--target", type=int, default=20, help="live proxies to collect")
+    nh.add_argument("--protocol", choices=["http", "socks4", "socks5"], default="http")
+    nh.add_argument("--timeout", type=float, default=4.0)
+    nh.add_argument("--workers", type=int, default=100)
+    nh.add_argument("--out-txt", default=None)
+    nh.add_argument("--out-json", default=None)
+
+    nhe = ps.add_parser("nhealth", help="[native] check a proxy pool file")
+    nhe.add_argument("--pool", required=True, help="pool file (one proxy per line)")
+
+    ng = ps.add_parser("ngateway", help="[native] start rotating gateway for a pool")
+    ng.add_argument("--pool", required=True, help="pool file (one proxy per line)")
+    ng.add_argument("--port", type=int, default=8899, help="local port to listen on (default 8899)")
+    ng.add_argument("--scheme", choices=["auto", "http", "socks5", "socks4", "https"], default="auto")
 
     # ---- stack ----
     sp = sub.add_parser("stack", help="Auto-FreeCF: create Cloudflare accounts, generate tokens & manage pool")
