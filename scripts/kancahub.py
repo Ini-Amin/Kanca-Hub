@@ -432,6 +432,18 @@ def cmd_proxy(a) -> int:
     py = pick_python()
     sub = a.proxy_cmd
 
+    # ── proof of masking (real IP vs gateway) ──
+    if sub == "verify":
+        v = AUTO_FREECF / "scripts" / "proxy_verify.py"
+        cmd = [py, str(v)]
+        if getattr(a, "proxy", None):
+            cmd += ["--proxy", a.proxy]
+        if getattr(a, "pool", None):
+            cmd += ["--pool", a.pool]
+        if getattr(a, "gateway_out", None):
+            cmd += ["--gateway", a.gateway_out]
+        return run(cmd, cwd=AUTO_FREECF)
+
     # ── NATIVE backend (scripts/proxy_lib.py): self-contained, no PetaniProxy TUI ──
     if sub == "nharvest":
         return _proxy_native_harvest(a, py)
@@ -1598,6 +1610,12 @@ def build_parser() -> argparse.ArgumentParser:
     ng.add_argument("--pool", required=True, help="pool file (one proxy per line)")
     ng.add_argument("--port", type=int, default=8899, help="local port to listen on (default 8899)")
     ng.add_argument("--scheme", choices=["auto", "http", "socks5", "socks4", "https"], default="auto")
+
+    pv = ps.add_parser("verify", help="prove your IP is masked (real vs gateway)")
+    pv.add_argument("--proxy", default=None, help="proxy URL to test (default http://127.0.0.1:8888)")
+    pv.add_argument("--pool", default=None, help="file of proxies to test")
+    pv.add_argument("--gateway", dest="gateway_out", default=None,
+                    help="gateway to probe (default http://127.0.0.1:8888)")
 
     # ---- stack ----
     sp = sub.add_parser("stack", help="Auto-FreeCF: create Cloudflare accounts, generate tokens & manage pool")
