@@ -379,9 +379,26 @@ def run_gateway(
         print(f"✗ no usable proxies found in {pool_path}", file=sys.stderr)
         return 1
 
-    server = ProxyGatewayServer((host, port), pool=pool, session_ttl=ttl)
+    server = None
+    # Try the requested port; if busy, auto-pick a free one so the wizard never
+    # dies with 'Address already in use' (a stale gateway from a previous run).
+    import socket as _socket
+    for attempt_port in [port] + list(_free_ports(port, 5)):
+        try:
+            server = ProxyGatewayServer((host, attempt_port), pool=pool, session_ttl=ttl)
+            port = attempt_port
+            break
+        except OSError as e:
+            if e.errno == 98:  # Address already in use
+                print(f"  (port {attempt_port} busy — trying another)", file=sys.stderr)
+                continue
+            raise
+    if server is None:
+        print(f"✗ could not bind a port near {port}", file=sys.stderr)
+        return 1
+
     backend_name = "PetaniProxy bridge" if HAVE_PETANI_BRIDGE else "standalone fallback"
-    print(f"✓ PetaniProxy gateway on http://{host}:{port} ({backend_name})", flush=True)
+    print(f"✓ proxy gateway on http://{host}:{port} ({backend_name})", flush=True)
     print(f"  upstreams: {len(pool)} (rotating per connection, 600s sticky via X-Session-ID)", flush=True)
     for p in pool[:3]:
         # mask password for clean display
@@ -402,6 +419,25 @@ def run_gateway(
     finally:
         server.server_close()
     return 0
+
+
+def _free_ports(start: int, count: int):
+    """Yield up to `count` likely-free ports starting near `start`."""
+    import socket as _socket
+    found = 0
+    p = start
+    while found < count:
+        p += 1
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        try:
+            s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", p))
+            s.close()
+            found += 1
+            yield p
+        except OSError:
+            s.close()
+            continue
 
 
 def main():

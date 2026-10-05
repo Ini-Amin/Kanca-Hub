@@ -87,6 +87,8 @@ def main() -> int:
                     metavar="URL",
                     help="use a local rotating proxy gateway (default http://127.0.0.1:8888, "
                          "e.g. PetaniProxy). Verifies the gateway is up before running.")
+    ap.add_argument("--warp", action="store_true",
+                    help="bring Cloudflare WARP up first (clean egress), down after")
     ap.add_argument("--headless", action="store_true", help="run browser headless")
     ap.add_argument("--fast", action="store_true", help="submit-first Turnstile mode")
     ap.add_argument("--retry", type=int, default=1, help="retries per account (default 1)")
@@ -107,6 +109,38 @@ def main() -> int:
 
     print("Auto-FreeCF pipeline: signup -> verify -> inject")
     print(f"  python : {py}")
+
+    # ---------- optional WARP (clean egress) ----------
+    warp_was_down = False
+    if getattr(args, "warp", False):
+        wm = (ROOT / "scripts" / "warp_manager.py")
+        try:
+            st = run_capture([py, str(wm), "status"])
+            if "up" not in (st.get("stdout") or ""):
+                warp_was_down = True
+        except Exception:
+            warp_was_down = True
+        print("  WARP   : bringing tunnel up for a clean egress…")
+        rc_w = run([py, str(wm), "up"], ROOT)
+        if rc_w != 0:
+            print("  WARP   : ⚠️ could not start; continuing without it")
+        else:
+            # ensure teardown happens on ANY exit path (success, error, sys.exit)
+            import atexit
+            if warp_was_down:
+                atexit.register(lambda: run([py, str(wm), "down"], ROOT))
+            # let the route settle + warm the hosts the run needs
+            print("  WARP   : warming route…")
+            time.sleep(8)
+            import urllib.request as _u
+            for h in ("https://api.ipify.org", "https://dash.cloudflare.com/sign-up"):
+                for _ in range(3):
+                    try:
+                        _u.urlopen(_u.Request(h, headers={"User-Agent": "Mozilla/5.0"}), timeout=15).read(1)
+                        break
+                    except Exception:
+                        time.sleep(2)
+            print("  WARP   : ✓ egress ready")
 
     # ---------- gateway health check ----------
     if args.gateway:

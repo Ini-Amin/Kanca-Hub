@@ -564,6 +564,14 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
         # Step 2: birthday + gender
         cur = await wait_state(tab, {"birthday"})
         if cur != "birthday":
+            if cur == "phone":
+                raise FlowError(
+                    "Google is asking for a PHONE NUMBER to verify this account. "
+                    "This is Google's anti-bot gate and CANNOT be automated without "
+                    "renting a phone number (e.g. 5sim/SMS-Activate). "
+                    "Options: (a) add an SMS provider, (b) create the account by hand, "
+                    "or (c) try again later from a cleaner IP with fewer attempts."
+                )
             raise FlowError(f"birthday step not reached (state={cur})")
         if not await set_field(tab, "#month", month, datetime(2000, month, 1).strftime("%B")):
             log("  warning: month field could not be set")
