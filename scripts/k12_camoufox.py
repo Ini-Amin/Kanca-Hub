@@ -89,7 +89,14 @@ MAIL_BASE = f"{SUPABASE_URL}/functions/v1/temp-mail-api"
 DOMAINS = (_ENV.get("K12_DOMAINS") or ",".join(_CFG.get("mail_domains") or ["kancalabs.biz.id"])).split(",")
 
 
-def create_mailbox() -> dict:
+# Pluggable mail provider: K12_MAIL_PROVIDER = 'relay' (default) | 'mailtm'
+MAIL_PROVIDER = (os.environ.get("K12_MAIL_PROVIDER") or _ENV.get("K12_MAIL_PROVIDER") or "relay").strip().lower()
+MAILTM_BASE = "https://api.mail.tm"
+MAILTM_DOMAIN = "maxxspace.com"  # the only mail.tm domain
+_MAILTM_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+
+
+def _relay_create_mailbox() -> dict:
     dom = random.choice([d.strip() for d in DOMAINS if d.strip()])
     r = requests.post(f"{MAIL_BASE}/new_address", json={"domain": dom},
                       headers={"x-api-key": MAIL_KEY}, timeout=60)
@@ -97,12 +104,73 @@ def create_mailbox() -> dict:
     return r.json()  # {address, jwt, domain}
 
 
-def poll_mail(jwt: str) -> list[dict]:
+def _relay_poll_mail(jwt: str) -> list[dict]:
     r = requests.get(f"{MAIL_BASE}/parsed_mails",
                      headers={"Authorization": f"Bearer {jwt}", "x-api-key": MAIL_KEY}, timeout=30)
     r.raise_for_status()
     d = r.json()
     return d if isinstance(d, list) else d.get("results", [])
+
+
+def _mailtm_create_mailbox() -> dict:
+    """Register a random address on mail.tm and fetch its JWT."""
+    local = "k" + "".join(random.choices(string.ascii_lowercase + string.digits, k=11))
+    address = f"{local}@{MAILTM_DOMAIN}"
+    pw = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+    r = requests.post(f"{MAILTM_BASE}/accounts", json={"address": address, "password": pw},
+                      headers=_MAILTM_HEADERS, timeout=30)
+    r.raise_for_status()
+    r = requests.post(f"{MAILTM_BASE}/token", json={"address": address, "password": pw},
+                      headers=_MAILTM_HEADERS, timeout=30)
+    r.raise_for_status()
+    return {"address": address, "token": r.json()["token"], "provider": "mailtm"}
+
+
+def _mailtm_poll_mail(token: str) -> list[dict]:
+    """List messages, fetch each in full, normalise to the keys wait_for_otp expects."""
+    h = {**_MAILTM_HEADERS, "Authorization": f"Bearer {token}"}
+    r = requests.get(f"{MAILTM_BASE}/messages", headers=h, timeout=30)
+    r.raise_for_status()
+    d = r.json()
+    items = d if isinstance(d, list) else (d.get("hydra:member") or d.get("member") or [])
+    out = []
+    for it in items:
+        full = it
+        try:
+            fr = requests.get(f"{MAILTM_BASE}/messages/{it['id']}", headers=h, timeout=30)
+            fr.raise_for_status()
+            full = fr.json()
+        except Exception:  # noqa: BLE001  fall back to the list summary (subject/intro)
+            pass
+        frm = full.get("from") or it.get("from") or {}
+        if isinstance(frm, dict):
+            frm = f"{frm.get('name', '')} <{frm.get('address', '')}>".strip()
+        html = full.get("html") or ""
+        if isinstance(html, list):
+            html = "\n".join(str(x) for x in html)
+        text = full.get("text") or ""
+        out.append({
+            "id": it.get("id"),
+            "subject": full.get("subject") or it.get("subject") or "",
+            "text": text,
+            "body": text,
+            "html": html,
+            "snippet": full.get("intro") or it.get("intro") or "",
+            "from": frm,
+        })
+    return out
+
+
+def create_mailbox() -> dict:
+    if MAIL_PROVIDER == "mailtm":
+        return _mailtm_create_mailbox()
+    return _relay_create_mailbox()
+
+
+def poll_mail(jwt: str) -> list[dict]:
+    if MAIL_PROVIDER == "mailtm":
+        return _mailtm_poll_mail(jwt)
+    return _relay_poll_mail(jwt)
 
 
 def _blob(m: dict) -> str:
@@ -519,12 +587,12 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
     print("  CHATGPT K-12 (Camoufox / Playwright)", flush=True)
     print("=" * 60, flush=True)
 
-    if not SUPABASE_URL or not MAIL_KEY:
+    if MAIL_PROVIDER == "relay" and (not SUPABASE_URL or not MAIL_KEY):
         return {"success": False, "error": "mail_relay_unconfigured"}
 
-    print("[1/6] Creating mailbox on relay…", flush=True)
+    print(f"[1/6] Creating mailbox (provider={MAIL_PROVIDER})…", flush=True)
     mail = create_mailbox()
-    email, jwt = mail["address"], mail["jwt"]
+    email, jwt = mail["address"], (mail.get("jwt") or mail.get("token"))
     print(f"      [+] {email}", flush=True)
     password = gen_password()
     print(f"[2/6] Password: {password}", flush=True)
