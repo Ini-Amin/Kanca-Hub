@@ -42,7 +42,11 @@ import time
 import urllib.request
 from pathlib import Path
 
-WEB = "https://accounts.google.com/signup/v2/createaccount?flowName=GlifWebSignIn&flowEntry=SignUp"
+# hl=en forces Google's UI to English regardless of the phone's locale; without
+# it a non-English phone renders localised buttons ("Berikutnya") that the
+# English-text click helpers below would never match. See click_text_js labels.
+WEB = ("https://accounts.google.com/signup/v2/createaccount"
+       "?flowName=GlifWebSignIn&flowEntry=SignUp&hl=en")
 CDP_PORT = 9222
 PKG_SOCKETS = {
     "com.android.chrome": "chrome_devtools_remote",
@@ -202,14 +206,29 @@ def type_js(selector: str, value: str) -> str:
     }})()"""
 
 
+# Localised fallbacks so a non-English phone still works even if hl=en is
+# ignored. Keyed by the canonical English label used at call sites.
+CLICK_FALLBACKS = {
+    "next": ["next", "berikutnya", "lanjut", "siguiente", "suivant", "weiter"],
+    "skip": ["skip", "lewati", "omitir", "ignorer", "überspringen"],
+    "not now": ["not now", "nanti saja", "ahora no", "pas maintenant", "später"],
+    "i agree": ["i agree", "saya setuju", "acepto", "j'accepte", "ich stimme zu"],
+    "agree": ["agree", "setuju", "aceptar", "accepter", "zustimmen"],
+}
+
+
 def click_text_js(text: str) -> str:
+    labels = CLICK_FALLBACKS.get(text.lower().strip(), [text.lower()])
     return f"""
     (()=>{{
-      const t={json.dumps(text.lower())};
+      const labels={json.dumps([l.lower() for l in labels])};
       const els=[...document.querySelectorAll('button,a,div[role=button],span')];
-      const el=els.find(e=>(e.innerText||'').trim().toLowerCase()===t)
-            || els.find(e=>(e.innerText||'').trim().toLowerCase().includes(t));
-      if(!el) return false; el.click(); return true;
+      const norm=e=>(e.innerText||'').trim().toLowerCase();
+      for(const t of labels){{
+        const el=els.find(e=>norm(e)===t) || els.find(e=>norm(e).includes(t));
+        if(el){{ el.click(); return true; }}
+      }}
+      return false;
     }})()"""
 
 

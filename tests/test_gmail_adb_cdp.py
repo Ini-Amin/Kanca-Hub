@@ -11,7 +11,27 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.gmail_adb import CDP
+from scripts.gmail_adb import CDP, WEB, CLICK_FALLBACKS, click_text_js
+
+
+class TestI18nAndUrl(unittest.TestCase):
+    def test_signup_url_forces_english(self):
+        """The signup URL must carry hl=en so buttons read 'Next', not 'Berikutnya'."""
+        self.assertIn("hl=en", WEB)
+
+    def test_click_text_js_includes_localised_fallbacks(self):
+        """click_text_js('next') must match 'Berikutnya' (Indonesian) too."""
+        js = click_text_js("next")
+        self.assertIn("berikutnya", js.lower())
+        self.assertIn("next", js.lower())
+        # a canonical label with no fallback still works
+        js2 = click_text_js("some custom label")
+        self.assertIn("some custom label", js2.lower())
+
+    def test_fallback_table_covers_core_buttons(self):
+        for label in ("next", "skip", "i agree", "agree"):
+            self.assertIn(label, CLICK_FALLBACKS)
+            self.assertIn(label, CLICK_FALLBACKS[label])
 
 
 class TestCdpSuppressOrigin(unittest.TestCase):
