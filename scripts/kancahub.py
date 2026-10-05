@@ -168,6 +168,7 @@ def cmd_doctor(_a) -> int:
         ("  pipeline.py", (AUTO_FREECF / "scripts" / "pipeline.py").exists()),
         ("  inject_9router.py", (AUTO_FREECF / "scripts" / "inject_9router.py").exists()),
         ("  residential_gateway.py", (AUTO_FREECF / "scripts" / "residential_gateway.py").exists()),
+        ("  proxy_gateway.py", (AUTO_FREECF / "scripts" / "proxy_gateway.py").exists()),
         ("  cf_workerai_manager.py", (AUTO_FREECF / "cf_workerai_manager.py").exists()),
         ("PetaniProxy dir", PETANI.exists()),
         ("  main.py", (PETANI / "main.py").exists()),
@@ -302,6 +303,13 @@ def cmd_proxy(a) -> int:
 
     if sub == "api":
         return _proxy_api(a)
+
+    if sub == "res-gateway":
+        gw = AUTO_FREECF / "scripts" / "proxy_gateway.py"
+        cmd = [py, str(gw), "--pool", a.pool, "--port", str(a.port)]
+        if getattr(a, "scheme", None):
+            cmd += ["--scheme", a.scheme]
+        return run(cmd, cwd=AUTO_FREECF)
 
     print(col("red", "✗ unknown proxy command"))
     return 1
@@ -1039,6 +1047,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap = ps.add_parser("api", help="call a gateway REST endpoint")
     ap.add_argument("path", help="e.g. /api/all or /api/leak-test")
     ap.add_argument("--gateway", default=GATEWAY_DEFAULT)
+
+    rg = ps.add_parser("res-gateway", help="start PetaniProxy bridge gateway for residential/authenticated proxies")
+    rg.add_argument("--pool", required=True, help="file with proxy URLs (one per line)")
+    rg.add_argument("--port", type=int, default=8899, help="local port to listen on (default 8899)")
+    rg.add_argument("--scheme", choices=["auto", "http", "socks5", "socks4", "https"], default="auto")
 
     # ---- stack ----
     sp = sub.add_parser("stack", help="Auto-FreeCF: create Cloudflare accounts, generate tokens & manage pool")

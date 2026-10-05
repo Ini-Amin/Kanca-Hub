@@ -108,3 +108,7 @@ created_k12_accounts.txt
 scripts/created_k12_accounts.txt
 scripts/k12_sessions.json
 .search_keys.env
+
+# GitHub farm outputs (accounts: email/username/password — never commit)
+github_accounts.json
+debug_github/
