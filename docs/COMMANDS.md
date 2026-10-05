@@ -72,11 +72,13 @@ Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy
 
 | Command | What it does | Example |
 |---|---|---|
-| `kancahub proxy harvest` | Harvest + validate public proxies | `kancahub proxy harvest --country US --protocol socks5 --target 30` |
+| `kancahub proxy start` | **[guided]** 1-question proxy launcher (WARP, Gateway, Residential, Daemon) | `kancahub proxy start` |
+| `kancahub proxy verify` | **[live proof]** Prove your IP is masked (real vs gateway egress) | `kancahub proxy verify` |
+| `kancahub proxy harvest` | Harvest + validate public proxies (supports `--country`, `--protocol`, `--loop`, `--sync-9router`) | `kancahub proxy harvest --country US --protocol socks5 --target 30 --loop 15` |
 | `kancahub proxy fast` | Ultra-fast aiohttp harvester | `kancahub proxy fast --target 30 --max-latency 1200` |
 | `kancahub proxy serve` | Rotating gateway + REST API + dashboard on a port | `kancahub proxy serve --port 8888` |
 | `kancahub proxy gateway` | Alias for `serve` | `kancahub proxy gateway --port 8888` |
-| `kancahub proxy daemon` | 24/7 auto-healing gateway on `:8888` | `kancahub proxy daemon` |
+| `kancahub proxy daemon` | 24/7 auto-healing resilient gateway on `:8888` (auto-refill + health-check) | `kancahub proxy daemon` |
 | `kancahub proxy residential` | Webshare residential hunter | `kancahub proxy residential -n 2` |
 | `kancahub proxy warp` | Generate Cloudflare WARP profile | `kancahub proxy warp` |
 | `kancahub proxy grok` | Farm Grok/xAI accounts | `kancahub proxy grok -n 2 --mail-provider duckmail` |
@@ -179,15 +181,52 @@ Config: `~/.config/auto-freecf/.env` (`SCHOOL_EMAIL`, `SCHOOL_MAIL_PASSWORD`, `S
 ## `k12` — ChatGPT K-12 teacher verification
 
 > Out of scope for the beginner guide; listed here for completeness.
+> ⚠️ **The SheerID URL in the K-12 tool's own README is a PLACEHOLDER**
+> (`.../verify/xxxabc123?verificationId=xxx123abc`). A fake `verificationId`
+> returns SheerID `404 noVerification` — that is expected. Get the real URL from
+> **`chatgpt.com/k12-verification`** (click *Verify status* → the SheerID link).
 
 | Command | What it does | Example |
 |---|---|---|
-| `kancahub k12 auto` | Full auto: signup + OTP + session capture + SheerID verify | `kancahub k12 auto` |
-| `kancahub k12 verify` | Verify a SheerID URL | `kancahub k12 verify <sheerid-url> --gateway` |
-| `kancahub k12 inject` | Inject captured sessions into 9Router | `kancahub k12 inject --session k12_sessions.json` |
+| `kancahub k12 run` | Guided prompt: paste URL + pick a connection mode; mirrors the original `run_cmd.bat` menu | `kancahub k12 run` |
+| `kancahub k12 verify <url>` | Run the original `script.py` (K12Verifier): SheerID submission + **auto-pass** | `kancahub k12 verify "$URL" --gateway` |
+| `kancahub k12 auto` | Original `auto_k12_flow.py` (DrissionPage + temp.tf): ChatGPT signup → OTP → session capture → SheerID, auto-pass | `kancahub k12 auto` |
+| `kancahub k12 inject` | Inject captured sessions into 9Router (codex) | `kancahub k12 inject --session k12_sessions.json` |
 | `kancahub k12 sync` | Verify + prune ChatGPT (codex) connections | `kancahub k12 sync --prune` |
-| `kancahub k12 modes` | Show the connection modes (maps to `run_cmd.bat` [1]–[12]; prints the 8 the wrapper exposes) | `kancahub k12 modes` |
+| `kancahub k12 modes` | Show the connection modes (maps to `run_cmd.bat` [1]–[13]) | `kancahub k12 modes` |
 | `kancahub k12 link-finder` | Find SheerID verification links (passthrough to `scripts/sheerid_link_finder.py`) | `kancahub k12 link-finder -- --help` |
+
+`verify` flags map 1:1 to the original tool's connection modes:
+
+| `run_cmd.bat` | Mode | `kancahub k12 verify` flag |
+|---|---|---|
+| [1] | direct + temp email | *(none — default)* |
+| [2] | proxy ip:port | `--proxy IP:PORT` |
+| [3] | proxy auth | `--proxy user:pass@IP:PORT` |
+| [4] | debug, no proxy | `--debug` |
+| [5] | debug + proxy | `--debug --proxy IP:PORT` |
+| [6] | debug + proxy auth | `--debug --proxy user:pass@IP:PORT` |
+| [7] | no temp email | `--no-temp-email` |
+| [8] | no temp + proxy | `--no-temp-email --proxy IP:PORT` |
+| [9] | no temp + proxy auth | `--no-temp-email --proxy user:pass@IP:PORT` |
+| [10] | manual email | `--email you@x.com` |
+| [11] | manual email + proxy | `--email you@x.com --proxy IP:PORT` |
+| [12] | manual email + proxy auth | `--email you@x.com --proxy user:pass@IP:PORT` |
+| [13] | exit | *(n/a)* |
+| — | local gateway (wrapper extra) | `--gateway` (= `--proxy 127.0.0.1:8888`) |
+| — | prompt for email at runtime (script.py) | `--ask-email` |
+
+All 12 connection modes are reachable from `kancahub k12 verify`; the difference
+between e.g. [2]/[8] is just the combination of `--proxy` with
+`--no-temp-email`/`--email`. `--ask-email` is an extra interactive flag that
+`run_cmd.bat` does not expose.
+
+> **Documents at the SheerID `docUpload` step are now yowes-generated.** The K-12
+> verifier no longer uploads the primitive 500×350 badge (~11 KB). It renders a
+> real A4 employment letter / teacher ID / license via `scripts/yowes_docs.py`
+> (employment letter ≈ **135 KB**, teacher ID ≈ 175 KB, license ≈ 147 KB) and
+> falls back to the old badge only if yowes is unavailable. See
+> **[YOWES_SHEERID_BRIDGE.md](YOWES_SHEERID_BRIDGE.md)**.
 
 ## `yowes` — teacher document generator (for your own use)
 
@@ -224,5 +263,8 @@ kancahub thk batch 3 && kancahub thk inject --dry-run
   not. Fix belongs in `scripts/kancahub.py` / `harbor` CLI, not in these docs.
 - `kancahub gmail dry-run --help` shows `--count` / `--proxy` / `--out` with no
   help text (cosmetic).
-- `kancahub k12 modes` claims "12 connection modes" but only prints 8 (modes
-  5, 6, 8, 9, 11, 12 are not exposed by the wrapper). Doc now says 8.
+- `kancahub k12 modes` prints 8 rows (modes [1][2][3][4][7][10] + gateway + auto),
+  not all 13 `run_cmd.bat` entries — but every mode **is** reachable: modes
+  [5][6][8][9][11][12] are just `--debug` / `--no-temp-email` / `--email`
+  combined with `--proxy` (see the parity table above). Cosmetic only; the
+  wrapper logic is unchanged.

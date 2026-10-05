@@ -45,8 +45,8 @@ Run:            kancahub                 (this friendly menu)
                 kancahub beginner        (same thing)
 Check setup:    kancahub doctor
 Free AI keys:   kancahub stack signup -n 1 --warp
-Proxy on :8888: kancahub proxy nharvest --out-txt pool.txt
-                kancahub proxy ngateway --pool pool.txt --port 8888
+Proxy on :8888: kancahub proxy start     (one-click guided: WARP/Gateway/Res/Daemon)
+Verify proxy:   kancahub proxy verify    (live proof: direct vs masked IP)
 Stuck?          option 2 in the menu shows ❌ marks to fix
 
 Everything you make is saved under /home/amen/Auto-FreeCF  (results, keys, docs).
