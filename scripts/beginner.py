@@ -88,6 +88,7 @@ def beginner_menu() -> int:
         print(f"   {c('green', '8')}  Make teacher/student documents (PDF/PNG)")
         print(f"   {c('green', '9')}  Manage my keys" + c("dim", " (Cloudflare, TokenHarbor, 9Router)"))
         print(f"   {c('green', '10')}  What is this? / Help")
+        print(f"   {c('green', '11')}  Autofarm any website" + c("dim", " (paste URL -> adapt into pipeline)"))
         print(f"   {c('dim', 'q')}  Quit")
         print()
         choice = ask("Pick one", "2").lower()
@@ -96,27 +97,29 @@ def beginner_menu() -> int:
             print(c("dim", "  Bye!"))
             return 0
         if choice == "1":
-            return wizard_cloudflare()
-        if choice == "2":
-            return wizard_check()
-        if choice == "3":
-            return wizard_proxy()
-        if choice == "4":
-            return wizard_tokenharbor()
-        if choice == "5":
-            return wizard_github()
-        if choice == "6":
-            return wizard_gmail()
-        if choice == "7":
-            return wizard_xai()
-        if choice == "8":
-            return wizard_documents()
-        if choice == "9":
-            return wizard_manage()
-        if choice == "10":
+            wizard_cloudflare()
+        elif choice == "2":
+            wizard_check()
+        elif choice == "3":
+            wizard_proxy()
+        elif choice == "4":
+            wizard_tokenharbor()
+        elif choice == "5":
+            wizard_github()
+        elif choice == "6":
+            wizard_gmail()
+        elif choice == "7":
+            wizard_xai()
+        elif choice == "8":
+            wizard_documents()
+        elif choice == "9":
+            wizard_manage()
+        elif choice == "10":
             explain_what_is_this()
-            continue
-        print(c("yellow", "  Please type one of the numbers shown."))
+        elif choice == "11":
+            wizard_autofarm()
+        else:
+            print(c("yellow", "  Please type one of the numbers shown."))
 
 
 # ═══════════════════════════════════════════════ wizards
@@ -238,22 +241,75 @@ def wizard_github() -> int:
 def wizard_gmail() -> int:
     hr()
     print(c("bold", "  Create Gmail accounts\n"))
-    print(c("dim", "  Automates Gmail signup in the background and saves the email +"))
-    print(c("dim", "  password it created.\n"))
-    print(c("yellow", "  ⚠️  Google may ask for a phone number / CAPTCHA — a human must"))
-    print(c("yellow", "     finish that step when it appears.\n"))
-    n = ask("How many accounts", "1")
-    headless = yesno("  Run without showing the browser window", False)
-    args = ["farm", "--count", n]
+    print(c("dim", "  Google blocks plain desktop signups with a phone verification gate."))
+    print(c("dim", "  Connecting an Android device or emulator bypasses this requirement.\n"))
+    print(f"   {c('green', '1')}  Physical Phone via ADB  " + c("dim", "(Best — real device skips phone gate)"))
+    print(f"   {c('green', '2')}  Android Studio / Emulator" + c("dim", "(Virtual device via ADB)"))
+    print(f"   {c('green', '3')}  Desktop Browser          " + c("dim", "(Standard Chrome — may ask for phone)"))
+    print()
+    mode = ask("Pick method", "1")
+    if mode == "1":
+        run_script("adb_tool.py", ["phone"])
+        print()
+        cont = yesno("Is the phone connected and showing in 'adb status'", True)
+        if cont:
+            run_script("kancahub.py", ["gmail", "adb"])
+    elif mode == "2":
+        run_script("adb_tool.py", ["emulator"])
+        print()
+        cont = yesno("Is the emulator ready and connected in ADB", True)
+        if cont:
+            run_script("kancahub.py", ["gmail", "adb"])
+    else:
+        n = ask("How many accounts", "1")
+        headless = yesno("  Run without showing the browser window", False)
+        args = ["farm", "--count", n]
+        if headless:
+            args.append("--headless")
+        print(c("cyan", "\n  ▶ Starting…\n"))
+        rc = run_script("kancahub.py", ["gmail"] + args)
+        if rc == 0:
+            print(c("green", "\n  ✅ Finished — check github_accounts.json / the gmail output file."))
+        else:
+            print(c("yellow", "\n  ⚠️  Stopped early — check the messages above."))
+    ask("\nPress Enter to go back")
+    return 0
+
+
+def wizard_autofarm() -> int:
+    hr()
+    print(c("bold", "  Autofarm any website\n"))
+    print(c("dim", "  Paste any signup or login URL. KancaHub inspects the form,"))
+    print(c("dim", "  uses fresh residential proxies + disposable email, and creates"))
+    print(c("dim", "  a reusable pipeline script.\n"))
+    url = ask("Website URL to farm")
+    if not url:
+        print(c("yellow", "  No URL provided."))
+        ask("\nPress Enter to go back")
+        return 0
+
+    print(c("dim", "\n  Choose disposable email domain:"))
+    print(f"   {c('green', '1')}  kancalabs.biz.id (Cloudflare Email Routing)")
+    print(f"   {c('green', '2')}  kancalabs.my.id  (Tempik D1 Worker Catch-all)")
+    d_choice = ask("Pick domain", "1")
+    domain = "kancalabs.my.id" if d_choice == "2" else "kancalabs.biz.id"
+
+    print(c("dim", "\n  Destination options:"))
+    print(f"   {c('green', '1')}  Save to results/autofarm_accounts.json only")
+    print(f"   {c('green', '2')}  Save to results AND inject into 9Router AI gateway")
+    s_choice = ask("Pick destination", "1")
+    inject = (s_choice == "2")
+
+    args = [url, "--domain", domain]
+    if inject:
+        args.append("--inject-9router")
+
+    headless = yesno("  Run without showing browser window (headless)", False)
     if headless:
         args.append("--headless")
-    print(c("cyan", "\n  ▶ Starting…\n"))
-    rc = run_script("kancahub.py", ["gmail"] + args)
-    if rc == 0:
-        print(c("green", "\n  ✅ Finished — check github_accounts.json / the gmail output file."))
-    else:
-        print(c("yellow", "\n  ⚠️  Stopped early — check the messages above."))
-    ask("Press Enter to go back")
+
+    run_script("autofarm.py", args)
+    ask("\nPress Enter to go back")
     return 0
 
 
