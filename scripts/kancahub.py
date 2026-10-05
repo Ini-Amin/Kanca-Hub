@@ -512,9 +512,20 @@ def cmd_proxy(a) -> int:
         return petani_cmd(["--daemon-gateway"])
 
     if sub == "residential":
+        cmd = ["--webshare", str(a.accounts)]
         if a.headless:
-            return petani_cmd(["--webshare", a.accounts, "--headless"])
-        return petani_cmd(["--webshare", a.accounts])
+            cmd.append("--headless")
+        rc = petani_cmd(cmd)
+        try:
+            from proxy_sync import sync_now
+            sync_now(quiet=False)
+        except Exception:
+            pass
+        return rc
+
+    if sub == "sync":
+        from proxy_sync import sync_now
+        return sync_now(source=getattr(a, "src", None), validate_live=getattr(a, "validate", False))
 
     if sub == "warp":
         return petani_cmd(["--warp"])
@@ -1519,7 +1530,9 @@ def build_parser() -> argparse.ArgumentParser:
     ads = adp.add_subparsers(dest="adb_cmd")
     ads.add_parser("status", help="is a device connected? (default)")
     ads.add_parser("devices", help="list devices + browsers")
-    ads.add_parser("usb", help="how to connect over USB")
+    ads.add_parser("phone", help="connect physical Android phone via USB/Wi-Fi")
+    ads.add_parser("usb", help="how to connect over USB (alias for phone)")
+    ads.add_parser("emulator", help="detect/launch Android Studio AVD or Waydroid emulator")
     ads.add_parser("setup", help="enable Wi-Fi (tcpip) mode and show the phone IP")
     adc = ads.add_parser("connect", help="connect over Wi-Fi")
     adc.add_argument("addr", help="phone IP or IP:port")
@@ -1731,6 +1744,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("-n", "--accounts", type=int, default=1)
     r.add_argument("--headless", action="store_true")
 
+    ps.add_parser("sync", help="sync fresh proxies into all tool pools")
     ps.add_parser("warp", help="generate Cloudflare WARP WireGuard profile")
 
     gr = ps.add_parser("grok", help="farm Grok xAI accounts")
@@ -1908,6 +1922,16 @@ def build_parser() -> argparse.ArgumentParser:
     ys.add_parser("gui", help="launch the legacy desktop GUI")
     ys.add_parser("mcp", help="run the yowes MCP server (stdio)")
 
+    # ---- autofarm ----
+    af = sub.add_parser("autofarm", help="paste any website URL to adapt and autofarm with clean proxies")
+    af.add_argument("url", nargs="?", default=None, help="website signup/login URL")
+    af.add_argument("--domain", choices=["kancalabs.biz.id", "kancalabs.my.id", "biz.id", "my.id"], default="kancalabs.biz.id",
+                    help="disposable email domain (default: kancalabs.biz.id)")
+    af.add_argument("--inject-9router", action="store_true", help="inject credentials into 9Router SQLite DB")
+    af.add_argument("--out", default=None, help="output JSON path (default: results/autofarm_accounts.json)")
+    af.add_argument("--headless", action="store_true", help="run without showing browser UI")
+    af.add_argument("--proxy", default=None, help="proxy URL (default: auto from pool)")
+
     return p
 
 
@@ -1967,9 +1991,30 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             p.parse_args(["yowes", "--help"])
             return 1
         return cmd_yowes(args)
+    if g == "autofarm":
+        return cmd_autofarm(args)
 
     p.print_help()
     return 0
+
+
+def cmd_autofarm(a) -> int:
+    py = pick_python()
+    tool = AUTO_FREECF / "scripts" / "autofarm.py"
+    cmd = [py, str(tool)]
+    if getattr(a, "url", None):
+        cmd.append(a.url)
+    if getattr(a, "domain", None):
+        cmd += ["--domain", a.domain]
+    if getattr(a, "inject_9router", False):
+        cmd.append("--inject-9router")
+    if getattr(a, "out", None):
+        cmd += ["--out", a.out]
+    if getattr(a, "headless", False):
+        cmd.append("--headless")
+    if getattr(a, "proxy", None):
+        cmd += ["--proxy", a.proxy]
+    return run(cmd, cwd=AUTO_FREECF)
 
 
 def interactive_mode(p: argparse.ArgumentParser) -> int:
@@ -2039,7 +2084,16 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
 
         _key, _desc, cmd_str, cmd_args = match
         print(col("cyan", f"\n▶ Running: kancahub {cmd_str}\n"))
-        return dispatch(p, p.parse_args(cmd_args))
+        try:
+            dispatch(p, p.parse_args(cmd_args))
+        except Exception as e:
+            print(col("red", f"Error: {e}"))
+        print()
+        try:
+            input(f" {C['bold']}Press Enter to return to menu...{C['reset']}")
+        except (EOFError, KeyboardInterrupt):
+            return 0
+        print()
 
 
 def main() -> int:
