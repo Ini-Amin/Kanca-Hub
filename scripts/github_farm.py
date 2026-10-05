@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """
-GitHub signup + GitHub Education (Student Pack) application — nodriver, Linux.
+GitHub signup + GitHub Education (Student Pack) application — **Camoufox**, Linux.
+
+Ported from the nodriver/CDP version to Camoufox (anti-detect Firefox via the
+Playwright API), matching scripts/k12_camoufox.py. Firefox/Juggler input is
+trusted, so the old CDP click/insertText helpers are replaced with
+locator.click / fill / press_sequentially / expect_popup, and
+AsyncCamoufox(geoip=True, humanize=True, os="windows") makes timezone/locale/geo
+and WebRTC follow the exit IP.
+
+MUST run under the isolated Camoufox venv (python3.11 + playwright):
+    /home/amen/.local/share/auto-freecf/camoufox-venv/bin/python \
+        /home/amen/Auto-FreeCF/scripts/github_farm.py --index 1 --dry-run
 
 WHAT THIS AUTOMATES (honestly)
 ==============================
@@ -10,7 +21,7 @@ WHAT THIS AUTOMATES (honestly)
        - unique username generation + availability retry
        - the "verify your email" **8-digit launch code** step, read live from the
          BINUS M365 school mailbox (Outlook Web) using the same browser-reader
-         approach as scripts/school_mail_browser.py
+         approach as scripts/school_mail_browser.py / sheerid_link_finder.py
        - account-created detection
   ✅ Opens the GitHub Education application form and FILLS the fields we can:
        - school = BINUS University / Universitas Bina Nusantara
@@ -22,8 +33,12 @@ WHAT THIS AUTOMATES (honestly)
 WHAT THIS CANNOT AUTOMATE (do NOT overclaim)
 ============================================
   ❌ CAPTCHAs / Arkose "verify you are human" puzzle. GitHub increasingly gates
-     signup behind Arkose. nodriver is CDP-based and has NO solver here. If a
-     puzzle appears we DETECT it and REPORT it — we never claim success.
+     signup behind Arkose + device fingerprint checks. Camoufox reduces bot
+     signals but there is NO solver here. If a puzzle appears we DETECT it and
+     REPORT it — we never claim success.
+  ❌ Network/IP blocks: GitHub may serve an 'Access is temporarily restricted'
+     interstitial (DataDome-style anti-bot) for a flagged egress IP. Detected
+     and reported; retry from another IP (--proxy / --pool).
   ❌ Identity / academic attestation on the Education form:
        - legal name attestation, "I am a student" checkbox, and especially the
          **photo/scan of a student ID or enrollment proof** that a human must
@@ -35,11 +50,15 @@ WHAT THIS CANNOT AUTOMATE (do NOT overclaim)
 Because of the above, treat this as a *helper*, not a turnkey farmer. Expect to
 finish captchas and the Education photo step by hand.
 
-RESPONSIBILITY
-==============
-Use only with mailboxes and identities you are legitimately entitled to use.
-Only the BINUS mailbox raymondi@binus.ac.id (plus-addressing) is targeted. This
-does NOT touch the existing account 'Ini-Amin'.
+PROXY / POOL
+============
+  --proxy URL   single egress. Supports the local KancaHub rotating gateway
+                http://127.0.0.1:8888 (or :8899): when detected, a sticky
+                X-Session-ID header is applied via scripts/gateway_session.py so
+                one upstream proxy is pinned for the whole flow.
+  --pool FILE   newline-separated proxy list; one is chosen per --index (rotation).
+                Auto-detects the gateway and applies sticky sessions for it too.
+  Exit IP / geo follow the proxy when geoip=True.
 
 CONFIG (~/.config/auto-freecf/.env) — same keys the school reader uses:
     SCHOOL_EMAIL=raymondi@binus.ac.id
@@ -51,7 +70,8 @@ CLI:
     python3 github_farm.py --index 1 --dry-run     # walk signup, screenshot, no submit
     python3 github_farm.py --index 1               # real signup (stops before captcha/attestation)
     python3 github_farm.py --index 1 --headless
-    python3 github_farm.py --index 1 --proxy http://user:pass@host:port
+    python3 github_farm.py --index 1 --proxy http://127.0.0.1:8888
+    python3 github_farm.py --index 1 --pool signup_from_scratch/proxies.txt
 
 Output: ~/Auto-FreeCF/github_accounts.json (gitignored).
 """
@@ -69,6 +89,42 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
+
+try:
+    from camoufox.async_api import AsyncCamoufox
+except Exception as _e:  # pragma: no cover - only triggers outside the camoufox venv
+    AsyncCamoufox = None
+    _CAMOUFOX_IMPORT_ERROR = _e
+else:
+    _CAMOUFOX_IMPORT_ERROR = None
+
+try:
+    from playwright.async_api import TimeoutError as PWTimeout
+    from playwright.async_api import Error as PWError
+except Exception:  # pragma: no cover
+    class PWTimeout(Exception):  # type: ignore
+        ...
+    class PWError(Exception):  # type: ignore
+        ...
+
+try:
+    from camoufox.ip import Proxy as CamoufoxProxy
+except Exception:  # pragma: no cover
+    CamoufoxProxy = None  # type: ignore
+
+# Sticky-session helper for the local KancaHub gateway (defensive import).
+try:
+    from gateway_session import apply_gateway_session, is_gateway
+except ImportError:
+    try:
+        from scripts.gateway_session import apply_gateway_session, is_gateway
+    except Exception:
+        def is_gateway(p=None):  # type: ignore
+            return False
+        async def apply_gateway_session(page_or_ctx, s=None):  # type: ignore
+            return False
+
 
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
@@ -139,169 +195,186 @@ def gen_password() -> str:
     return f"{tail[:7]}{special}{tail[7:]}9Aa"
 
 
-# ─────────────────────────────────────────────────────────── nodriver helpers
+# ─────────────────────────────────────────────────────────── proxy helpers
 
-def _unwrap(v):
-    if isinstance(v, dict) and "type" in v and "value" in v:
-        return v["value"]
-    if isinstance(v, list):
-        return [_unwrap(x) for x in v]
-    return v
+def _proxy_dict(proxy: str | None):
+    """Build a camoufox Proxy (preferred) from a URL; dict fallback otherwise.
+
+    Returns ``camoufox.ip.Proxy(server=..., username=..., password=...)`` when the
+    class is importable, else a Playwright-style dict, else None.
+    """
+    if not proxy:
+        return None
+    u = urlparse(proxy if "://" in proxy else f"http://{proxy}")
+    server = f"{u.scheme}://{u.hostname}:{u.port}" if u.port else f"{u.scheme}://{u.hostname}"
+    if CamoufoxProxy is not None:
+        return CamoufoxProxy(server=server, username=u.username, password=u.password)
+    d: dict = {"server": server}
+    if u.username:
+        d["username"] = u.username
+    if u.password:
+        d["password"] = u.password
+    return d
 
 
-async def js(tab, expr: str, default=None):
-    """Evaluate JS and unwrap nodriver's RemoteObject quirks."""
+def _load_pool(path: str | None) -> list[str]:
+    if not path:
+        return []
+    p = Path(path).expanduser()
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
+def pick_proxy(proxy: str | None, pool_file: str | None, index: int) -> tuple[str | None, str]:
+    """Resolve the egress: explicit --proxy wins, else rotate the pool by index."""
+    if proxy:
+        return proxy, "explicit --proxy"
+    pool = _load_pool(pool_file)
+    if pool:
+        chosen = pool[(max(index, 1) - 1) % len(pool)]
+        return chosen, f"pool #{((max(index, 1) - 1) % len(pool)) + 1}/{len(pool)}"
+    return None, "direct (no proxy)"
+
+
+# ─────────────────────────────────────────────────────────── playwright helpers
+
+async def js(page, expr: str, default=None):
+    """page.evaluate that never raises (navigation races) and returns a default."""
     try:
-        r = await tab.evaluate(expr, return_by_value=True)
+        r = await page.evaluate(expr)
     except Exception:
         return default
-    if r is not None and r.__class__.__name__ == "RemoteObject":
-        v = getattr(r, "value", None)
-        if v is None:
-            dv = getattr(r, "deep_serialized_value", None)
-            v = getattr(dv, "value", None) if dv else None
-        r = v
-    r = _unwrap(r)
     return default if r is None else r
 
 
-async def _query_all(tab, selector: str) -> list[dict]:
-    raw = await js(tab, """
-        (function(){
-          const out=[];
-          const els=[...document.querySelectorAll(%s)];
-          els.forEach((e,i)=>{ const r=e.getBoundingClientRect();
-            if(r.width>0 && r.height>0) out.push({idx:i, text:(e.innerText||e.value||'').trim(),
-              x:r.left+r.width/2, y:r.top+r.height/2, w:r.width, h:r.height}); });
-          return JSON.stringify(out);
-        })()
-    """ % json.dumps(selector), "[]")
+async def live_url(page) -> str:
+    """Current URL (page.url is cached by Playwright; evaluate reads the live one)."""
+    return await js(page, "location.href", "") or page.url or ""
+
+
+async def has(page, selector: str) -> bool:
     try:
-        return json.loads(raw) if isinstance(raw, str) else (raw or [])
+        return await page.locator(selector).count() > 0
     except Exception:
-        return []
-
-
-async def _cdp_click_xy(tab, x: float, y: float) -> bool:
-    import nodriver as uc
-    x, y = int(round(x)), int(round(y))
-    if x <= 0 or y <= 0:
         return False
-    btn = uc.cdp.input_.MouseButton.LEFT
-    await tab.send(uc.cdp.input_.dispatch_mouse_event("mouseMoved", x=x, y=y))
-    await asyncio.sleep(0.05)
-    await tab.send(uc.cdp.input_.dispatch_mouse_event("mousePressed", x=x, y=y, button=btn, buttons=1, click_count=1))
-    await asyncio.sleep(0.05)
-    await tab.send(uc.cdp.input_.dispatch_mouse_event("mouseReleased", x=x, y=y, button=btn, buttons=0, click_count=1))
-    return True
 
 
-async def robust_click(tab, selector: str | None = None, text: str | None = None,
-                       timeout: float = 5.0) -> bool:
-    """Real CDP click on a centered element (CSS selector first, else text)."""
-    el = None
-    if selector:
-        try:
-            el = await tab.select(selector, timeout=timeout)
-        except Exception:
-            el = None
-    if el is None and text:
-        try:
-            el = await tab.find(text, best_match=True, timeout=timeout)
-        except Exception:
-            el = None
-    if el is None:
-        return False
+async def visible_first(page, selector: str):
+    """First visible element matching selector (as a Locator), else None."""
     try:
-        await el.scroll_into_view()
+        loc = page.locator(selector)
+        for i in range(await loc.count()):
+            el = loc.nth(i)
+            if await el.is_visible():
+                return el
     except Exception:
         pass
-    await asyncio.sleep(0.2)
-    center = None
+    return None
+
+
+async def type_into(page, selector: str, value: str, label: str | None = None) -> bool:
+    """Fill an input (React-safe) and VERIFY it holds the value.
+
+    1. locator.fill()  -> clears + sets value with trusted input events
+    2. fallback: click, Ctrl+A, Delete, press_sequentially (real per-key events)
+    3. last resort: native value setter + InputEvent
+    """
+    el = await visible_first(page, selector) or page.locator(selector).first
+    got = ""
     try:
-        center = _unwrap(await el.apply(
-            "function(e){const r=e.getBoundingClientRect();"
-            "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height};}",
-            return_by_value=True))
+        await el.click(timeout=4000)
+        await el.fill(str(value), timeout=4000)
+        got = await el.input_value(timeout=2000)
     except Exception:
-        center = None
-    if not center or not center.get("w"):
+        got = ""
+    ok = got.strip() == str(value).strip()
+    if not ok:
         try:
-            pos = await el.get_position()
-            center = {"x": pos.center[0], "y": pos.center[1]}
+            await el.click(timeout=4000)
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Delete")
+            await el.press_sequentially(str(value), delay=random.randint(45, 90), timeout=15000)
+            got = await el.input_value(timeout=2000)
         except Exception:
-            return False
-    return await _cdp_click_xy(tab, center["x"], center["y"])
-
-
-async def cdp_type(tab, selector: str, value: str) -> bool:
-    """Focus (real click) -> Ctrl+A/Delete -> CDP Input.insertText. React-safe."""
-    import nodriver as uc
-    await robust_click(tab, selector=selector, timeout=4)
-    await asyncio.sleep(0.2)
-    try:
-        await tab.send(uc.cdp.input_.dispatch_key_event(
-            "keyDown", modifiers=2, key="a", code="KeyA", windows_virtual_key_code=65))
-        await tab.send(uc.cdp.input_.dispatch_key_event(
-            "keyUp", modifiers=2, key="a", code="KeyA", windows_virtual_key_code=65))
-        await tab.send(uc.cdp.input_.dispatch_key_event(
-            "keyDown", key="Delete", code="Delete", windows_virtual_key_code=46))
-        await tab.send(uc.cdp.input_.dispatch_key_event(
-            "keyUp", key="Delete", code="Delete", windows_virtual_key_code=46))
-    except Exception:
-        pass
-    await asyncio.sleep(0.15)
-    try:
-        await tab.send(uc.cdp.input_.insert_text(str(value)))
-    except Exception:
-        for ch in str(value):
+            pass
+        ok = got.strip() == str(value).strip()
+    if not ok:
+        try:
+            await js(page, """(()=>{const e=document.querySelector(%s); if(!e) return '';
+                e.focus();
+                const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+                if(s) s.call(e,%s); else e.value=%s;
+                e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s,inputType:'insertText'}));
+                e.dispatchEvent(new Event('change',{bubbles:true}));
+                return e.value;})()""" % (json.dumps(selector), json.dumps(str(value)),
+                                          json.dumps(str(value)), json.dumps(str(value))), "")
             try:
-                await tab.send(uc.cdp.input_.insert_text(ch))
+                got = await el.input_value(timeout=2000)
             except Exception:
-                pass
-    await asyncio.sleep(0.3)
-    got = await js(tab, f"(()=>{{const e=document.querySelector({json.dumps(selector)});return e?e.value:null;}})()", "")
-    ok = str(got).strip() == str(value).strip()
-    print(f"      [type] {selector} <- {value!r} => {ok}", flush=True)
+                got = await js(page, f"(()=>{{const e=document.querySelector({json.dumps(selector)});return e?e.value:'';}})()", "") or ""
+        except Exception:
+            pass
+        ok = got.strip() == str(value).strip()
+    shown = "*" * len(got) if "password" in selector else got
+    print(f"      [type] {label or selector} <- {'*' * len(value) if 'password' in selector else value!r} "
+          f"=> {shown!r} ok={ok}", flush=True)
     return ok
 
 
-async def react_fill(tab, selector: str, value: str) -> bool:
-    """Fill a React-controlled input via the native value setter + events."""
-    expr = """
-(function(){
-  const s = %s, v = %s;
-  const el = document.querySelector(s);
-  if (!el) return false;
-  el.focus();
-  const proto = (el instanceof HTMLTextAreaElement) ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-  const tr = el._valueTracker; if (tr) tr.setValue('');
-  if (setter) setter.call(el, v); else el.value = v;
-  el.dispatchEvent(new InputEvent('input',{bubbles:true,data:v,inputType:'insertText'}));
-  el.dispatchEvent(new Event('change',{bubbles:true}));
-  return String(el.value||'').trim() === String(v||'').trim();
-})()
-""" % (json.dumps(selector), json.dumps(value))
-    return bool(await js(tab, expr, False))
-
-
-async def fill_first_input(tab, selectors: list[str], value: str) -> bool:
-    """cdp_type into the first present selector; fall back to typing."""
+async def fill_first_input(page, selectors: list[str], value: str) -> bool:
     for sel in selectors:
-        if await js(tab, f"!!document.querySelector({json.dumps(sel)})", False):
-            if await cdp_type(tab, sel, value):
-                return True
-            if await react_fill(tab, sel, value):
-                return True
+        if await visible_first(page, sel) is not None and await type_into(page, sel, value):
+            return True
+    # fallback: first visible plain text input
+    loc = page.locator("input:not([type=hidden]):not([type=submit]):not([type=checkbox])"
+                       ":not([type=radio]):not([type=file]):not([type=search])")
+    try:
+        for i in range(await loc.count()):
+            el = loc.nth(i)
+            if await el.is_visible():
+                await el.click(timeout=4000)
+                await el.fill(value, timeout=4000)
+                return (await el.input_value()).strip() == value.strip()
+    except Exception:
+        pass
     return False
 
 
-async def screenshot(tab, name: str) -> str | None:
+async def click_button(page, labels: tuple[str, ...], timeout: float = 6.0) -> bool:
+    """Click the button whose EXACT label is in `labels` (prefers submit buttons)."""
+    deadline = time.time() + timeout
+    while True:
+        for sel in ("button[type=submit]", "button"):
+            loc = page.locator(sel)
+            try:
+                n = await loc.count()
+            except Exception:
+                n = 0
+            for i in range(n):
+                el = loc.nth(i)
+                try:
+                    txt = (await el.inner_text(timeout=1500)).strip()
+                    if txt in labels and await el.is_visible() and await el.is_enabled():
+                        await el.click(timeout=5000)
+                        return True
+                except Exception:
+                    continue
+        if time.time() >= deadline:
+            return False
+        await asyncio.sleep(0.4)
+
+
+async def screenshot(page, name: str) -> str | None:
     try:
         SHOTS_DIR.mkdir(parents=True, exist_ok=True)
         path = SHOTS_DIR / f"{time.strftime('%H%M%S')}_{name}.png"
-        await tab.save_screenshot(str(path))
+        await page.screenshot(path=str(path))
         print(f"      [shot] {path}", flush=True)
         return str(path)
     except Exception as e:
@@ -309,13 +382,13 @@ async def screenshot(tab, name: str) -> str | None:
         return None
 
 
-def _page_text(tab):
-    return js(tab, "document.body ? document.body.innerText : ''", "")
+def _page_text(page):
+    return js(page, "document.body ? document.body.innerText : ''", "")
 
 
-async def detect_captcha(tab) -> str | None:
+async def detect_captcha(page) -> str | None:
     """Return a description if a human-verification puzzle is present."""
-    html = await js(tab, "document.documentElement ? document.documentElement.outerHTML : ''", "")
+    html = await js(page, "document.documentElement ? document.documentElement.outerHTML : ''", "")
     low = (html or "").lower()
     for needle, label in (
         ("arkoselabs", "Arkose / FunCaptcha"),
@@ -327,19 +400,18 @@ async def detect_captcha(tab) -> str | None:
     ):
         if needle in low:
             return label
-    # visible text hint
-    txt = (await _page_text(tab) or "").lower()
+    txt = (await _page_text(page) or "").lower()
     if "verify" in txt and "human" in txt:
         return "human-verification prompt (text)"
     return None
 
 
-async def detect_access_restriction(tab) -> str | None:
+async def detect_access_restriction(page) -> str | None:
     """
     GitHub sometimes serves a network-level block instead of the signup form:
     'Access is temporarily restricted' / 'We detected unusual activity'.
 
-    This is NOT solvable by the script — it's tied to the egress IP (often a
+    This is NOT solvable by the script — it is tied to the egress IP (often a
     shared WARP/Cloudflare or datacenter range). Detect it so we report honestly
     instead of a misleading 'input not found'.
 
@@ -347,9 +419,9 @@ async def detect_access_restriction(tab) -> str | None:
       1. Visible text (when the interstitial renders its DOM).
       2. Structural: an anti-bot challenge page with NO inputs and NO visible
          body text but a `dd={...}` / `cmsg` challenge payload (DataDome-style),
-         which is what a blocked network actually returns to CDP.
+         which is what a blocked network returns.
     """
-    body = (await _page_text(tab) or "")
+    body = (await _page_text(page) or "")
     low = body.lower()
     if "temporarily restricted" in low or "unusual activity from your device" in low:
         m = re.search(r'\((IP [^)]+)\)', body)
@@ -358,10 +430,9 @@ async def detect_access_restriction(tab) -> str | None:
     if "automated (bot) activity on your network" in low:
         return "network/IP block: bot activity flagged on this network"
 
-    # Structural signature: challenge page with no form.
-    n_input = await js(tab, "document.querySelectorAll('input').length", -1)
+    n_input = await js(page, "document.querySelectorAll('input').length", -1)
     if n_input == 0:
-        html = await js(tab, "document.documentElement ? document.documentElement.innerHTML : ''", "")
+        html = await js(page, "document.documentElement ? document.documentElement.innerHTML : ''", "")
         challengeish = any(k in (html or "") for k in ("dd={", "cmsg", "challenge", "__dd",
                                                        "datadome", "cf-chl", "challenge-platform"))
         if challengeish:
@@ -375,71 +446,48 @@ async def detect_access_restriction(tab) -> str | None:
 
 # ─────────────────────────────────────────────────────────── school mailbox
 
-async def school_login(tab, email: str, password: str) -> None:
+async def school_login(page, email: str, password: str) -> None:
     """Walk the Microsoft login flow (email -> password -> stay signed in)."""
     print("      [school] completing Microsoft login…", flush=True)
-    for _ in range(25):
-        if await js(tab, "!!document.querySelector('input[type=email],input[name=loginfmt]')", False):
-            break
-        await asyncio.sleep(1)
-    await js(tab, """(()=>{const e=document.querySelector('input[type=email],input[name=loginfmt]');
-        if(!e) return 0; e.focus();
-        const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-        s.call(e,%s); e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s}));
-        return 1;})()""" % (json.dumps(email), json.dumps(email)), 0)
+    await type_into(page, "input[type=email], input[name=loginfmt]", email, "school-email")
     await asyncio.sleep(0.5)
-    await _click_any(tab, ["Next", "Sign in"])
+    await click_button(page, ("Next", "Sign in"), timeout=6)
     await asyncio.sleep(4)
 
     for _ in range(25):
-        if await js(tab, "!!document.querySelector('input[type=password],input[name=passwd]')", False):
+        if await visible_first(page, "input[type=password], input[name=passwd]") is not None:
             break
         await asyncio.sleep(1)
-    await js(tab, """(()=>{const e=document.querySelector('input[type=password],input[name=passwd]');
-        if(!e) return 0; e.focus();
-        const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-        s.call(e,%s); e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s}));
-        return 1;})()""" % (json.dumps(password), json.dumps(password)), 0)
+    await type_into(page, "input[type=password], input[name=passwd]", password, "school-password")
     await asyncio.sleep(0.5)
-    await _click_any(tab, ["Sign in", "Next"])
+    await click_button(page, ("Sign in", "Next"), timeout=6)
     await asyncio.sleep(6)
 
     for label in ("Yes", "No"):
-        if await _click_any(tab, [label], timeout=4):
-            print(f"      [school] answered '{label}' to stay-signed-in", flush=True)
-            break
+        try:
+            btn = page.get_by_role("button", name=re.compile(rf"^\s*{label}\s*$"))
+            if await btn.count() and await btn.first.is_visible():
+                await btn.first.click(timeout=4000)
+                print(f"      [school] answered '{label}' to stay-signed-in", flush=True)
+                break
+        except Exception:
+            continue
     await asyncio.sleep(6)
 
 
-async def _click_any(tab, labels: list[str], timeout: float = 3.0) -> bool:
-    for label in labels:
-        try:
-            el = await tab.find(label, best_match=True, timeout=timeout)
-            if el:
-                try:
-                    await el.scroll_into_view()
-                except Exception:
-                    pass
-                await el.click()
-                return True
-        except Exception:
-            continue
-    return False
-
-
-async def wait_inbox(tab, timeout: float = 60) -> bool:
+async def wait_inbox(page, timeout: float = 60) -> bool:
     for _ in range(int(timeout)):
-        u = await js(tab, "location.href", "")
+        u = await live_url(page)
         if "outlook" in u and ("mail" in u or "owa" in u):
-            if await js(tab, "!!document.querySelector('[role=main],[aria-label*=Message],div[role=list]')", False):
+            if await has(page, "[role=main], [aria-label*=Message], div[role=list]"):
                 return True
         await asyncio.sleep(1)
     return False
 
 
-async def read_inbox_text(tab) -> list[str]:
+async def read_inbox_text(page) -> list[str]:
     """Best-effort scrape of visible list items + page text for OTP scanning."""
-    raw = await js(tab, """JSON.stringify(
+    raw = await js(page, """JSON.stringify(
         [...document.querySelectorAll('[role=option],[role=listitem],[aria-label]')]
         .map(e=>(e.innerText||'').trim())
         .filter(t=>t && t.length>2).slice(0,25))""", "[]")
@@ -448,7 +496,7 @@ async def read_inbox_text(tab) -> list[str]:
         items = json.loads(raw) if isinstance(raw, str) else (raw or [])
     except Exception:
         items = []
-    body = await _page_text(tab)
+    body = await _page_text(page)
     if body:
         items.append(body)
     return items
@@ -457,7 +505,6 @@ async def read_inbox_text(tab) -> list[str]:
 def _extract_launch_code(texts: list[str]) -> str | None:
     """GitHub emails an 8-digit launch code. Find it in subjects/body text."""
     joined = "\n".join(t for t in texts if t)
-    # Strong anchors first (GitHub's own copy).
     for pat in (
         r'launch code[:\s]*\b(\d{8})\b',
         r'\b(\d{8})\b\s*(?:is your|as your) launch code',
@@ -467,7 +514,6 @@ def _extract_launch_code(texts: list[str]) -> str | None:
         m = re.search(pat, joined, re.I)
         if m:
             return m.group(1)
-    # Fallback: any standalone 8-digit token in a GitHub context.
     if re.search(r"github", joined, re.I):
         m = re.search(r'\b(\d{8})\b', joined)
         if m:
@@ -475,9 +521,56 @@ def _extract_launch_code(texts: list[str]) -> str | None:
     return None
 
 
-async def read_launch_code(email: str, timeout: int = 240, keep_open: bool = False) -> str | None:
-    """Open Outlook Web, wait for GitHub's 8-digit launch code, return it."""
-    import nodriver as uc
+def _read_launch_code_via_helper(email: str) -> str | None:
+    """
+    Defensive reuse of the shared school-mail reader module if it exposes an
+    async launch-code helper (other worker is converting it to Camoufox).
+
+    Any of these entry points are tried, in order:
+      school_mail_browser.read_launch_code
+      school_mail_browser.wait_inbox / read_subjects
+      sheerid_link_finder (link finder — not a code, skipped)
+    Returns the code, or None to fall back to the built-in Camoufox reader.
+    """
+    for modname in ("school_mail_browser",):
+        mod = None
+        for imp in (modname, f"scripts.{modname}"):
+            try:
+                mod = __import__(imp, fromlist=["*"])
+                break
+            except Exception:
+                continue
+        if mod is None:
+            continue
+        fn = getattr(mod, "read_launch_code", None)
+        if callable(fn):
+            print(f"      [school] using {modname}.read_launch_code()", flush=True)
+            try:
+                res = fn(email)
+                return asyncio.run(res) if asyncio.iscoroutine(res) else res
+            except Exception as e:  # noqa: BLE001
+                print(f"      [school] helper failed ({e}); falling back", flush=True)
+    return None
+
+
+async def read_launch_code(email: str, timeout: int = 240, proxy: str | None = None) -> str | None:
+    """
+    Read GitHub's 8-digit launch code from the BINUS mailbox.
+
+    Tries the shared school-mail reader module first (defensive import), then
+    falls back to opening Outlook Web in Camoufox with the persistent school
+    profile (~/.config/auto-freecf/school-profile).
+    """
+    # 1. shared helper (defensive)
+    code = _read_launch_code_via_helper(email)
+    if code:
+        print(f"      [school] ✓ launch code (helper): {code}", flush=True)
+        return code
+
+    if AsyncCamoufox is None:
+        print(f"      [school] ✗ Camoufox unavailable: {_CAMOUFOX_IMPORT_ERROR}", flush=True)
+        return None
+
     pw = cfg("SCHOOL_MAIL_PASSWORD")
     url = cfg("SCHOOL_MAIL_URL", SCHOOL_MAIL_URL)
     if not pw:
@@ -485,115 +578,116 @@ async def read_launch_code(email: str, timeout: int = 240, keep_open: bool = Fal
         return None
 
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"      [school] launching mailbox browser (profile={PROFILE_DIR})", flush=True)
-    br = await uc.start(headless=False, sandbox=False, user_data_dir=str(PROFILE_DIR))
-    tab = await br.get(url)
-    await asyncio.sleep(8)
+    print(f"      [school] launching Camoufox mailbox reader (profile={PROFILE_DIR})", flush=True)
+    kwargs: dict = dict(headless=False, geoip=True, humanize=True, os="windows",
+                        persistent_context=True, user_data_dir=str(PROFILE_DIR))
+    pd = _proxy_dict(proxy)
+    if pd:
+        kwargs["proxy"] = pd
 
-    title = await js(tab, "document.title", "")
-    cur = await js(tab, "location.href", "")
-    print(f"      [school] page: {title!r} @ {cur[:70]}", flush=True)
-    if any(k in cur for k in ("login.microsoftonline", "login.live", "adfs")) or "sign in" in (title or "").lower():
-        await school_login(tab, email, pw)
-    ok = await wait_inbox(tab, timeout=60)
-    print(f"      [school] inbox ready: {ok}", flush=True)
-
-    start = time.time()
-    while time.time() - start < timeout:
-        texts = await read_inbox_text(tab)
-        code = _extract_launch_code(texts)
-        if code:
-            print(f"      [school] ✓ launch code: {code}", flush=True)
-            if not keep_open:
-                try:
-                    br.stop()
-                except Exception:
-                    pass
-            return code
-        await asyncio.sleep(6)
-    print("      [school] no launch code within timeout", flush=True)
-    if not keep_open:
+    # persistent_context=True yields a BrowserContext directly.
+    async with AsyncCamoufox(**kwargs) as ctx:
+        page = await ctx.new_page()
         try:
-            br.stop()
-        except Exception:
-            pass
-    return None
+            if is_gateway(proxy):
+                await apply_gateway_session(ctx, "school-mail")
+            await page.goto(url, wait_until="domcontentloaded")
+            await asyncio.sleep(8)
+            title = await js(page, "document.title", "")
+            cur = await live_url(page)
+            print(f"      [school] page: {title!r} @ {cur[:70]}", flush=True)
+            if any(k in cur for k in ("login.microsoftonline", "login.live", "adfs")) or "sign in" in (title or "").lower():
+                await school_login(page, email, pw)
+            ok = await wait_inbox(page, timeout=60)
+            print(f"      [school] inbox ready: {ok}", flush=True)
+
+            start = time.time()
+            while time.time() - start < timeout:
+                texts = await read_inbox_text(page)
+                code = _extract_launch_code(texts)
+                if code:
+                    print(f"      [school] ✓ launch code: {code}", flush=True)
+                    return code
+                await asyncio.sleep(6)
+            print("      [school] no launch code within timeout", flush=True)
+            return None
+        finally:
+            pass  # context manager closes the browser
 
 
 # ─────────────────────────────────────────────────────────── github signup
 
-async def do_signup(tab, email: str, password: str, username: str,
+async def do_signup(page, email: str, password: str, username: str,
                     dry_run: bool, max_user_tries: int = 6) -> dict:
     """
     Walk https://github.com/signup as far as possible.
 
-    Returns a result dict with `success`, `username`, `stage`, `blocked`, `notes`.
+    Returns a dict with `success`, `username`, `stage`, `blocked`, `notes`.
     Never touches an existing account. On --dry-run it fills and screenshots but
     does not click the final account-creating buttons.
     """
     res: dict = {"success": False, "stage": "start", "blocked": None, "notes": []}
 
-    await tab.get(GITHUB_SIGNUP)
+    await page.goto(GITHUB_SIGNUP, wait_until="domcontentloaded")
     await asyncio.sleep(6)
-    await screenshot(tab, "01_signup")
+    await screenshot(page, "01_signup")
 
     # Network-level block? Report honestly instead of a bogus selector error.
-    blocked = await detect_access_restriction(tab)
+    blocked = await detect_access_restriction(page)
     if blocked:
         res["stage"] = "access_restricted"
         res["blocked"] = blocked
         res["notes"].append("Switch egress IP (different proxy/VPN) and retry; "
                             "GitHub is blocking this network, not our selectors.")
-        await screenshot(tab, "00_access_restricted")
+        await screenshot(page, "00_access_restricted")
         print(f"      [gh] ❌ {blocked}", flush=True)
-        print("      [gh]    this is an IP/network block — retry from another egress", flush=True)
         return res
 
     # ── Step 1: email ──────────────────────────────────────────────
     print("      [gh] step 1/4: email", flush=True)
-    if not await fill_first_input(tab, ['input#email', 'input[name=email]',
-                                        'input[type=email]', 'input[autocomplete=email]'], email):
-        blocked = await detect_access_restriction(tab)
+    if not await fill_first_input(page, ['input#email', 'input[name=email]',
+                                         'input[type=email]', 'input[autocomplete=email]'], email):
+        blocked = await detect_access_restriction(page)
         res["stage"] = "email_input_not_found"
         if blocked:
             res["blocked"] = blocked
-        res["notes"].append(f"url={await js(tab, 'location.href', '')}")
-        await screenshot(tab, "01_email_missing")
+        res["notes"].append(f"url={await live_url(page)}")
+        await screenshot(page, "01_email_missing")
         return res
     res["stage"] = "email_filled"
     await asyncio.sleep(0.5)
 
-    cap = await detect_captcha(tab)
+    cap = await detect_captcha(page)
     if cap:
         res["blocked"] = f"captcha:{cap}"
         res["stage"] = "captcha_after_email"
-        await screenshot(tab, "captcha_email")
+        await screenshot(page, "captcha_email")
         print(f"      [gh] ❌ blocked by {cap} — human required", flush=True)
         return res
 
     if dry_run:
-        await screenshot(tab, "01_email_dryrun")
+        await screenshot(page, "01_email_dryrun")
         res["stage"] = "dry_run_stopped_after_email"
         res["notes"].append("dry-run: stopped before clicking 'Create account'")
         return res
 
-    await robust_click(tab, selector="button[type=submit]") or await _click_any(tab, ["Continue", "Create account", "Sign up"])
+    await click_button(page, ("Continue", "Create account", "Sign up"))
     await asyncio.sleep(5)
-    await screenshot(tab, "02_after_email")
+    await screenshot(page, "02_after_email")
 
-    cap = await detect_captcha(tab)
+    cap = await detect_captcha(page)
     if cap:
         res["blocked"] = f"captcha:{cap}"
         res["stage"] = "captcha_after_email_submit"
-        await screenshot(tab, "captcha_after_email_submit")
+        await screenshot(page, "captcha_after_email_submit")
         print(f"      [gh] ❌ blocked by {cap} — human required", flush=True)
         return res
 
     # ── Step 2: password ───────────────────────────────────────────
     print("      [gh] step 2/4: password", flush=True)
-    if await js(tab, "!!document.querySelector('input[type=password]')", False):
-        if not await fill_first_input(tab, ['input#password', 'input[name=password]',
-                                            'input[type=password]'], password):
+    if await has(page, "input[type=password]"):
+        if not await fill_first_input(page, ['input#password', 'input[name=password]',
+                                             'input[type=password]'], password):
             res["stage"] = "password_input_not_found"
             return res
         res["stage"] = "password_filled"
@@ -602,33 +696,32 @@ async def do_signup(tab, email: str, password: str, username: str,
         res["notes"].append("no password field seen (maybe email-only step)")
 
     if dry_run:
-        await screenshot(tab, "02_password_dryrun")
+        await screenshot(page, "02_password_dryrun")
         res["stage"] = "dry_run_stopped_after_password"
         return res
 
-    await robust_click(tab, selector="button[type=submit]") or await _click_any(tab, ["Continue", "Next"])
+    await click_button(page, ("Continue", "Next"))
     await asyncio.sleep(5)
-    await screenshot(tab, "03_after_password")
+    await screenshot(page, "03_after_password")
 
-    cap = await detect_captcha(tab)
+    cap = await detect_captcha(page)
     if cap:
         res["blocked"] = f"captcha:{cap}"
         res["stage"] = "captcha_after_password"
-        await screenshot(tab, "captcha_after_password")
+        await screenshot(page, "captcha_after_password")
         print(f"      [gh] ❌ blocked by {cap} — human required", flush=True)
         return res
 
     # ── Step 3: username (availability retry) ──────────────────────
     print("      [gh] step 3/4: username", flush=True)
-    if await js(tab, "!!document.querySelector('input#login,input[name=login]')", False):
+    if await has(page, "input#login, input[name=login]"):
         for attempt in range(max_user_tries):
             uname = username if attempt == 0 else gen_username()
-            if not await fill_first_input(tab, ['input#login', 'input[name=login]'], uname):
+            if not await fill_first_input(page, ['input#login', 'input[name=login]'], uname):
                 res["stage"] = "username_input_not_found"
                 return res
             await asyncio.sleep(2)  # let the availability check fire
-            # availability: look for an error hint
-            err = await js(tab, """(()=>{const e=document.querySelector('[aria-live],.error,.flash-error,p.color-fg-danger');
+            err = await js(page, """(()=>{const e=document.querySelector('[aria-live],.error,.flash-error,p.color-fg-danger');
                 return e ? (e.innerText||'').trim() : '';})()""", "")
             taken = bool(err and re.search(r'taken|not available|already', err, re.I))
             if not taken:
@@ -647,30 +740,28 @@ async def do_signup(tab, email: str, password: str, username: str,
         res["username"] = username
 
     if dry_run:
-        await screenshot(tab, "03_username_dryrun")
+        await screenshot(page, "03_username_dryrun")
         res["stage"] = "dry_run_stopped_after_username"
         res["notes"].append("dry-run: stopped before creating the account")
         return res
 
-    await robust_click(tab, selector="button[type=submit]") or await _click_any(tab, ["Continue", "Create account"])
+    await click_button(page, ("Continue", "Create account"))
     await asyncio.sleep(5)
-    await screenshot(tab, "04_after_username")
+    await screenshot(page, "04_after_username")
 
-    cap = await detect_captcha(tab)
+    cap = await detect_captcha(page)
     if cap:
         res["blocked"] = f"captcha:{cap}"
         res["stage"] = "captcha_before_create"
-        await screenshot(tab, "captcha_before_create")
+        await screenshot(page, "captcha_before_create")
         print(f"      [gh] ❌ blocked by {cap} — human required", flush=True)
         return res
 
     # ── Step 4: email verification (8-digit launch code) ───────────
     print("      [gh] step 4/4: email launch code", flush=True)
-    body = (await _page_text(tab) or "").lower()
-    needs_code = "launch code" in body or "verify" in body or "email" in body
-    if needs_code:
-        # Ask GitHub to (re)send, best-effort.
-        code_field = await js(tab, """(()=>{const cands=['input[name=code]','input#code',
+    body = (await _page_text(page) or "").lower()
+    if "launch code" in body or "verify" in body or "email" in body:
+        code_field = await js(page, """(()=>{const cands=['input[name=code]','input#code',
             'input[autocomplete=one-time-code]','input[inputmode=numeric]','input[maxlength="8"]'];
             for(const s of cands){ if(document.querySelector(s)) return s; } return null;})()""", None)
 
@@ -679,31 +770,31 @@ async def do_signup(tab, email: str, password: str, username: str,
         if not code:
             res["stage"] = "launch_code_timeout"
             res["blocked"] = "email_launch_code_not_received"
-            await screenshot(tab, "05_code_timeout")
+            await screenshot(page, "05_code_timeout")
             return res
 
         filled = False
         if code_field:
-            filled = await cdp_type(tab, code_field, code)
+            filled = await type_into(page, code_field, code, "launch-code")
         if not filled:
-            filled = await fill_first_input(tab, ['input[name=code]', 'input#code',
-                                                  'input[autocomplete=one-time-code]',
-                                                  'input[inputmode=numeric]'], code)
+            filled = await fill_first_input(page, ['input[name=code]', 'input#code',
+                                                   'input[autocomplete=one-time-code]',
+                                                   'input[inputmode=numeric]'], code)
         if not filled:
             res["blocked"] = "launch_code_field_not_found"
             res["stage"] = "code_enter_failed"
             res["notes"].append(f"code={code} (enter manually)")
-            await screenshot(tab, "05_code_field_missing")
+            await screenshot(page, "05_code_field_missing")
             return res
         res["notes"].append("launch_code_entered")
         await asyncio.sleep(1)
-        await robust_click(tab, selector="button[type=submit]") or await _click_any(tab, ["Continue", "Verify"])
+        await click_button(page, ("Continue", "Verify"))
         await asyncio.sleep(6)
-        await screenshot(tab, "06_after_code")
+        await screenshot(page, "06_after_code")
 
     # ── done? ──────────────────────────────────────────────────────
-    url = await js(tab, "location.href", "")
-    text = (await _page_text(tab) or "").lower()
+    url = await live_url(page)
+    text = (await _page_text(page) or "").lower()
     if "github.com" in url and ("welcome" in text or "dashboard" in text or url.rstrip("/").endswith("github.com")):
         res["success"] = True
         res["stage"] = "account_created"
@@ -718,59 +809,56 @@ async def do_signup(tab, email: str, password: str, username: str,
 
 # ─────────────────────────────────────────────────────────── github education
 
-async def do_education(tab, email: str, username: str, dry_run: bool) -> dict:
+async def do_education(page, email: str, username: str, dry_run: bool) -> dict:
     """
     Open the Education application and fill what is safe. STOP before any
     attestation/photo step. Never submit an attestation.
     """
     res: dict = {"stage": "start", "filled": [], "needs_human": [], "url": None}
 
-    await tab.get(GITHUB_EDU)
+    await page.goto(GITHUB_EDU, wait_until="domcontentloaded")
     await asyncio.sleep(7)
-    await screenshot(tab, "10_education")
-    res["url"] = await js(tab, "location.href", "")
+    await screenshot(page, "10_education")
+    res["url"] = await live_url(page)
 
-    blocked = await detect_access_restriction(tab)
+    blocked = await detect_access_restriction(page)
     if blocked:
         res["stage"] = "access_restricted"
         res["needs_human"].append(f"{blocked} — switch egress IP and retry.")
         return res
 
-    body = (await _page_text(tab) or "")
+    body = (await _page_text(page) or "")
     low = body.lower()
     if "sign in" in low and "application" not in low:
         res["stage"] = "needs_login"
         res["needs_human"].append("Sign in to the new GitHub account, then re-open the Education form.")
         return res
 
-    # School name / email fields vary; fill best-effort.
     print("      [edu] filling application fields (best-effort)", flush=True)
 
-    # Email field (academic email)
-    if await fill_first_input(tab, ['input[type=email]', 'input[name*=email]',
-                                    'input[id*=email]'], email):
+    if await fill_first_input(page, ['input[type=email]', 'input[name*=email]',
+                                     'input[id*=email]'], email):
         res["filled"].append("email")
 
-    # School name / institution search
-    if await fill_first_input(tab, ['input[name*=school]', 'input[id*=school]',
-                                    'input[placeholder*=school]', 'input[placeholder*=School]'], SCHOOL_NAME):
+    if await fill_first_input(page, ['input[name*=school]', 'input[id*=school]',
+                                     'input[placeholder*=school]', 'input[placeholder*=School]'], SCHOOL_NAME):
         res["filled"].append(f"school={SCHOOL_NAME}")
         await asyncio.sleep(2)
-        # try to pick an autocomplete suggestion containing BINUS
-        picked = await js(tab, """(()=>{const els=[...document.querySelectorAll('li,[role=option]')];
-            const t=els.find(e=>/binus/i.test(e.innerText||'')); if(t){t.click(); return (t.innerText||'').trim();}
-            return '';})()""", "")
-        if picked:
-            res["filled"].append(f"school_pick={picked[:60]}")
+        try:
+            opt = page.locator("li, [role=option]").filter(has_text=re.compile("binus", re.I))
+            if await opt.count():
+                await opt.first.click(timeout=4000)
+                res["filled"].append("school_autocomplete=binus")
+        except Exception:
+            pass
 
     if dry_run:
         res["stage"] = "dry_run_stopped"
         res["needs_human"].append("Review filled fields, then complete manually.")
-        await screenshot(tab, "11_education_dryrun")
+        await screenshot(page, "11_education_dryrun")
         return res
 
-    # Detect the attestation / photo requirement and STOP there.
-    low = (await _page_text(tab) or "").lower()
+    low = (await _page_text(page) or "").lower()
     if any(k in low for k in ("i attest", "attest", "upload", "student id",
                               "proof of enrollment", "enrollment", "school-issued",
                               "photo of", "documentation")):
@@ -778,12 +866,12 @@ async def do_education(tab, email: str, username: str, dry_run: bool) -> dict:
         res["needs_human"].append(
             "Attestation / photo of school ID is required here. This is a human step "
             "(legal attestation + document upload + GitHub's manual review).")
-        await screenshot(tab, "12_attestation_stop")
+        await screenshot(page, "12_attestation_stop")
         return res
 
     res["stage"] = "form_filled_review"
     res["needs_human"].append("Verify fields and click Submit yourself; review is manual.")
-    await screenshot(tab, "13_education_ready")
+    await screenshot(page, "13_education_ready")
     return res
 
 
@@ -814,21 +902,33 @@ def save_account(record: dict) -> None:
 
 def run_check() -> int:
     print("=" * 60)
-    print("  github_farm --check")
+    print("  github_farm --check (Camoufox)")
     print("=" * 60)
     ok = True
 
+    if AsyncCamoufox is None:
+        ok = False
+        print(f"  ❌ camoufox          {_CAMOUFOX_IMPORT_ERROR}")
+    else:
+        try:
+            import camoufox  # noqa
+            print(f"  ✅ camoufox          ({camoufox.__file__})")
+        except Exception:
+            print("  ✅ camoufox          (imported)")
+
     try:
-        import nodriver as uc  # noqa
-        print(f"  ✅ nodriver          ({uc.__file__})")
+        import playwright  # noqa
+        print(f"  ✅ playwright        ({playwright.__file__})")
     except Exception as e:
         ok = False
-        print(f"  ❌ nodriver          {e}")
+        print(f"  ❌ playwright        {e}")
 
-    reader = SCRIPTS / "school_mail_browser.py"
-    print(f"  {'✅' if reader.exists() else '❌'} school mailbox reader  ({reader})")
-    if not reader.exists():
-        ok = False
+    print(f"  {'✅' if CamoufoxProxy is not None else '➖'} camoufox.ip.Proxy   "
+          f"({'available' if CamoufoxProxy is not None else 'fallback to dict'})")
+
+    for modname in ("school_mail_browser", "sheerid_link_finder", "gateway_session"):
+        found = (SCRIPTS / f"{modname}.py").exists()
+        print(f"  {'✅' if found else '➖'} {modname:20s} ({SCRIPTS / (modname + '.py')})")
 
     print(f"  {'✅' if PROFILE_DIR.exists() else '➖'} school profile dir  ({PROFILE_DIR})"
           f"{'' if PROFILE_DIR.exists() else ' (created on first run / needs a manual MFA login once)'}")
@@ -845,8 +945,8 @@ def run_check() -> int:
     print(f"  ℹ️  mailbox URL         {cfg('SCHOOL_MAIL_URL', SCHOOL_MAIL_URL)}")
     print(f"  ℹ️  target signup       {GITHUB_SIGNUP}")
     print(f"  ℹ️  target education    {GITHUB_EDU}")
-
-    print("\n  NOTE: captcha/Arkose and the Education photo+attestation step are NOT automatable.")
+    print("  ℹ️  run with: /home/amen/.local/share/auto-freecf/camoufox-venv/bin/python")
+    print("\n  NOTE: Arkose/CAPTCHA and the Education photo+attestation step are NOT automatable.")
     print("=" * 60)
     return 0 if ok else 1
 
@@ -860,15 +960,25 @@ def build_email(index: int) -> str:
     return f"{BASE_LOCAL}+gh{index}@{SCHOOL_DOMAIN}"
 
 
-async def run(index: int, headless: bool, proxy: str | None, dry_run: bool) -> int:
-    import nodriver as uc
+async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
+              dry_run: bool) -> int:
+    if AsyncCamoufox is None:
+        print("=" * 60, flush=True)
+        print("  ✗ Camoufox is not importable in this interpreter.", flush=True)
+        print(f"    {_CAMOUFOX_IMPORT_ERROR}", flush=True)
+        print("  Run under the camoufox venv:", flush=True)
+        print("    /home/amen/.local/share/auto-freecf/camoufox-venv/bin/python "
+              "scripts/github_farm.py …", flush=True)
+        print("=" * 60, flush=True)
+        return 2
 
     email = build_email(index)
     username = gen_username()
     password = gen_password()
+    chosen_proxy, proxy_src = pick_proxy(proxy, pool, index)
 
     print("=" * 60, flush=True)
-    print("  GITHUB FARM (nodriver / CDP)", flush=True)
+    print("  GITHUB FARM (Camoufox / Playwright)", flush=True)
     print("=" * 60, flush=True)
     print(f"  index     : {index}", flush=True)
     print(f"  email     : {email}", flush=True)
@@ -876,11 +986,14 @@ async def run(index: int, headless: bool, proxy: str | None, dry_run: bool) -> i
     print(f"  password  : {password}", flush=True)
     print(f"  dry-run   : {dry_run}", flush=True)
     print(f"  headless  : {headless}", flush=True)
-    print(f"  proxy     : {proxy or '(none)'}", flush=True)
+    print(f"  egress    : {chosen_proxy or '(direct)'}  [{proxy_src}]", flush=True)
+    print(f"  gateway   : {is_gateway(chosen_proxy)}", flush=True)
     print("-" * 60, flush=True)
 
-    args = [f"--proxy-server={proxy}"] if proxy else None
-    browser = await uc.start(headless=headless, sandbox=False, lang="en-US", browser_args=args)
+    if not headless and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        print("      [!] no DISPLAY found; headed Firefox will fail. "
+              "Use --headless (Xvfb 'virtual') or run under a desktop / xvfb-run.", flush=True)
+
     record = {
         "email": email,
         "username": username,
@@ -888,63 +1001,89 @@ async def run(index: int, headless: bool, proxy: str | None, dry_run: bool) -> i
         "index": index,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dry_run": dry_run,
+        "proxy": chosen_proxy or None,
+        "push_to_note": proxy_src,
         "note": "School mailbox is the ONLY address used (plus-addressing). Does not touch 'Ini-Amin'.",
     }
+
+    kwargs: dict = dict(
+        headless="virtual" if headless else False,  # 'virtual' = Xvfb, avoids headless leaks
+        geoip=True,
+        humanize=True,
+        os="windows",
+    )
+    pd = _proxy_dict(chosen_proxy)
+    if pd:
+        kwargs["proxy"] = pd
+    # Camoufox text-entry logging can leak the launch code; quiet it a touch.
     try:
-        tab = await browser.get(GITHUB_SIGNUP)
-        await asyncio.sleep(6)
+        async with AsyncCamoufox(**kwargs) as browser:
+            page = await browser.new_page()
+            context = page.context
+            if is_gateway(chosen_proxy):
+                await apply_gateway_session(context, email)
+                await apply_gateway_session(page, email)
+                print(f"      📌 Sticky gateway session applied (id={email})", flush=True)
 
-        signup = await do_signup(tab, email, password, username, dry_run)
-        record["signup"] = signup
-        if signup.get("username"):
-            record["username"] = signup["username"]
+            try:
+                await page.goto(GITHUB_SIGNUP, wait_until="domcontentloaded")
+                await asyncio.sleep(6)
 
-        print("\n  --- signup result ---", flush=True)
-        print(f"      success : {signup.get('success')}", flush=True)
-        print(f"      stage   : {signup.get('stage')}", flush=True)
-        print(f"      blocked : {signup.get('blocked')}", flush=True)
-        for n in signup.get("notes", []):
-            print(f"      note    : {n}", flush=True)
+                signup = await do_signup(page, email, password, username, dry_run)
+                record["signup"] = signup
+                if signup.get("username"):
+                    record["username"] = signup["username"]
 
-        edu = {"stage": "skipped", "needs_human": ["Signup did not complete."]}
-        if signup.get("success") or dry_run:
-            edu = await do_education(tab, email, record["username"], dry_run)
-        record["education"] = edu
+                print("\n  --- signup result ---", flush=True)
+                print(f"      success : {signup.get('success')}", flush=True)
+                print(f"      stage   : {signup.get('stage')}", flush=True)
+                print(f"      blocked : {signup.get('blocked')}", flush=True)
+                for n in signup.get("notes", []):
+                    print(f"      note    : {n}", flush=True)
 
-        print("\n  --- education result ---", flush=True)
-        print(f"      stage   : {edu.get('stage')}", flush=True)
-        print(f"      filled  : {', '.join(edu.get('filled', [])) or '(none)'}", flush=True)
-        for h in edu.get("needs_human", []):
-            print(f"      human → : {h}", flush=True)
+                edu = {"stage": "skipped", "needs_human": ["Signup did not complete."]}
+                if signup.get("success") or dry_run:
+                    edu = await do_education(page, email, record["username"], dry_run)
+                record["education"] = edu
 
+                print("\n  --- education result ---", flush=True)
+                print(f"      stage   : {edu.get('stage')}", flush=True)
+                print(f"      filled  : {', '.join(edu.get('filled', [])) or '(none)'}", flush=True)
+                for h in edu.get("needs_human", []):
+                    print(f"      human → : {h}", flush=True)
+
+                save_account(record)
+                return 0 if signup.get("success") or dry_run else 1
+            finally:
+                if not headless:
+                    print("\n  browser left open 8s for inspection…", flush=True)
+                    await asyncio.sleep(8)
+    except Exception as e:  # noqa: BLE001
+        print(f"  ✗ browser/flow error: {type(e).__name__}: {e}", flush=True)
+        record["error"] = f"{type(e).__name__}: {e}"
         save_account(record)
-        return 0 if signup.get("success") or dry_run else 1
-    finally:
-        if not headless:
-            print("\n  browser left open 8s for inspection…", flush=True)
-            await asyncio.sleep(8)
-        try:
-            browser.stop()
-        except Exception:
-            pass
+        return 1
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="GitHub signup + Education application helper (nodriver). "
-                    "Automates form fill + email launch-code; captcha and identity "
-                    "attestation remain human steps.")
+        description="GitHub signup + Education application helper (Camoufox). "
+                    "Automates form fill + email launch-code; Arkose/captcha and "
+                    "identity attestation remain human steps.")
     ap.add_argument("--check", action="store_true", help="check deps + mailbox config, then exit")
     ap.add_argument("--index", type=int, default=1, help="N for raymondi+gh<N>@binus.ac.id")
-    ap.add_argument("--headless", action="store_true", help="run browser headless")
-    ap.add_argument("--proxy", default=None, help="proxy URL, e.g. http://user:pass@host:port")
+    ap.add_argument("--headless", action="store_true", help="run under Xvfb ('virtual') headless")
+    ap.add_argument("--proxy", default=None,
+                    help="proxy URL; supports the KancaHub gateway http://127.0.0.1:8888 (X-Session-ID)")
+    ap.add_argument("--pool", default=None,
+                    help="proxy list file; one chosen per --index for rotation")
     ap.add_argument("--dry-run", action="store_true",
                     help="walk the signup flow, screenshot, but do not submit/create")
     args = ap.parse_args()
 
     if args.check:
         return run_check()
-    return asyncio.run(run(args.index, args.headless, args.proxy, args.dry_run))
+    return asyncio.run(run(args.index, args.headless, args.proxy, args.pool, args.dry_run))
 
 
 if __name__ == "__main__":

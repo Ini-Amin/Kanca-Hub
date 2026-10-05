@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 """
-Automated SheerID verification link finder for school mailboxes (nodriver).
+Automated SheerID verification link finder from school mailbox via CAMOUFOX (Firefox anti-detect).
 
-When SheerID verifies by email ('emailLoop'), it sends a verification link to
-the school mailbox:
-    https://services.sheerid.com/verify/<programId>/?verificationId=<token>
-    (or ?emailToken=<token>)
+Searches Outlook Web (binus.ac.id / M365) for SheerID verification messages,
+extracts and unwraps the real SheerID verification URL (handling Microsoft Defender
+SafeLinks), and optionally navigates to it to proceed with verification.
 
-In Outlook Web (BINUS and M365 tenants), these links are often rewritten by
-Microsoft Defender SafeLinks (https://*.safelinks.protection.outlook.com/?url=...).
-
-This tool:
-1. Opens Outlook Web with the persisted school profile (~/.config/auto-freecf/school-profile).
-2. Scans/searches for SheerID verification messages in the mailbox.
-3. Opens the newest SheerID message, extracts and unwraps the real SheerID verification link.
-4. Optionally (--open) navigates to the verification link and reports the resulting page state.
+Features:
+  - Camoufox Firefox anti-detect engine with geoip, humanize, and Windows fingerprinting
+  - Persistent browser profile (~/.config/auto-freecf/camoufox-school) so M365 session survives
+  - Interactive first-run login mode (--login) for initial MFA / session establishment
+  - Local PetaniProxy gateway support (--proxy, --pool) with X-Session-ID sticky sessions
+  - Microsoft Defender SafeLinks unwrapping (apc01.safelinks.protection.outlook.com)
+  - Token extraction (verificationId / emailToken) and URL synthesis
 
 Usage:
-    python3 scripts/sheerid_link_finder.py                     # Find and print link
-    python3 scripts/sheerid_link_finder.py --open              # Find, print, and navigate
-    python3 scripts/sheerid_link_finder.py --json              # Output JSON format
-    python3 scripts/sheerid_link_finder.py --timeout 120       # Custom timeout
+    # First time: log into school Microsoft account interactively to persist session
+    python3 scripts/sheerid_link_finder.py --login
+
+    # Find and extract newest SheerID verification link:
+    python3 scripts/sheerid_link_finder.py
+
+    # Find link and navigate to it (proceed with verification):
+    python3 scripts/sheerid_link_finder.py --open
+
+    # JSON output for automated pipelines:
+    python3 scripts/sheerid_link_finder.py --json
+
+    # Via PetaniProxy local gateway:
+    python3 scripts/sheerid_link_finder.py --proxy http://127.0.0.1:8888
 """
 
 from __future__ import annotations
@@ -34,16 +42,28 @@ import sys
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-import nodriver as uc
+from camoufox.async_api import AsyncCamoufox
 
-PROFILE_DIR = Path.home() / ".config" / "auto-freecf" / "school-profile"
+# Ensure scripts dir is on sys.path
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+try:
+    from camoufox_helpers import pick_proxy, setup_camoufox_gateway, to_camoufox_proxy
+except ImportError:
+    def to_camoufox_proxy(p): return None
+    def pick_proxy(proxy=None, pool_path=None, index=0): return proxy
+    async def setup_camoufox_gateway(ctx, p, sid=None): return False
+
+DEFAULT_PROFILE_DIR = Path.home() / ".config" / "auto-freecf" / "camoufox-school"
 MAIL_URL = "https://outlook.office.com/mail/"
 
 
-def _load_env() -> dict:
-    env = {}
+def _load_env() -> dict[str, str]:
+    env: dict[str, str] = {}
     p = Path.home() / ".config" / "auto-freecf" / ".env"
     if p.exists():
         for line in p.read_text(encoding="utf-8").splitlines():
@@ -59,79 +79,6 @@ _ENV = _load_env()
 
 def cfg(key: str, default: str = "") -> str:
     return os.environ.get(key) or _ENV.get(key, default)
-
-
-async def _js(tab, expr: str, default=None):
-    try:
-        r = await tab.evaluate(expr, return_by_value=True)
-        if r is not None and r.__class__.__name__ == "RemoteObject":
-            r = getattr(r, "value", None)
-        if isinstance(r, dict) and "value" in r:
-            r = r["value"]
-        return default if r is None else r
-    except Exception:
-        return default
-
-
-async def _maybe_click(tab, text: str, timeout: float = 3.0) -> bool:
-    try:
-        el = await tab.find(text, best_match=True, timeout=timeout)
-        if el:
-            await el.click()
-            return True
-    except Exception:
-        pass
-    return False
-
-
-async def do_login(tab, email: str, password: str) -> None:
-    """Walk Microsoft login flow if profile session expired."""
-    print("      [school] completing Microsoft login…", flush=True)
-    # 1. Email input
-    for _ in range(20):
-        if await _js(tab, "!!document.querySelector('input[type=email],input[name=loginfmt]')", False):
-            break
-        await asyncio.sleep(1)
-    await _js(tab, """(()=>{const e=document.querySelector('input[type=email],input[name=loginfmt]');
-        if(!e) return 0; e.focus();
-        const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-        s.call(e,%s); e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s}));
-        return 1;})()""" % (json.dumps(email), json.dumps(email)), 0)
-    await asyncio.sleep(0.5)
-    await _maybe_click(tab, "Next")
-    await asyncio.sleep(4)
-
-    # 2. Password input
-    for _ in range(20):
-        if await _js(tab, "!!document.querySelector('input[type=password],input[name=passwd]')", False):
-            break
-        await asyncio.sleep(1)
-    await _js(tab, """(()=>{const e=document.querySelector('input[type=password],input[name=passwd]');
-        if(!e) return 0; e.focus();
-        const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-        s.call(e,%s); e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s}));
-        return 1;})()""" % (json.dumps(password), json.dumps(password)), 0)
-    await asyncio.sleep(0.5)
-    await _maybe_click(tab, "Sign in")
-    await asyncio.sleep(6)
-
-    # 3. Stay signed in
-    for label in ("Yes", "No"):
-        if await _maybe_click(tab, label, timeout=4):
-            print(f"      [school] answered '{label}' to stay-signed-in", flush=True)
-            break
-    await asyncio.sleep(6)
-
-
-async def wait_inbox(tab, timeout: float = 60) -> bool:
-    """Wait until Outlook Web inbox view is ready."""
-    for _ in range(int(timeout)):
-        u = await _js(tab, "location.href", "")
-        if "outlook" in u and ("mail" in u or "owa" in u):
-            if await _js(tab, "!!document.querySelector('[role=main],[aria-label*=Message],div[role=list]')", False):
-                return True
-        await asyncio.sleep(1)
-    return False
 
 
 def unwrap_safelink(url: str) -> str:
@@ -186,179 +133,243 @@ def extract_sheerid_link(content: str) -> tuple[Optional[str], Optional[str]]:
         m_tok = re.search(pat, content, re.IGNORECASE)
         if m_tok:
             tok = m_tok.group(1)
-            # Default K12 SheerID program ID template
             constructed = f"https://services.sheerid.com/verify/68d47554aa292d20b9bec8f7/?{param}={tok}"
             return constructed, tok
 
     return None, None
 
 
-async def get_sheerid_message_items(tab) -> list[dict]:
-    """Find visible SheerID message items in the conversation list."""
-    js_code = """
-    (() => {
-        const rows = [];
-        const cands = document.querySelectorAll('[aria-label*="SheerID" i], [aria-label*="verification" i]');
-        for (let i = 0; i < cands.length; i++) {
-            const el = cands[i];
-            const aria = (el.getAttribute('aria-label') || '').trim();
-            if (aria.toLowerCase().includes('sheerid')) {
-                rows.push({
-                    index: i,
-                    aria: aria.replace(/\\n/g, ' ').slice(0, 250),
-                    text: (el.innerText || '').replace(/\\n/g, ' ').slice(0, 150)
-                });
-            }
-        }
-        return JSON.stringify(rows);
-    })()
-    """
-    raw = await _js(tab, js_code, "[]")
+async def do_login(page: Any, email: str, password: str) -> bool:
+    """Walk Microsoft login flow in Camoufox."""
+    print("      [school] completing Microsoft login in Camoufox…", flush=True)
     try:
-        return json.loads(raw) if isinstance(raw, str) else (raw or [])
-    except Exception:
-        return []
+        # 1. Email step
+        email_input = page.locator('input[type=email], input[name=loginfmt]').first
+        await email_input.wait_for(timeout=20000)
+        await email_input.fill(email)
+        await asyncio.sleep(0.5)
+
+        next_btn = page.locator('input[type=submit], button[type=submit], button:has-text("Next")').first
+        await next_btn.click(timeout=5000)
+        await asyncio.sleep(4)
+
+        # 2. Password step
+        pw_input = page.locator('input[type=password], input[name=passwd]').first
+        await pw_input.wait_for(timeout=20000)
+        await pw_input.fill(password)
+        await asyncio.sleep(0.5)
+
+        submit_btn = page.locator('input[type=submit], button[type=submit], button:has-text("Sign in")').first
+        await submit_btn.click(timeout=5000)
+        await asyncio.sleep(5)
+
+        # 3. Stay signed in?
+        stay_btn = page.locator('input[type=submit][value="Yes"], button:has-text("Yes"), input[type=submit][value="No"]').first
+        if await stay_btn.count() > 0 and await stay_btn.is_visible():
+            await stay_btn.click(timeout=5000)
+            print("      [school] answered 'Stay signed in'", flush=True)
+
+        await asyncio.sleep(5)
+        return True
+    except Exception as e:
+        print(f"      [school] login helper notice: {e}", flush=True)
+        return False
 
 
-async def open_message_and_extract(tab, item_index: int) -> tuple[Optional[str], Optional[str], str]:
-    """Click a message row in Outlook Web and extract any SheerID link in the reading pane."""
-    click_code = f"""
-    (() => {{
-        const cands = document.querySelectorAll('[aria-label*="SheerID" i], [aria-label*="verification" i]');
-        const target = cands[{item_index}];
-        if (target) {{
-            target.click();
-            return target.getAttribute('aria-label') || '';
-        }}
-        return '';
-    }})()
-    """
-    aria = await _js(tab, click_code, "")
-    await asyncio.sleep(3.5)
-
-    # Scrape links and reading pane HTML
-    read_code = """
-    (() => {
-        const hrefs = [];
-        for (const a of document.querySelectorAll('a[href]')) {
-            const h = a.href || '';
-            if (h.includes('sheerid') || h.includes('safelinks') || h.includes('verificationId') || h.includes('emailToken')) {
-                hrefs.push(h);
-            }
-        }
-        const pane = document.querySelector('[role=main], [aria-label*="Reading Pane" i], div.ItemPartView') || document.body;
-        return JSON.stringify({
-            hrefs: hrefs,
-            html: pane ? pane.innerHTML : ''
-        });
-    })()
-    """
-    raw = await _js(tab, read_code, "{}")
-    try:
-        data = json.loads(raw) if isinstance(raw, str) else (raw or {})
-    except Exception:
-        data = {}
-
-    # Check extracted hrefs first
-    for href in data.get("hrefs", []):
-        u, tok = extract_sheerid_link(href)
-        if u:
-            return u, tok, str(aria)
-
-    # Check reading pane HTML body
-    u, tok = extract_sheerid_link(data.get("html", ""))
-    return u, tok, str(aria)
+async def wait_inbox(page: Any, timeout: float = 60.0) -> bool:
+    """Wait until Outlook Web inbox view is ready."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        u = page.url or ""
+        if "outlook" in u and ("mail" in u or "owa" in u):
+            # Check for standard inbox indicators
+            loc = page.locator('[role=main], [aria-label*="Message" i], div[role=listbox], div.customScrollBar')
+            if await loc.count() > 0:
+                return True
+        await asyncio.sleep(1)
+    return False
 
 
-async def check_resulting_page(tab) -> dict:
-    """Inspect the page state after navigating to the SheerID verification link."""
+async def scan_and_extract_link(page: Any) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Scan visible SheerID messages, open reading pane, and extract link."""
+    # Find message items with SheerID or verification in aria-label
+    rows = page.locator('[aria-label*="SheerID" i], [aria-label*="verification" i]')
+    count = await rows.count()
+    if count == 0:
+        return None, None, None
+
+    # Collect row metadata and prioritize action links over general support replies
+    items = []
+    for i in range(count):
+        row = rows.nth(i)
+        aria = await row.get_attribute("aria-label") or ""
+        priority = 2
+        if any(k in aria.lower() for k in ("finish verifying", "get verified", "verify your")):
+            priority = 0
+        elif "verification" in aria.lower():
+            priority = 1
+        items.append((priority, i, aria))
+
+    items.sort(key=lambda x: x[0])
+
+    for _, idx, aria in items:
+        try:
+            target_row = rows.nth(idx)
+            await target_row.click(timeout=4000)
+            await asyncio.sleep(3.5)
+
+            # 1. Check all anchor tags inside reading pane / page
+            links = await page.locator('a[href]').all()
+            for link_el in links:
+                try:
+                    href = await link_el.get_attribute("href") or ""
+                    if any(k in href.lower() for k in ("sheerid", "safelinks", "verificationid", "emailtoken")):
+                        u, tok = extract_sheerid_link(href)
+                        if u:
+                            return u, tok, aria
+                except Exception:
+                    continue
+
+            # 2. Check innerHTML of reading pane
+            pane = page.locator('[role=main], [aria-label*="Reading Pane" i], div.ItemPartView').first
+            if await pane.count() > 0:
+                html = await pane.inner_html()
+                u, tok = extract_sheerid_link(html)
+                if u:
+                    return u, tok, aria
+        except Exception:
+            continue
+
+    return None, None, None
+
+
+async def check_resulting_page(page: Any) -> dict[str, str]:
+    """Inspect page state after navigating to SheerID verification link."""
     await asyncio.sleep(5)
-    js_code = """
-    (() => {
-        const text = (document.body ? document.body.innerText : '') || '';
-        const title = document.title || '';
-        const u = location.href || '';
-        let status = 'loaded';
-        if (/verified|approved|success|congratulations/i.test(text)) status = 'verified';
-        else if (/upload|document|documentation/i.test(text)) status = 'document_upload_required';
-        else if (/pending|review/i.test(text)) status = 'under_review';
-        else if (/expired|invalid|reached the max/i.test(text)) status = 'expired_or_invalid';
-        return JSON.stringify({
-            status: status,
-            title: title,
-            url: u,
-            snippet: text.slice(0, 200).replace(/\\n/g, ' ')
-        });
-    })()
-    """
-    raw = await _js(tab, js_code, "{}")
     try:
-        return json.loads(raw) if isinstance(raw, str) else {"status": "unknown"}
-    except Exception:
-        return {"status": "unknown"}
+        title = await page.title()
+        url = page.url
+        text = await page.evaluate("() => document.body ? document.body.innerText.slice(0, 300) : ''")
+        status = "loaded"
+        if re.search(r'verified|approved|success|congratulations', text, re.I):
+            status = "verified"
+        elif re.search(r'upload|document|documentation', text, re.I):
+            status = "document_upload_required"
+        elif re.search(r'pending|review', text, re.I):
+            status = "under_review"
+        elif re.search(r'expired|invalid|reached the max', text, re.I):
+            status = "expired_or_invalid"
+
+        return {
+            "status": status,
+            "title": title,
+            "url": url,
+            "snippet": text.replace("\n", " ").strip(),
+        }
+    except Exception as e:
+        return {"status": "unknown", "error": str(e)}
 
 
-async def find_sheerid_link(
+async def run_sheerid_finder(
     timeout: int = 180,
     open_link: bool = False,
     headless: bool = False,
-) -> dict:
-    """Main flow: open Outlook Web, search for SheerID message, extract and optionally open."""
+    login_mode: bool = False,
+    proxy_url: Optional[str] = None,
+    profile_dir: Path = DEFAULT_PROFILE_DIR,
+) -> dict[str, Any]:
+    """Execute SheerID link search in Camoufox."""
     email = cfg("SCHOOL_EMAIL")
     pw = cfg("SCHOOL_MAIL_PASSWORD")
     url = cfg("SCHOOL_MAIL_URL", MAIL_URL)
 
-    if not email:
-        return {"success": False, "error": "SCHOOL_EMAIL not configured in ~/.config/auto-freecf/.env"}
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    proxy_dict = to_camoufox_proxy(proxy_url)
 
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    browser = await uc.start(headless=headless, sandbox=False, user_data_dir=str(PROFILE_DIR))
-    result = {"success": False, "url": None, "token": None, "source_subject": None}
+    launch_kw: dict[str, Any] = {
+        "headless": "virtual" if headless else False,
+        "geoip": True,
+        "humanize": True,
+        "os": "windows",
+        "persistent_context": True,
+        "user_data_dir": str(profile_dir),
+    }
+    if proxy_dict:
+        launch_kw["proxy"] = proxy_dict
 
-    try:
-        tab = await browser.get(url)
-        await asyncio.sleep(6)
+    print(f"      [camoufox] starting Camoufox (profile={profile_dir})…", flush=True)
 
-        # Login handler if session expired
-        cur = await _js(tab, "location.href", "")
-        title = await _js(tab, "document.title", "")
-        if any(k in cur for k in ("login.microsoftonline", "login.live", "adfs")) or "sign in" in (title or "").lower():
-            if pw:
-                await do_login(tab, email, pw)
-            else:
-                result["error"] = "Session expired and SCHOOL_MAIL_PASSWORD not set"
-                return result
+    result: dict[str, Any] = {
+        "success": False,
+        "url": None,
+        "token": None,
+        "source_subject": None,
+    }
 
-        ready = await wait_inbox(tab, timeout=45)
-        if not ready:
-            result["error"] = f"Inbox not ready within timeout (url={await _js(tab, 'location.href', '')})"
+    async with AsyncCamoufox(**launch_kw) as context:
+        # With persistent_context=True, __aenter__ returns BrowserContext
+        page = context.pages[0] if context.pages else await context.new_page()
+
+        # Setup sticky session if running through local gateway
+        if proxy_url:
+            sid = email or "school-mailbox"
+            await setup_camoufox_gateway(context, proxy_url, sid)
+
+        print(f"      [camoufox] opening {url}…", flush=True)
+        await page.goto(url, wait_until="domcontentloaded")
+        await asyncio.sleep(5)
+
+        # Handle interactive login mode
+        if login_mode:
+            print("\n" + "=" * 65)
+            print("🔑 INTERACTIVE LOGIN MODE (Camoufox Persistent Profile)")
+            print(f"   Profile directory: {profile_dir}")
+            print("   Please complete your Microsoft / BINUS login and MFA.")
+            print("   Press Enter in this terminal when your inbox is open.")
+            print("=" * 65 + "\n", flush=True)
+
+            if email and pw and ("login" in page.url.lower() or "sign in" in (await page.title()).lower()):
+                await do_login(page, email, pw)
+
+            # Wait for user confirmation in interactive mode
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, input, "Press Enter after you see your Outlook Inbox: ")
+            except (EOFError, KeyboardInterrupt):
+                pass
+
+            ready = await wait_inbox(page, timeout=15)
+            print(f"      [school] inbox ready: {ready}")
+            print(f"      [school] session saved to {profile_dir}")
+            result["success"] = ready
+            result["message"] = "Login completed and session persisted"
             return result
 
+        # Normal automated run
+        curr_url = page.url or ""
+        curr_title = await page.title()
+        if any(k in curr_url for k in ("login.microsoftonline", "login.live", "adfs")) or "sign in" in curr_title.lower():
+            if pw and email:
+                await do_login(page, email, pw)
+            else:
+                result["error"] = ("Session not logged in. Run with '--login' first to establish your "
+                                   "persistent Camoufox profile.")
+                return result
+
+        ready = await wait_inbox(page, timeout=45)
+        if not ready:
+            result["error"] = f"Inbox not ready within timeout (url={page.url})"
+            return result
+
+        print("      [school] inbox loaded; scanning for SheerID verification messages…", flush=True)
         deadline = time.time() + timeout
-        poll_count = 0
-
         while time.time() < deadline:
-            poll_count += 1
-            items = await get_sheerid_message_items(tab)
-
-            # Sort items to prioritize active verification / action messages over support replies
-            items.sort(
-                key=lambda x: (
-                    0 if any(k in x.get("aria", "").lower() for k in ("finish verifying", "get verified", "verify your"))
-                    else (1 if "verification" in x.get("aria", "").lower() else 2)
-                )
-            )
-
-            for item in items:
-                link, tok, aria = await open_message_and_extract(tab, item["index"])
-                if link:
-                    result["success"] = True
-                    result["url"] = link
-                    result["token"] = tok
-                    result["source_subject"] = aria
-                    break
-
-            if result["success"]:
+            link, tok, aria = await scan_and_extract_link(page)
+            if link:
+                result["success"] = True
+                result["url"] = link
+                result["token"] = tok
+                result["source_subject"] = aria
                 break
 
             await asyncio.sleep(5)
@@ -369,26 +380,38 @@ async def find_sheerid_link(
 
         # Optional: open verification link and report destination state
         if open_link and result.get("url"):
-            print(f"      [sheerid] navigating to verification link: {result['url'][:80]}…", flush=True)
-            await tab.get(result["url"])
-            state = await check_resulting_page(tab)
+            target_link = result["url"]
+            print(f"      [sheerid] navigating to verification link: {target_link[:80]}…", flush=True)
+            await page.goto(target_link, wait_until="domcontentloaded")
+            state = await check_resulting_page(page)
             result["page_state"] = state
-            await asyncio.sleep(4)
+            await asyncio.sleep(2)
 
         return result
-    finally:
-        browser.stop()
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Automated SheerID verification link finder from school mailbox")
+    ap = argparse.ArgumentParser(description="Automated SheerID verification link finder via Camoufox")
     ap.add_argument("--timeout", type=int, default=180, help="polling timeout in seconds (default: 180)")
     ap.add_argument("--open", action="store_true", help="navigate to the link and inspect resulting page")
     ap.add_argument("--json", action="store_true", help="output result in JSON format")
-    ap.add_argument("--headless", action="store_true", help="run browser in headless mode")
+    ap.add_argument("--login", action="store_true", help="interactive mode to complete first-time login")
+    ap.add_argument("--headless", action="store_true", help="run browser in virtual headless mode (Xvfb)")
+    ap.add_argument("--proxy", default=None, help="proxy URL (e.g. http://127.0.0.1:8888)")
+    ap.add_argument("--pool", default=None, help="proxy pool file path")
+    ap.add_argument("--profile-dir", default=str(DEFAULT_PROFILE_DIR), help="Camoufox persistent profile path")
     args = ap.parse_args()
 
-    res = asyncio.run(find_sheerid_link(timeout=args.timeout, open_link=args.open, headless=args.headless))
+    effective_proxy = pick_proxy(proxy=args.proxy, pool_path=args.pool)
+
+    res = asyncio.run(run_sheerid_finder(
+        timeout=args.timeout,
+        open_link=args.open,
+        headless=args.headless,
+        login_mode=args.login,
+        proxy_url=effective_proxy,
+        profile_dir=Path(args.profile_dir),
+    ))
 
     if args.json:
         print(json.dumps(res, indent=2))
@@ -402,6 +425,10 @@ def main():
             if res.get("page_state"):
                 ps = res["page_state"]
                 print(f"   Status  : {ps.get('status')} ({ps.get('title')})")
+                if ps.get("snippet"):
+                    print(f"   Snippet : {ps.get('snippet')[:120]}…")
+            if res.get("message"):
+                print(f"   Note    : {res.get('message')}")
             print("=" * 60 + "\n")
         else:
             print(f"\n❌ Error: {res.get('error')}\n", file=sys.stderr)
