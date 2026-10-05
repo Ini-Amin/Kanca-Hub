@@ -68,6 +68,17 @@ def devices() -> list[str]:
     return [l.split("\t")[0] for l in out.splitlines()[1:] if "\t" in l and l.strip()]
 
 
+def _devtools_socket_present(serial: str, sock: str) -> bool:
+    """True if the browser's devtools abstract socket exists on the device.
+
+    A stale/old Chrome process may be running WITHOUT this socket, so a plain
+    launch can leave the adb forward pointing at nothing. Checking the socket
+    lets us force-stop + relaunch instead of silently failing.
+    """
+    out = adb("-s", serial, "shell", "cat /proc/net/unix", timeout=15)
+    return sock in out
+
+
 def preflight(pkg: str) -> str:
     if not devices():
         print("✗ No Android device connected.")
@@ -76,11 +87,32 @@ def preflight(pkg: str) -> str:
         sys.exit(2)
     serial = devices()[0]
     adb("forward", "--remove-all", timeout=10)
-    # launch browser
-    adb("-s", serial, "shell", "monkey", "-p", pkg, "-c",
-        "android.intent.category.LAUNCHER", "1", timeout=20)
-    time.sleep(3)
     sock = PKG_SOCKETS.get(pkg, "chrome_devtools_remote")
+
+    # Launch the browser and make sure its devtools socket is actually up. A
+    # device that already had Chrome running stale can leave us with no socket,
+    # so we force-stop + relaunch a few times before giving up.
+    launched = False
+    for attempt in range(1, 4):
+        if attempt > 1 or not _devtools_socket_present(serial, sock):
+            adb("-s", serial, "shell", "am", "force-stop", pkg, timeout=15)
+            time.sleep(1)
+        adb("-s", serial, "shell", "monkey", "-p", pkg, "-c",
+            "android.intent.category.LAUNCHER", "1", timeout=20)
+        # poll for the socket for ~10s
+        for _ in range(5):
+            time.sleep(2)
+            if _devtools_socket_present(serial, sock):
+                launched = True
+                break
+        if launched:
+            break
+        print(f"  (devtools socket not up yet; retry {attempt}/3)")
+    if not launched:
+        print("✗ The phone's browser is not exposing a devtools socket.")
+        print(f"  Open {pkg} on the phone once, then re-run.")
+        sys.exit(2)
+
     adb("-s", serial, "forward", f"tcp:{CDP_PORT}", f"localabstract:{sock}", timeout=15)
     # verify CDP
     for i in range(6):
@@ -101,7 +133,16 @@ def preflight(pkg: str) -> str:
 class CDP:
     def __init__(self, url: str):
         from websocket import create_connection
-        self.ws = create_connection(url, timeout=30)
+        # Modern Chrome rejects any WebSocket whose request carries an Origin
+        # header unless it was launched with --remote-allow-origins. websocket-
+        # client sends Origin by default, so the handshake 403s on a phone's
+        # Chrome 100+. Suppressing the Origin header makes Chrome accept it.
+        # Fall back to the old call if the installed websocket-client is too old
+        # to know the suppress_origin kwarg.
+        try:
+            self.ws = create_connection(url, timeout=30, suppress_origin=True)
+        except TypeError:
+            self.ws = create_connection(url, timeout=30)
         self._id = 0
         self.send("Page.enable")
         self.send("Runtime.enable")
