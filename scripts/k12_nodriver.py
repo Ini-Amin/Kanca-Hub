@@ -650,35 +650,47 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
             await click_continue(tab)
             await asyncio.sleep(4)
 
-        # OTP — wait for the field, submit, then CONFIRM it was accepted (field
-        # gone or URL changed) before moving on. This prevents the bulk race where
-        # the flow clicks Continue before the code is consumed.
+        # OTP — find the field, fill it with cdp_type (React-safe: focus +
+        # Ctrl+A/Delete + Input.insertText), VERIFY it holds the code, and only
+        # then click Continue. Never submit an empty code.
         print("[4/6] Waiting for OTP from relay…", flush=True)
         otp = await wait_for_otp(jwt, timeout=180)
         if otp:
-            # ensure the OTP input exists first
-            for _ in range(20):
-                if await js(tab, "!!document.querySelector('input[autocomplete=one-time-code],input[name=code],input[type=text],input[type=tel],input[type=number]')", False):
+            # wait for an OTP input to exist
+            otp_sel = None
+            for _ in range(25):
+                otp_sel = await js(tab, """(()=>{
+                    const cands=['input[autocomplete=one-time-code]','input[name=code]',
+                      'input[name=otp]','input[inputmode=numeric]','input[type=number]','input[type=tel]'];
+                    for(const s of cands){ const e=document.querySelector(s);
+                      if(e && e.getBoundingClientRect().width>0) return s; }
+                    const els=[...document.querySelectorAll('input')].filter(e=>{
+                      const t=(e.type||'').toLowerCase(); const r=e.getBoundingClientRect();
+                      return r.width>0 && ['text','number','tel'].includes(t); });
+                    return els[0] ? null : null;})()""", None)
+                if otp_sel:
                     break
                 await asyncio.sleep(1)
-            ok = await js(tab, """
-                (function(){
-                  const v=%s;
-                  const els=[...document.querySelectorAll('input')];
-                  const ti=els.find(e=>['text','number','tel'].includes((e.type||'').toLowerCase())
-                      || e.autocomplete==='one-time-code' || ['code','otp'].includes(e.name)) || els[0];
-                  if(!ti) return false;
-                  ti.focus();
-                  const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
-                  if(setter) setter.call(ti,v); else ti.value=v;
-                  ti.dispatchEvent(new InputEvent('input',{bubbles:true,data:v,inputType:'insertText'}));
-                  ti.dispatchEvent(new Event('change',{bubbles:true}));
-                  return ti.value===v;
-                })()
-            """ % json.dumps(otp), False)
-            await asyncio.sleep(1)
-            await click_continue(tab)
-            print(f"      [+] OTP submitted ({bool(ok)}); waiting for acceptance…", flush=True)
+            if not otp_sel:
+                otp_sel = "input[type=text],input[type=number],input[type=tel]"
+
+            typed = False
+            for attempt in range(4):
+                typed = await cdp_type(tab, otp_sel, otp)
+                val = await js(tab, f"(()=>{{const e=document.querySelector({json.dumps(otp_sel)});return e?e.value:'';}})()", "")
+                if str(val).strip() == str(otp).strip():
+                    typed = True
+                    break
+                print(f"      [otp] attempt {attempt+1}: field={val!r}, retrying…", flush=True)
+                await asyncio.sleep(1)
+
+            if not typed:
+                print("      ✗ OTP field could not be filled — NOT submitting (avoids the empty-code error)", flush=True)
+            else:
+                print(f"      [+] OTP typed ok ({otp}); submitting…", flush=True)
+                await asyncio.sleep(0.5)
+                await click_continue(tab)
+
             # wait until we leave the OTP screen (code consumed)
             consumed = False
             for _ in range(40):
