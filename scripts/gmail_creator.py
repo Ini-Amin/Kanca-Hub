@@ -603,6 +603,7 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
     record: Optional[dict] = None
     status = "failed"
     reached_password = False
+    last_step = "start"
     try:
         browser = await uc.start(
             headless=args.headless,
@@ -623,6 +624,7 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
         cur = await wait_state(tab, {"name"})
         if cur != "name":
             raise FlowError(f"name step not reached (state={cur})")
+        last_step = "name"
         await type_into(tab, "input[name=firstName]", first)
         if last:
             await type_into(tab, "input[name=lastName]", last)
@@ -640,6 +642,7 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
                     "or (c) try again later from a cleaner IP with fewer attempts."
                 )
             raise FlowError(f"birthday step not reached (state={cur})")
+        last_step = "birthday"
         if not await set_field(tab, "#month", month, datetime(2000, month, 1).strftime("%B")):
             log("  warning: month field could not be set")
         await type_into(tab, "#day", str(day))
@@ -656,6 +659,7 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
             cur = await wait_state(tab, {"username"}, 10)
         if cur != "username":
             raise FlowError(f"username step not reached (state={cur})")
+        last_step = "username"
         for attempt in range(4):
             await type_into(tab, "input[name=Username]", username)
             await next_step(tab)
@@ -675,6 +679,7 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
             raise FlowError("could not find a free username")
 
         # Step 4: password
+        last_step = "password"
         await type_into(tab, "input[name=Passwd]", password)
         await type_into(tab, "input[name=PasswdAgain]", password)
         reached_password = True
@@ -723,7 +728,7 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
     if reached_password:
         record = {"email": email, "password": password, "created_at": utcnow(), "status": status}
     else:
-        log("  never got past the username step; nothing saved")
+        log(f"  stopped before the password step (last step reached: {last_step}); nothing saved")
     return record
 
 

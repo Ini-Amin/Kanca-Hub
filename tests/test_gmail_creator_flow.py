@@ -135,6 +135,37 @@ class TestGmailCreatorFlow(unittest.TestCase):
         tab_gets = [call[1] for call in self.call_order if call[0] == "tab.get"]
         self.assertEqual(tab_gets, [], "warm_session should not navigate when warm=False")
 
+    def test_furthest_step_reported_on_failure(self):
+        """When phone-gated after the name step, log shows the actual step reached."""
+        args = argparse.Namespace(
+            headless=True,
+            use_ua_file=False,
+            warm=False,
+            reuse_profile=None,
+            random_password=False,
+            password="SecretPassword123!",
+        )
+
+        logs: list[str] = []
+        state_sequence = iter(["name", "phone"])
+
+        async def fake_wait_state(tab, expected, timeout=10):
+            return next(state_sequence)
+
+        async def run_test():
+            with patch("scripts.gmail_creator.log", side_effect=logs.append), \
+                 patch("scripts.gmail_creator.sleep", new=AsyncMock()), \
+                 patch("scripts.gmail_creator.type_into", new=AsyncMock(return_value=True)), \
+                 patch("scripts.gmail_creator.next_step", new=AsyncMock(return_value=True)), \
+                 patch("scripts.gmail_creator.wait_state", new=AsyncMock(side_effect=fake_wait_state)):
+                return await create_one(self.mock_uc, self.st, args, proxy=None, chrome=None)
+
+        asyncio.run(run_test())
+
+        logged_text = "\n".join(logs)
+        self.assertIn("last step reached: name", logged_text)
+        self.assertNotIn("never got past the username step", logged_text)
+
 
 if __name__ == "__main__":
     unittest.main()
