@@ -222,6 +222,20 @@ def _count_lines(p: Path) -> int:
 
 # ═══════════════════════════════════════════════════════════════ doctor
 
+def cmd_adb(a) -> int:
+    """Android/ADB helper (connect a phone for trusted Google signups)."""
+    py = pick_python()
+    tool = AUTO_FREECF / "scripts" / "adb_tool.py"
+    if not tool.exists():
+        print(col("red", "✗ adb_tool.py not found"))
+        return 1
+    sub = getattr(a, "adb_cmd", None) or "status"
+    cmd = [py, str(tool), sub]
+    if sub == "connect" and getattr(a, "addr", None):
+        cmd.append(a.addr)
+    return run(cmd, cwd=AUTO_FREECF)
+
+
 def cmd_doctor(_a) -> int:
     banner("KancaHub doctor")
     py = pick_python()
@@ -1484,6 +1498,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="group")
     sub.add_parser("doctor", help="health + dependency check across all tools, services & proxies")
     sub.add_parser("beginner", help="guided, plain-English mode — start here if you're new")
+    # ---- adb (Android device for trusted Google signups) ----
+    adp = sub.add_parser("adb", help="Android device (ADB) — connect a phone for trusted Google signups")
+    ads = adp.add_subparsers(dest="adb_cmd")
+    ads.add_parser("status", help="is a device connected? (default)")
+    ads.add_parser("devices", help="list devices + browsers")
+    ads.add_parser("usb", help="how to connect over USB")
+    ads.add_parser("setup", help="enable Wi-Fi (tcpip) mode and show the phone IP")
+    adc = ads.add_parser("connect", help="connect over Wi-Fi")
+    adc.add_argument("addr", help="phone IP or IP:port")
     sub.add_parser("menu", help="classic numbered command menu (advanced users)")
 
     # ---- warp ----
@@ -1873,6 +1896,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_doctor(args)
     if g == "beginner":
         return beginner_entry(p)
+    if g == "adb":
+        return cmd_adb(args)
     if g == "menu":
         return interactive_mode(p)
     if g == "warp":
