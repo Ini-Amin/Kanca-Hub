@@ -298,10 +298,14 @@ def ensure_clean_egress(
             print("  [egress] Preferred pool has no live proxies; harvesting from public feeds…", file=sys.stderr)
         # Prioritize SOCKS5 for reliable HTTPS TCP tunneling
         cands = harvest(protocols=("socks5", "http"), verbose=False)
-        live = validate(cands, target=4, timeout=3.5, workers=80)
-        if not live:
+        live = validate(cands, target=5, timeout=3.5, workers=80)
+        if len(live) < 2:
             cands = harvest(protocols=("socks5", "http", "socks4"), verbose=False)
-            live = validate(cands, target=4, timeout=4.0, workers=100)
+            live = validate(cands, target=6, timeout=4.0, workers=100)
+        # Avoid proxies that exit on Cloudflare WARP (104.28.*) since GitHub blocks them
+        non_warp_live = [p for p in live if not str(p.get("egress", "")).startswith("104.28.")]
+        if non_warp_live:
+            live = non_warp_live
         if not live:
             if verbose:
                 print("  [egress] ✗ All candidate proxies failed validation; no live proxy found.", file=sys.stderr)

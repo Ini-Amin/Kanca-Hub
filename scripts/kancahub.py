@@ -839,6 +839,9 @@ def cmd_thk(a) -> int:
         if not harbor.exists():
             print(col("red", f"✗ harbor not found at {HARBOR}"))
             return 1
+        # Harbor's free Turnstile solver needs camoufox + playwright, which live
+        # only in the isolated camoufox-venv. Run the CLI there.
+        py = pick_python(camoufox=True)
         cfg = harbor / "config.toml"
         if not cfg.exists():
             (harbor / "config.toml").write_text((harbor / "example.config.toml").read_text())
