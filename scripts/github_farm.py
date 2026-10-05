@@ -209,18 +209,12 @@ def gen_password() -> str:
 
 # ─────────────────────────────────────────────────────────── proxy helpers
 
-def _proxy_dict(proxy: str | None):
-    """Build a camoufox Proxy (preferred) from a URL; dict fallback otherwise.
-
-    Returns ``camoufox.ip.Proxy(server=..., username=..., password=...)`` when the
-    class is importable, else a Playwright-style dict, else None.
-    """
+def _proxy_dict(proxy: str | None) -> dict | None:
+    """Build a Camoufox/Playwright-style proxy dict from a URL string."""
     if not proxy:
         return None
     u = urlparse(proxy if "://" in proxy else f"http://{proxy}")
     server = f"{u.scheme}://{u.hostname}:{u.port}" if u.port else f"{u.scheme}://{u.hostname}"
-    if CamoufoxProxy is not None:
-        return CamoufoxProxy(server=server, username=u.username, password=u.password)
     d: dict = {"server": server}
     if u.username:
         d["username"] = u.username
@@ -1014,6 +1008,8 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
     else:
         egress_ip = get_my_ip(timeout=4.0) or "(direct host)"
 
+    is_gw = bool(is_gateway(chosen_proxy) or gateway_proc is not None)
+
     print("=" * 60, flush=True)
     print("  GITHUB FARM (Camoufox / Playwright)", flush=True)
     print("=" * 60, flush=True)
@@ -1025,7 +1021,7 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
     print(f"  headless  : {headless}", flush=True)
     print(f"  egress    : {chosen_proxy or '(direct)'}  [{proxy_src}]", flush=True)
     print(f"  egress IP : {egress_ip}", flush=True)
-    print(f"  gateway   : {is_gateway(chosen_proxy)}", flush=True)
+    print(f"  gateway   : {is_gw}", flush=True)
     print("-" * 60, flush=True)
 
     if not headless and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
@@ -1058,7 +1054,7 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
         async with AsyncCamoufox(**kwargs) as browser:
             page = await browser.new_page()
             context = page.context
-            if is_gateway(chosen_proxy):
+            if is_gw:
                 await apply_gateway_session(context, email)
                 await apply_gateway_session(page, email)
                 print(f"      📌 Sticky gateway session applied (id={email})", flush=True)
