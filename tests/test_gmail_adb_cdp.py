@@ -11,7 +11,34 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.gmail_adb import CDP, WEB, CLICK_FALLBACKS, click_text_js
+from scripts.gmail_adb import (
+    CDP, WEB, CLICK_FALLBACKS, click_text_js, select_material_js, select_material,
+)
+
+
+class TestMaterialDropdown(unittest.TestCase):
+    def test_select_material_js_targets_visible_options_with_data_value(self):
+        js = select_material_js("#gender", "1")
+        self.assertIn("role=option", js)
+        self.assertIn("data-value", js)
+        self.assertIn('"1"', js)
+
+    def test_select_material_opens_with_real_mouse_then_clicks_option(self):
+        """select_material must open via CDP mouse (not JS .click) then pick option."""
+        cdp = MagicMock()
+        # first js() call returns the element rect; second returns 'ok'
+        cdp.js = MagicMock(side_effect=[
+            '{"x":196,"y":316}',
+            "ok",
+        ])
+        result = select_material(cdp, "#gender", "1")
+        self.assertEqual(result, "ok")
+        cdp.click_at.assert_called_once_with(196, 316)
+
+    def test_select_material_no_dropdown(self):
+        cdp = MagicMock()
+        cdp.js = MagicMock(return_value=None)
+        self.assertEqual(select_material(cdp, "#month", "5"), "no-dropdown")
 
 
 class TestI18nAndUrl(unittest.TestCase):
@@ -71,6 +98,35 @@ class TestCdpSuppressOrigin(unittest.TestCase):
         _, second_kwargs = m.call_args
         self.assertNotIn("suppress_origin", second_kwargs)
         self.assertIs(cdp.ws, fake_ws)
+
+
+class TestStateDetectorSource(unittest.TestCase):
+    """Guards against the birthday/phone false-positive that stalled every run."""
+
+    def _state_src(self):
+        import inspect
+        import scripts.gmail_adb as m
+        return inspect.getsource(m.state)
+
+    def test_birthday_checked_before_generic_tel(self):
+        src = self._state_src()
+        # match the actual return statements, not comments mentioning the words
+        i_birthday = src.find("return 'birthday'")
+        i_phone = src.find("return 'phone'")
+        self.assertNotEqual(i_birthday, -1, "state() must return 'birthday'")
+        self.assertNotEqual(i_phone, -1, "state() must return 'phone'")
+        # the birthday branch must be decided before the generic tel->phone branch
+        self.assertLess(i_birthday, i_phone,
+                        "birthday must be returned BEFORE the generic input[type=tel] phone check")
+
+
+class TestPasswordConfirmSelector(unittest.TestCase):
+    def test_run_one_handles_passwdagain(self):
+        import inspect
+        import scripts.gmail_adb as m
+        src = inspect.getsource(m.run_one)
+        self.assertIn("PasswdAgain", src,
+                      "the current flow names the confirm field PasswdAgain")
 
 
 if __name__ == "__main__":

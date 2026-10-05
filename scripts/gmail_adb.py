@@ -175,6 +175,17 @@ class CDP:
     def goto(self, url: str):
         self.send("Page.navigate", {"url": url})
 
+    def click_at(self, x: int, y: int):
+        """Dispatch a real left-click at viewport coordinates (x, y).
+
+        Google's Material controls open on genuine input events, not on JS
+        element.click(); CDP Input mouse events are the reliable trigger.
+        """
+        for typ, buttons in (("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 0)):
+            self.send("Input.dispatchMouseEvent",
+                      {"type": typ, "x": x, "y": y, "button": "left",
+                       "clickCount": 1, "buttons": buttons})
+
 
 def page_ws_url() -> str | None:
     try:
@@ -232,6 +243,63 @@ def click_text_js(text: str) -> str:
     }})()"""
 
 
+def select_material(cdp: "CDP", dropdown_selector: str, value: str) -> str:
+    """Robustly pick an option in a Google Material dropdown (jsname=O1htCb).
+
+    Sequence that actually works on a real device:
+      1. scroll the control into view,
+      2. open it with a REAL mouse event at its centre (JS .click() is unreliable),
+      3. click the visible li[role=option] whose data-value matches.
+
+    Returns 'ok' or a short reason ('no-dropdown'/'no-option').
+    """
+    rect = cdp.js(
+        "(sel=>{const e=document.querySelector(sel);if(!e)return null;"
+        "e.scrollIntoView({block:'center'});"
+        "const b=e.getBoundingClientRect();"
+        "return JSON.stringify({x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)});})"
+        f"({json.dumps(dropdown_selector)})")
+    if not rect:
+        return "no-dropdown"
+    pos = json.loads(rect)
+    cdp.click_at(pos["x"], pos["y"])
+    time.sleep(1.0)
+    # click the matching VISIBLE option (li[role=option] with data-value)
+    res = cdp.js(
+        "(args=>{const [want]=args;"
+        "const opts=[...document.querySelectorAll('li[role=option],div[role=option]')]"
+        ".filter(o=>o.offsetParent!==null);"
+        "const opt=opts.find(o=>(o.getAttribute('data-value')||'')===want)"
+        "||opts.find(o=>(o.innerText||'').trim()===want);"
+        "if(!opt)return 'no-option';opt.click();return 'ok';})"
+        f"({json.dumps([str(value)])})")
+    return res or "no-option"
+
+
+def select_material_js(dropdown_selector: str, value: str) -> str:
+    """Select an option in a Google Material dropdown (jsname=O1htCb), not <select>.
+
+    Google's birthday 'Month' and 'Gender' controls are <div jsname="O1htCb">
+    custom dropdowns. Writing HTMLSelectElement.prototype.value onto them is a
+    no-op, which is why the form kept failing with 'Please enter a month'.
+    Correct interaction: click the control to open it, then click the
+    div[role=option] whose data-value matches.
+    """
+    return f"""
+    (()=>{{
+      const dd=document.querySelector({json.dumps(dropdown_selector)});
+      if(!dd) return 'no-dropdown';
+      dd.click();
+      const want={json.dumps(str(value))};
+      const opts=[...document.querySelectorAll('div[role=option],li[role=option]')];
+      const opt=opts.find(o=>(o.getAttribute('data-value')||'')===want)
+             || opts.find(o=>(o.innerText||'').trim()===want);
+      if(!opt) return 'no-option';
+      opt.click();
+      return 'ok';
+    }})()"""
+
+
 def state(cdp: CDP) -> str:
     return cdp.js("""
     (()=>{
@@ -242,8 +310,15 @@ def state(cdp: CDP) -> str:
       if(vis('input[name=firstName]')) return 'name';
       if(vis('input[name=Username]')) return 'username';
       if(vis('input[name=Passwd]')) return 'password';
-      if(vis('input#phoneNumberId')||vis('input[type=tel]')) return 'phone';
-      if(vis('#day')||vis('input[name=day]')) return 'birthday';
+      // Birthday/gender screen FIRST. Google renders a stray (but "visible" by
+      // offsetParent) input[type=tel] on the birthday page, which previously
+      // tripped the phone check below and made every run bail with 'phone'.
+      const birthday = vis('#day') || vis('input[name=day]') || vis('#year') || /birthday and gender|enter your birthday/.test(txt);
+      if(birthday) return 'birthday';
+      // Genuine phone gate: the explicit phone field, or a tel input that is NOT
+      // accompanied by the birthday fields.
+      if(vis('input#phoneNumberId')) return 'phone';
+      if(vis('input[type=tel]') && !birthday) return 'phone';
       if(/recovery email|review your|privacy and terms|welcome to google/.test(txt)) return 'post';
       return 'unknown';
     })()""") or "unknown"
@@ -332,14 +407,15 @@ def run_one(cdp: CDP, args) -> dict:
         rec["status"] = f"failed:{s}"
         rec["error"] = detect_blocked(cdp) or s
         return rec
-    cdp.js(f"""(()=>{{const e=document.querySelector('#month');if(e){{
-        const s=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set;s.call(e,{month});
-        e.dispatchEvent(new Event('change',{{bubbles:true}}));}}return true;}})()""")
+    # Month + Gender are Material dropdowns (custom divs), NOT native selects.
+    # Open with a real mouse event and click the matching visible option.
+    for sel, val in (("#month", str(month)), ("#gender", "1")):
+        res = select_material(cdp, sel, val)
+        if res != "ok":
+            res = cdp.js(select_material_js(sel, val))
+        time.sleep(0.6)
     cdp.js(type_js("#day", str(day)))
     cdp.js(type_js("#year", str(year)))
-    cdp.js(f"""(()=>{{const e=document.querySelector('#gender');if(e){{
-        const s=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set;s.call(e,'1');
-        e.dispatchEvent(new Event('change',{{bubbles:true}}));}}return true;}})()""")
     cdp.js(click_text_js("next"))
     time.sleep(3)
 
@@ -370,7 +446,11 @@ def run_one(cdp: CDP, args) -> dict:
         rec["error"] = detect_blocked(cdp) or s
         return rec
     cdp.js(type_js("input[name=Passwd]", password))
-    cdp.js(type_js("input[name=ConfirmPasswd]", password))
+    # The confirm field is 'PasswdAgain' on the current flow; some older flows
+    # used 'ConfirmPasswd'. Try both so neither variant breaks us.
+    confirm = cdp.js(type_js("input[name=PasswdAgain]", password))
+    if not confirm:
+        cdp.js(type_js("input[name=ConfirmPasswd]", password))
     cdp.js(click_text_js("next"))
     time.sleep(4)
 
