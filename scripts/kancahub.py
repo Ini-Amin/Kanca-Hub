@@ -444,6 +444,10 @@ def cmd_proxy(a) -> int:
             cmd += ["--gateway", a.gateway_out]
         return run(cmd, cwd=AUTO_FREECF)
 
+    # ── one-command guided proxy mode (PetaniProxy power, one question) ──
+    if sub == "start":
+        return _proxy_start(a, py)
+
     # ── NATIVE backend (scripts/proxy_lib.py): self-contained, no PetaniProxy TUI ──
     if sub == "nharvest":
         return _proxy_native_harvest(a, py)
@@ -543,7 +547,59 @@ def cmd_proxy(a) -> int:
     return 1
 
 
-def _proxy_export(a) -> int:
+def _proxy_start(a, py) -> int:
+    """One-command guided proxy: pick a mode, it starts and prints one line.
+
+    Mirrors PetaniProxy's modes but with a beginner-proof prompt and a single
+    result line ('Proxy ready: http://127.0.0.1:8888').
+    """
+    petani = PETANI / "main.py"
+    mode = getattr(a, "mode", None)
+
+    if not mode:
+        print(col("bold", "\n  Choose a proxy mode:\n"))
+        print(f"   {C['green']}[1]{C['reset']} WARP         clean Cloudflare egress, zero captcha, unlimited")
+        print(f"                  {col('dim','best when signups get blocked')}")
+        print(f"   {C['green']}[2]{C['reset']} Gateway      rotate free public proxies on :8888 (auto-refill + dashboard)")
+        print(f"   {C['green']}[3]{C['reset']} Residential  hunt real residential IPs via Webshare (best vs Turnstile)")
+        print(f"   {C['green']}[4]{C['reset']} Daemon       24/7 auto-healing gateway on :8888 (leave running)")
+        print()
+        try:
+            mode = input(f"  {col('bold','Pick 1-4')} {col('dim','[Enter = 2]')}: ").strip() or "2"
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+
+    if mode in ("1", "warp", "c", "C"):
+        wm = AUTO_FREECF / "scripts" / "warp_manager.py"
+        print(col("cyan", "\n  Bringing up Cloudflare WARP (clean egress)…"))
+        run([py, str(wm), "up"])
+        run([py, str(wm), "status"])
+        print(col("green", "\n  Proxy ready: WARP tunnel"))
+        print(col("dim", "  (turn off later with: kancahub warp down)\n"))
+        return 0
+
+    if mode in ("3", "residential", "w", "W"):
+        print(col("cyan", "\n  Hunting residential IPs via Webshare (needs a Webshare account)…"))
+        return run([py, str(petani), "-W", str(getattr(a, "accounts", 1) or 1)], cwd=PETANI)
+
+    if mode in ("4", "daemon", "g", "G"):
+        print(col("yellow", "\n  24/7 auto-healing gateway on :8888  (Ctrl-C to stop)"))
+        print(col("dim", "  This keeps rotating + auto-refilling the pool in the background.\n"))
+        rc = run([py, str(petani), "--daemon-gateway"], cwd=PETANI)
+        print(col("green", "\n  Proxy ready: http://127.0.0.1:8888"))
+        return rc
+
+    # default: gateway
+    print(col("cyan", "\n  Starting rotating gateway on :8888 (harvests + auto-refills)…"))
+    print(col("dim", "  dashboard: http://127.0.0.1:8888/dashboard\n"))
+    rc = run([py, str(petani), "--serve", str(getattr(a, "port", 8888) or 8888),
+              "--target", str(getattr(a, "target", 30) or 30)], cwd=PETANI)
+    print(col("green", "\n  Proxy ready: http://127.0.0.1:8888"))
+    return rc
+
+
+
     src = PETANI / "output" / "live_elite.txt"
     if not src.exists():
         src = PETANI / "output" / "live_all.txt"
@@ -1616,6 +1672,13 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--pool", default=None, help="file of proxies to test")
     pv.add_argument("--gateway", dest="gateway_out", default=None,
                     help="gateway to probe (default http://127.0.0.1:8888)")
+
+    pst = ps.add_parser("start", help="guided: pick a proxy mode and start it (one question)")
+    pst.add_argument("mode", nargs="?", default=None,
+                     help="1=WARP 2=Gateway 3=Residential 4=Daemon (skip the prompt)")
+    pst.add_argument("--port", type=int, default=8888, help="gateway port (mode 2)")
+    pst.add_argument("--target", type=int, default=30, help="proxies to collect (mode 2)")
+    pst.add_argument("-n", "--accounts", type=int, default=1, help="accounts (mode 3, Webshare)")
 
     # ---- stack ----
     sp = sub.add_parser("stack", help="Auto-FreeCF: create Cloudflare accounts, generate tokens & manage pool")
