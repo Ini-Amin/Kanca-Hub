@@ -403,6 +403,10 @@ async def detect_captcha(page) -> str | None:
         ("recaptcha", "reCAPTCHA"),
         ("challenge-container", "GitHub challenge iframe"),
         ("verify you are human", "human-verification prompt"),
+        ("enable javascript", "GitHub anti-bot page (enable JavaScript)"),
+        ("disable your ad blocker", "GitHub anti-bot page (disable adblocker)"),
+        ("disable adblocker", "GitHub anti-bot page (disable adblocker)"),
+        ("unusual activity", "GitHub anti-bot page (unusual activity)"),
     ):
         if needle in low:
             return label

@@ -223,14 +223,29 @@ def wizard_github() -> int:
     print(c("dim", "  Signs up a new GitHub account using your school email, then"))
     print(c("dim", "  helps you apply for the Student Pack.\n"))
     print(c("yellow", "  ⚠️  A human must finish the CAPTCHA and the school-ID step.\n"))
-    idx = ask("Account number (1 for the first)", "1")
+    print(c("dim", "  It uses raymondi+gh<N>@binus.ac.id, so each number = a new"))
+    print(c("dim", "  address that still lands in your one school inbox.\n"))
+    idx = ask("Account number (1 = raymondi+gh1@binus.ac.id)", "1")
+    try:
+        int(idx)
+    except ValueError:
+        print(c("red", "\n  ✗ Please enter a NUMBER (e.g. 1)."))
+        ask("Press Enter to go back")
+        return 0
     use_proxy = yesno("  Use a clean proxy automatically", True)
-    args = ["--index", idx]
-    if use_proxy:
-        args.append("--proxy")
-        args.append("auto")
+    py = str(CAMOUFOX_PY) if CAMOUFOX_PY.exists() else None
     print(c("cyan", "\n  ▶ Running the signup helper…\n"))
-    rc = run_script("github_farm.py", ["--index", idx], python=str(CAMOUFOX_PY) if CAMOUFOX_PY.exists() else None)
+
+    import subprocess
+    cmd = [py or sys.executable, str(SCRIPTS / "github_farm.py"), "--index", str(idx)]
+    if not use_proxy:
+        cmd.append("--no-proxy")
+    print(c("dim", f"  running: {' '.join(cmd)}\n"))
+    try:
+        rc = subprocess.call(cmd, cwd=str(AUTO_FREECF))
+    except KeyboardInterrupt:
+        rc = 130
+
     print(c("green", "\n  ✅ Finished.") if rc == 0 else c("yellow", "\n  ⚠️  Stopped — check the messages above."))
     ask("Press Enter to go back")
     return 0
@@ -262,28 +277,14 @@ def wizard_xai() -> int:
     hr()
     print(c("bold", "  Use my xAI / Grok account\n"))
     print(c("dim", "  xAI (the company behind Grok) gives API keys at console.x.ai."))
-    print(c("dim", "  Paste your key here and KancaHub saves it into 9Router so your"))
-    print(c("dim", "  AI apps can use Grok.\n"))
-    print(f"   {c('cyan', 'Get a key:')} {c('bold', 'https://console.x.ai')}  -> API Keys -> Create\n")
-    print(f"   {c('green','1')}  I have an xAI API key (starts with xai-)")
-    print(f"   {c('green','2')}  Farm Grok accounts automatically (grok-register)")
-    print(f"   {c('green','3')}  Inject my Grok tokens into 9Router")
-    print(f"   {c('green','4')}  Back")
-    print()
-    ch = ask("Pick one", "1")
-    if ch == "1":
-        key = ask("Paste your xAI API key")
-        if key.startswith("xai-") or len(key) > 20:
-            _save_xai_key(key)
-        else:
-            print(c("red", "  ✗ that doesn't look like an xAI key."))
-    elif ch == "2":
-        print(c("cyan", "\n  ▶ Starting the Grok farm (a browser will run)…\n"))
-        run_script("kancahub.py", ["grok", "run"])
-    elif ch == "3":
-        base = ask("grok2api bridge URL (default http://127.0.0.1:8787/v1)",
-                   "http://127.0.0.1:8787/v1")
-        run_script("kancahub.py", ["grok", "inject", "--base-url", base])
+    print(c("dim", "  That page needs you to LOG IN — it can't be auto-farmed, so this"))
+    print(c("dim", "  just saves your key for your apps to use.\n"))
+    print(f"   {c('cyan', 'Get a key:')} {c('bold', 'https://console.x.ai')}  -> log in -> API Keys -> Create\n")
+    key = ask("Paste your xAI API key (or Enter to skip)")
+    if key:
+        _save_xai_key(key)
+    else:
+        print(c("dim", "  Nothing saved."))
     ask("Press Enter to go back")
     return 0
 
