@@ -990,6 +990,72 @@ def cmd_github(a) -> int:
     return 1
 
 
+# ═══════════════════════════════════════════════════════════════ mail
+
+def cmd_mail(a) -> int:
+    """School mailbox (BINUS M365) via browser — wraps scripts/school_mail_browser.py."""
+    py = pick_python()
+    smb = AUTO_FREECF / "scripts" / "school_mail_browser.py"
+    if not smb.exists():
+        print(col("red", f"✗ school_mail_browser.py not found at {smb}"))
+        return 1
+
+    sub = getattr(a, "mail_cmd", None)
+    if not sub:
+        print(col("yellow", "• no mail subcommand — showing help"))
+        return run([py, str(smb), "--help"], cwd=AUTO_FREECF)
+
+    if sub in ("test", "login", "otp"):
+        cmd = [py, str(smb), sub]
+        if sub == "otp":
+            cmd += ["--timeout", str(getattr(a, "timeout", 180) or 180)]
+        if sub == "login":
+            print(col("dim", "  (login leaves the browser open — Ctrl-C when done inspecting)"))
+        return run(cmd, cwd=AUTO_FREECF)
+
+    print(col("red", f"✗ unknown mail command: {sub}"))
+    return 1
+
+# ═══════════════════════════════════════════════════════════════ gmail
+
+def cmd_gmail(a) -> int:
+    """Gmail account farm — wraps scripts/gmail_creator.py."""
+    py = pick_python()
+    gc = AUTO_FREECF / "scripts" / "gmail_creator.py"
+    if not gc.exists():
+        print(col("red", f"✗ gmail_creator.py not found at {gc}"))
+        return 1
+
+    sub = getattr(a, "gmail_cmd", None)
+
+    if sub == "check":
+        return run([py, str(gc), "--check"], cwd=AUTO_FREECF)
+
+    if sub == "farm":
+        cmd = [py, str(gc), "--count", str(getattr(a, "count", 1) or 1)]
+        if getattr(a, "headless", False):
+            cmd.append("--headless")
+        if getattr(a, "proxy", None):
+            cmd += ["--proxy", a.proxy]
+        if getattr(a, "out", None):
+            cmd += ["--out", a.out]
+        if getattr(a, "dry_run", False):
+            cmd.append("--dry-run")
+        if getattr(a, "random_password", False):
+            cmd.append("--random-password")
+        return run(cmd, cwd=AUTO_FREECF)
+
+    if sub == "dry-run":
+        cmd = [py, str(gc), "--count", str(getattr(a, "count", 1) or 1), "--dry-run"]
+        if getattr(a, "proxy", None):
+            cmd += ["--proxy", a.proxy]
+        if getattr(a, "out", None):
+            cmd += ["--out", a.out]
+        return run(cmd, cwd=AUTO_FREECF)
+
+    print(col("red", f"✗ unknown gmail command: {sub}"))
+    return 1
+
 # ═══════════════════════════════════════════════════════════════ region
 
 def cmd_region(a) -> int:
@@ -1252,6 +1318,14 @@ def build_parser() -> argparse.ArgumentParser:
     tsy = ts.add_parser("sync", help="verify + prune TokenHarbor connections")
     tsy.add_argument("--db", default=None)
     tsy.add_argument("--prune", action="store_true")
+    tse = ts.add_parser("setup-env", help="wire harbor: config.toml + Tempik base_url + capsolver + proxies (harbor_config.py)")
+    tse.add_argument("--harbor-dir", default=None, help="harbor repo dir (default ~/harbor)")
+    tse.add_argument("--env-file", default=None, help="auto-freecf .env path")
+    tse.add_argument("--proxies-src", default=None, help="source proxies.txt to copy into harbor/tools")
+    tse.add_argument("--tempik-url", default=None, help="Tempik base URL override")
+    tse.add_argument("--no-proxies", action="store_true", help="skip refreshing harbor's proxy list")
+    tse.add_argument("--status", action="store_true", help="only report current harbor config")
+    tse.add_argument("--dry-run", action="store_true", help="show actions without writing")
 
     # ---- grok (xAI) ----
     gp = sub.add_parser("grok", help="Grok xAI farm: automated account creation with multi-provider mail")
@@ -1312,6 +1386,66 @@ def build_parser() -> argparse.ArgumentParser:
     gf.add_argument("--dry-run", action="store_true", help="walk the flow + screenshot, do not submit")
     gf.add_argument("--proxy", default=None, help="proxy URL, e.g. http://user:pass@host:port")
     ghs.add_parser("check", help="check deps + school mailbox config, then exit")
+
+    # ---- mail (school mailbox / BINUS M365) ----
+    mp = sub.add_parser(
+        "mail", help="School mailbox (BINUS M365) via browser: read signup OTPs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Read the school Outlook inbox from a real browser session (nodriver).\n"
+            "M365 blocks IMAP basic auth, so the OTP is scraped from the web UI.\n"
+            "The session lives in ~/.config/auto-freecf/school-profile and survives runs.\n"
+            "\n"
+            "  test   log in and print recent inbox subjects (do this once by hand if\n"
+            "         the tenant enforces MFA — the profile then carries the session)\n"
+            "  otp    wait for an OpenAI/ChatGPT verification code\n"
+            "  login  log in and leave the browser open for inspection\n"
+            "\n"
+            "Config: ~/.config/auto-freecf/.env  (SCHOOL_EMAIL, SCHOOL_MAIL_PASSWORD,\n"
+            "SCHOOL_MAIL_URL)\n"
+            "\n"
+            "Examples:\n"
+            "  kancahub mail test\n"
+            "  kancahub mail otp --timeout 300"),
+    )
+    ms = mp.add_subparsers(dest="mail_cmd")
+    ms.add_parser("test", help="log in and list recent inbox subjects (selftest)")
+    mo = ms.add_parser("otp", help="wait for an OpenAI OTP in the school inbox")
+    mo.add_argument("--timeout", type=int, default=180, help="seconds to wait (default 180)")
+    ms.add_parser("login", help="log in and leave the browser open for inspection")
+
+    # ---- gmail (Gmail account farm) ----
+    gmp = sub.add_parser(
+        "gmail", help="Gmail account farm (nodriver, phone step stays manual)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Gmail signup farm — wraps scripts/gmail_creator.py (nodriver + Chrome).\n"
+            "\n"
+            "  farm     create N accounts, append results to the JSON out file\n"
+            "  dry-run  walk the flow without submitting\n"
+            "  check    report dependencies and exit\n"
+            "\n"
+            "Note: headless cannot complete phone verification — expect\n"
+            "pending_verification/failed rows unless you run headed and finish by hand.\n"
+            "\n"
+            "Examples:\n"
+            "  kancahub gmail check\n"
+            "  kancahub gmail farm --count 2 --proxy http://127.0.0.1:8888\n"
+            "  kancahub gmail farm --count 1 --headless --out ~/gmail.json"),
+    )
+    gms = gmp.add_subparsers(dest="gmail_cmd")
+    gmf = gms.add_parser("farm", help="create N Gmail accounts")
+    gmf.add_argument("--count", type=int, default=1, help="accounts to attempt (default 1)")
+    gmf.add_argument("--headless", action="store_true", help="run the browser headless")
+    gmf.add_argument("--proxy", default=None, help="scheme://host:port (no credentials)")
+    gmf.add_argument("--out", default=None, help="JSON results file (appended to)")
+    gmf.add_argument("--dry-run", action="store_true", help="walk the flow, do not submit")
+    gmf.add_argument("--random-password", action="store_true", help="generate a password per account")
+    gmd = gms.add_parser("dry-run", help="walk the flow without submitting")
+    gmd.add_argument("--count", type=int, default=1)
+    gmd.add_argument("--proxy", default=None)
+    gmd.add_argument("--out", default=None)
+    gms.add_parser("check", help="report dependencies and exit")
 
     # ---- proxy ----
     pp = sub.add_parser("proxy", help="PetaniProxy: harvest proxies, rotating gateway & background daemon")
@@ -1514,6 +1648,16 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             p.parse_args(["github", "--help"])
             return 1
         return cmd_github(args)
+    if g == "mail":
+        if not getattr(args, "mail_cmd", None):
+            p.parse_args(["mail", "--help"])
+            return 1
+        return cmd_mail(args)
+    if g == "gmail":
+        if not getattr(args, "gmail_cmd", None):
+            p.parse_args(["gmail", "--help"])
+            return 1
+        return cmd_gmail(args)
     if g == "proxy":
         if not getattr(args, "proxy_cmd", None):
             p.parse_args(["proxy", "--help"])
@@ -1542,8 +1686,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 def interactive_mode(p: argparse.ArgumentParser) -> int:
     """Beginner-friendly interactive menu when run without arguments."""
     print(get_ascii_banner())
-    print(f" {C['bold']}Quick Tasks Menu:{C['reset']}\n")
-    menu = [
+
+    page1 = [
         ("1", "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"]),
         ("2", "Check everything is healthy", "doctor", ["doctor"]),
         ("3", "Start the proxy gateway", "proxy daemon", ["proxy", "daemon"]),
@@ -1553,34 +1697,58 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
         ("7", "Manage WARP tunnel", "warp", ["warp"]),
         ("8", "GitHub Education account farm", "github farm", ["github", "farm"]),
         ("9", "Inject Grok tokens into 9Router", "grok inject", ["grok", "inject"]),
-        ("10", "Help & command reference", "--help", ["--help"]),
-        ("0", "Exit", "", []),
     ]
-    for key, desc, cmd_str, _ in menu:
-        cmd_part = f" {C['cyan']}({cmd_str}){C['reset']}" if cmd_str else ""
-        print(f"  [{col('bold', key)}] {desc:<42}{cmd_part}")
-    print()
+    page2 = [
+        ("1", "School mailbox: test login", "mail test", ["mail", "test"]),
+        ("2", "School mailbox: wait for OTP", "mail otp", ["mail", "otp"]),
+        ("3", "Gmail account farm", "gmail farm", ["gmail", "farm"]),
+        ("4", "Wire TokenHarbor env (harbor)", "thk setup-env", ["thk", "setup-env"]),
+        ("5", "Login to existing Cloudflare accounts", "stack login", ["stack", "login"]),
+        ("6", "Prune dead 9Router connections", "stack sync --prune", ["stack", "sync", "--prune"]),
+        ("7", "Harvest proxies", "proxy harvest", ["proxy", "harvest"]),
+        ("8", "Find SheerID links", "k12 link-finder", ["k12", "link-finder"]),
+        ("9", "List teacher-doc countries", "yowes list", ["yowes", "list"]),
+    ]
+
+    page = 1
+    pages = {1: page1, 2: page2}
+    page_titles = {1: "Quick Tasks", 2: "More Tasks (mail · gmail · harbor)"}
 
     while True:
+        menu = pages[page]
+        max_key = len(menu)
+        print(f" {C['bold']}{page_titles[page]} — page {page}/2:{C['reset']}\n")
+        for key, desc, cmd_str, _ in menu:
+            cmd_part = f" {C['cyan']}({cmd_str}){C['reset']}" if cmd_str else ""
+            print(f"  [{col('bold', key)}] {desc:<42}{cmd_part}")
+        other = "2" if page == 1 else "1"
+        print(f"  [{col('bold', 'p')}] Switch to page {other}")
+        print(f"  [{col('bold', 'h')}] Help & command reference")
+        print(f"  [{col('bold', '0')}] Exit")
+        print()
+
         try:
-            choice = input(f" {C['bold']}Select an option [0-10]: {C['reset']}").strip()
+            choice = input(f" {C['bold']}Select an option [0-{max_key}, p, h]: {C['reset']}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
             return 0
 
         if not choice or choice == "0":
             return 0
-
-        match = next((item for item in menu if item[0] == choice), None)
-        if not match:
-            print(col("yellow", "  Please enter a valid option between 0 and 10."))
+        if choice == "p":
+            page = 2 if page == 1 else 1
+            print()
             continue
-
-        key, desc, cmd_str, cmd_args = match
-        if key == "10":
+        if choice == "h":
             p.print_help()
             return 0
 
+        match = next((item for item in menu if item[0] == choice), None)
+        if not match:
+            print(col("yellow", f"  Please enter a valid option between 0 and {max_key}."))
+            continue
+
+        _key, _desc, cmd_str, cmd_args = match
         print(col("cyan", f"\n▶ Running: kancahub {cmd_str}\n"))
         return dispatch(p, p.parse_args(cmd_args))
 
