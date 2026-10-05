@@ -21,9 +21,17 @@ Must run under the isolated venv (python3.11 + playwright==1.62.0):
     /home/amen/.local/share/auto-freecf/camoufox-venv/bin/python \
         /home/amen/Auto-FreeCF/scripts/k12_camoufox.py
 
-Mail: KancaHub's own relay (Supabase + Cloudflare Email Routing), same config
-as k12_nodriver.py. Sessions are captured from /api/auth/session and saved for
-9Router.
+Mail Providers & Custom Domain Setup:
+  * K12_MAIL_PROVIDER='relay' (default):
+    Uses our self-hosted Supabase relay (/functions/v1/temp-mail-api) backed by
+    Cloudflare Email Routing. To plug in a real (non-disposable / school) domain:
+      export K12_MAIL_PROVIDER=relay
+      export K12_DOMAINS="school.edu.pl"    # or export K12_CUSTOM_DOMAIN="school.edu.pl"
+    or pass --domain school.edu.pl on the CLI.
+  * K12_MAIL_PROVIDER='mailtm':
+    Uses public mail.tm API (maxxspace.com) for testing non-gated steps.
+
+Sessions are captured from /api/auth/session and saved for 9Router.
 """
 
 from __future__ import annotations
@@ -97,8 +105,11 @@ MAILTM_DOMAIN = "maxxspace.com"  # the only mail.tm domain
 _MAILTM_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 
-def _relay_create_mailbox() -> dict:
-    dom = random.choice([d.strip() for d in DOMAINS if d.strip()])
+def _relay_create_mailbox(custom_domain: str | None = None) -> dict:
+    dom = custom_domain or os.environ.get("K12_CUSTOM_DOMAIN") or _ENV.get("K12_CUSTOM_DOMAIN")
+    if not dom:
+        valid_domains = [d.strip() for d in DOMAINS if d.strip()]
+        dom = random.choice(valid_domains) if valid_domains else "kancalabs.biz.id"
     r = requests.post(f"{MAIL_BASE}/new_address", json={"domain": dom},
                       headers={"x-api-key": MAIL_KEY}, timeout=60)
     r.raise_for_status()
@@ -176,14 +187,16 @@ def _mailtm_poll_mail(token: str) -> list[dict]:
     return out
 
 
-def create_mailbox() -> dict:
-    if MAIL_PROVIDER == "mailtm":
+def create_mailbox(provider: str | None = None, domain: str | None = None) -> dict:
+    prov = (provider or MAIL_PROVIDER or "relay").strip().lower()
+    if prov == "mailtm":
         return _mailtm_create_mailbox()
-    return _relay_create_mailbox()
+    return _relay_create_mailbox(domain)
 
 
-def poll_mail(jwt: str) -> list[dict]:
-    if MAIL_PROVIDER == "mailtm":
+def poll_mail(jwt: str, provider: str | None = None) -> list[dict]:
+    prov = (provider or MAIL_PROVIDER or "relay").strip().lower()
+    if prov == "mailtm":
         return _mailtm_poll_mail(jwt)
     return _relay_poll_mail(jwt)
 
@@ -192,13 +205,13 @@ def _blob(m: dict) -> str:
     return " ".join(str(m.get(k, "")) for k in ("subject", "text", "body", "html", "snippet", "from"))
 
 
-async def wait_for_otp(jwt: str, timeout: int = 180) -> str | None:
+async def wait_for_otp(jwt: str, timeout: int = 180, provider: str | None = None) -> str | None:
     print(f"      [mail] polling relay for OTP (max {timeout}s)…", flush=True)
     start = time.time()
     seen = set()
     while time.time() - start < timeout:
         try:
-            for m in await asyncio.to_thread(poll_mail, jwt):
+            for m in await asyncio.to_thread(poll_mail, jwt, provider):
                 mid = m.get("id") or m.get("message_id")
                 if mid in seen:
                     continue
@@ -420,15 +433,69 @@ async def wait_popup_sheerid(popup, timeout: float = 25.0) -> str:
 
 # ───────────────────────────────────────────── about-you handling
 
-async def fill_about_you(page) -> bool:
+async def get_about_you_error(page) -> str:
+    """Extract any error alert, validation warning, or Terms of Use rejection message."""
+    return await js(page, """(()=>{
+        // 1. Explicit error/alert containers
+        const selectors = [
+            '[role=alert]',
+            'div[data-testid*=error i]',
+            'div[class*=error i]',
+            'p[class*=error i]',
+            'span[class*=error i]',
+            '.text-red-500',
+            '.text-danger',
+            '[class*=banner i]'
+        ];
+        for (const s of selectors) {
+            const els = document.querySelectorAll(s);
+            for (const el of els) {
+                const t = (el.innerText || '').trim();
+                if (t && t.length > 2) return t;
+            }
+        }
+        // 2. Fallback: inspect full body text for known OpenAI rejection messages
+        const text = (document.body ? document.body.innerText : '') || '';
+        const phrases = [
+            "We can't create your account due to our Terms of Use",
+            "We cannot create your account due to our Terms of Use",
+            "Terms of Use",
+            "can't create your account",
+            "cannot create your account",
+            "unable to create your account",
+            "Enter a valid age",
+            "Something went wrong"
+        ];
+        for (const p of phrases) {
+            const idx = text.toLowerCase().indexOf(p.toLowerCase());
+            if (idx !== -1) {
+                const start = Math.max(0, idx);
+                const end = Math.min(text.length, idx + 120);
+                const line = text.slice(start, end).split('\\n')[0];
+                return line.trim();
+            }
+        }
+        return '';
+    })()""", "") or ""
+
+
+async def fill_about_you(page) -> tuple[bool, str]:
     """Handle the age/name gate (auth.openai.com/about-you).
 
     OpenAI uses TWO shapes for this gate; detect fields, don't assume:
       A) 'How old are you?'  -> Full name (text) + Age (number)
       B) 'Lets confirm your age' -> Full name (text) + Birthday (date / mm-dd-yyyy)
+
+    Returns:
+        (success: bool, error_message: str)
     """
     if not await has(page, "input[name=name]"):
-        return False
+        return False, "no_name_input"
+
+    # Pre-submit check: surface any existing alert already present
+    initial_err = await get_about_you_error(page)
+    if initial_err:
+        print(f"      [about-you] pre-submit page alert: {initial_err!r}", flush=True)
 
     name = f"{random.choice(['James', 'Robert', 'John', 'Michael', 'David'])} " \
            f"{random.choice(['Miller', 'Smith', 'Johnson', 'Williams', 'Brown'])}"
@@ -521,20 +588,30 @@ async def fill_about_you(page) -> bool:
                 ok = True
         except Exception:
             ok = False
-    print(f"      [about-you] Continue clicked={ok}", flush=True)
+    print(f"      [about-you] Continue / Finish clicked={ok}", flush=True)
 
-    # verify we left the page (validation passed)
-    for _ in range(10):
+    # Post-submit verification: poll to confirm we leave the page OR catch error alerts
+    for _ in range(12):
         await asyncio.sleep(1)
         u = await live_url(page)
         if "about-you" not in u:
-            print(f"      [about-you] left page -> {u[:60]}", flush=True)
-            break
-        err = await js(page, """(()=>{const e=document.querySelector('[role=alert],.text-red-500,[class*=error]');
-            return e?e.innerText.slice(0,80):'';})()""", "")
+            print(f"      [about-you] successfully left page -> {u[:60]}", flush=True)
+            return True, ""
+        err = await get_about_you_error(page)
         if err:
-            print(f"      [about-you] validation error: {err!r}", flush=True)
-    return True
+            print(f"      [about-you] error alert detected: {err!r}", flush=True)
+            if any(k in err.lower() for k in ("terms of use", "can't create your account", "cannot create", "unable to create")):
+                print(f"      [!] Terms-of-Use rejection from OpenAI: {err!r}", flush=True)
+                return False, f"terms_of_use_blocked: {err}"
+
+    # If still on about-you, check and surface the exact alert
+    final_err = await get_about_you_error(page)
+    if "about-you" in await live_url(page):
+        msg = final_err or "stayed_on_about_you_page"
+        print(f"      [!] Did not advance from about-you page: {msg!r}", flush=True)
+        return False, msg
+
+    return True, ""
 
 
 # ───────────────────────────────────────────── session capture
@@ -632,16 +709,22 @@ def datetime_now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
+async def run_flow(
+    headless: bool = False,
+    proxy: str | None = None,
+    mail_provider: str | None = None,
+    domain: str | None = None,
+) -> dict:
     print("=" * 60, flush=True)
     print("  CHATGPT K-12 (Camoufox / Playwright)", flush=True)
     print("=" * 60, flush=True)
 
-    if MAIL_PROVIDER == "relay" and (not SUPABASE_URL or not MAIL_KEY):
+    prov = (mail_provider or MAIL_PROVIDER or "relay").strip().lower()
+    if prov == "relay" and (not SUPABASE_URL or not MAIL_KEY):
         return {"success": False, "error": "mail_relay_unconfigured"}
 
-    print(f"[1/6] Creating mailbox (provider={MAIL_PROVIDER})…", flush=True)
-    mail = create_mailbox()
+    print(f"[1/6] Creating mailbox (provider={prov}, domain={domain or 'auto'})…", flush=True)
+    mail = create_mailbox(provider=prov, domain=domain)
     email, jwt = mail["address"], (mail.get("jwt") or mail.get("token"))
     print(f"      [+] {email}", flush=True)
     password = gen_password()
@@ -705,7 +788,7 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
 
         # ---- OTP: wait for mail, find the field, fill, VERIFY, then submit.
         print("[4/6] Waiting for OTP from relay…", flush=True)
-        otp = await wait_for_otp(jwt, timeout=180)
+        otp = await wait_for_otp(jwt, timeout=180, provider=prov)
         if otp:
             otp_sel = None
             cands = ['input[autocomplete=one-time-code]', 'input[name=code]', 'input[name=otp]',
@@ -784,18 +867,38 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
             print("      [!] session not captured yet (will retry after verify)", flush=True)
 
         # ---- about-you
+        about_you_passed = False
+        about_you_error = ""
         for i in range(40):
             if await has(page, "input[name=name]"):
                 print(f"      [about-you] form found (loop {i}) url={(await live_url(page))[:60]}", flush=True)
-                await fill_about_you(page)
+                about_ok, about_err = await fill_about_you(page)
+                if not about_ok:
+                    about_you_error = about_err
+                else:
+                    about_you_passed = True
                 break
             _u = await live_url(page)
             if "k12-verification" in _u or "chatgpt.com" in _u:
                 print(f"      [k12] page reached (loop {i})", flush=True)
+                about_you_passed = True
                 break
             if i in (8, 20):
                 print(f"      [wait i={i}] url={_u[:70]}", flush=True)
             await asyncio.sleep(1)
+
+        # Check if account creation failed at about-you (e.g. Terms of Use rejection)
+        _curr_u = await live_url(page)
+        if "about-you" in _curr_u or about_you_error:
+            active_err = about_you_error or (await get_about_you_error(page)) or "terms_of_use_blocked"
+            print(f"\n[!] STOPPING: OpenAI blocked account creation at about-you: {active_err!r}", flush=True)
+            print("      (Aborting early — will not retry K-12 verification rounds on blocked account)", flush=True)
+            result["error"] = active_err
+            CREATED.parent.mkdir(parents=True, exist_ok=True)
+            with CREATED.open("a", encoding="utf-8") as f:
+                f.write(f"{email}----{password}----{datetime_now()}----BLOCKED:{active_err}\n")
+            print(f"[+] blocked credentials logged -> {CREATED}", flush=True)
+            return result
 
         # ---- K-12 verification page
         print("[5/6] Driving K-12 verification page…", flush=True)
@@ -804,6 +907,11 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
 
         for round_ in range(8):
             _u = await live_url(page)
+            if "about-you" in _u:
+                err = await get_about_you_error(page)
+                print(f"      [!] Flow still on about-you (alert: {err!r}); aborting verify rounds.", flush=True)
+                result["error"] = err or "blocked_at_about_you"
+                break
             if _is_sheerid(_u):
                 sheerid = _u
                 break
@@ -884,8 +992,12 @@ def main() -> int:
     ap.add_argument("--headless", action="store_true",
                     help="run under Xvfb ('virtual' headless) instead of a visible window")
     ap.add_argument("--proxy", default=None, help="http(s)/socks5 proxy URL; geoip follows its exit IP")
+    ap.add_argument("--mail-provider", choices=["relay", "mailtm"], default=None,
+                    help="mail backend: 'relay' (default, Supabase relay with K12_DOMAINS) or 'mailtm'")
+    ap.add_argument("--domain", default=None,
+                    help="custom domain to request from mail relay (e.g. your school .edu.pl domain)")
     a = ap.parse_args()
-    r = asyncio.run(run_flow(headless=a.headless, proxy=a.proxy))
+    r = asyncio.run(run_flow(headless=a.headless, proxy=a.proxy, mail_provider=a.mail_provider, domain=a.domain))
     print(json.dumps(r, indent=2, default=str))
     return 0 if r.get("success") else 1
 
