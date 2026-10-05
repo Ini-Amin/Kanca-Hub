@@ -1076,8 +1076,11 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
                     print(f"      note    : {n}", flush=True)
 
                 edu = {"stage": "skipped", "needs_human": ["Signup did not complete."]}
-                if signup.get("success") or dry_run:
-                    edu = await do_education(page, email, record["username"], dry_run)
+                if signup.get("success") or (dry_run and signup.get("stage") != "access_restricted"):
+                    try:
+                        edu = await do_education(page, email, record["username"], dry_run)
+                    except Exception as e:
+                        edu = {"stage": "error", "needs_human": [f"Education navigation failed: {e}"]}
                 record["education"] = edu
 
                 print("\n  --- education result ---", flush=True)
