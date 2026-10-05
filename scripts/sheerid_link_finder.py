@@ -44,6 +44,14 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Optional
 
+# Auto-re-exec into isolated camoufox-venv if camoufox is not installed in current interpreter
+CAMOUFOX_VENV_PY = Path.home() / ".local" / "share" / "auto-freecf" / "camoufox-venv" / "bin" / "python"
+if CAMOUFOX_VENV_PY.exists() and sys.executable != str(CAMOUFOX_VENV_PY):
+    try:
+        import camoufox  # noqa: F401
+    except ImportError:
+        os.execv(str(CAMOUFOX_VENV_PY), [str(CAMOUFOX_VENV_PY)] + sys.argv)
+
 from camoufox.async_api import AsyncCamoufox
 
 # Ensure scripts dir is on sys.path
