@@ -550,56 +550,70 @@ def cmd_proxy(a) -> int:
 def _proxy_start(a, py) -> int:
     """One-command guided proxy: pick a mode, it starts and prints one line.
 
-    Mirrors PetaniProxy's modes but with a beginner-proof prompt and a single
+    Mirrors PetaniProxy's modes with a beginner-proof prompt and a single
     result line ('Proxy ready: http://127.0.0.1:8888').
     """
     petani = PETANI / "main.py"
+    if not petani.exists():
+        print(col("red", f"✗ PetaniProxy not found at {PETANI}"))
+        return 1
+
     mode = getattr(a, "mode", None)
 
     if not mode:
-        print(col("bold", "\n  Choose a proxy mode:\n"))
-        print(f"   {C['green']}[1]{C['reset']} WARP         clean Cloudflare egress, zero captcha, unlimited")
-        print(f"                  {col('dim','best when signups get blocked')}")
-        print(f"   {C['green']}[2]{C['reset']} Gateway      rotate free public proxies on :8888 (auto-refill + dashboard)")
-        print(f"   {C['green']}[3]{C['reset']} Residential  hunt real residential IPs via Webshare (best vs Turnstile)")
-        print(f"   {C['green']}[4]{C['reset']} Daemon       24/7 auto-healing gateway on :8888 (leave running)")
+        print()
+        print(col("bold", "  Choose proxy mode:"))
+        print(f"   [{C['green']}1{C['reset']}] {col('bold', 'WARP')}          — clean Cloudflare egress, zero captcha, unlimited (best for signups that get blocked)")
+        print(f"   [{C['green']}2{C['reset']}] {col('bold', 'Gateway')}       — rotate thousands of free public proxies on 127.0.0.1:8888 (auto-refill, dashboard)")
+        print(f"   [{C['green']}3{C['reset']}] {col('bold', 'Residential')}   — hunt real residential IPs via Webshare (best vs Cloudflare/Turnstile; may need Setup)")
+        print(f"   [{C['green']}4{C['reset']}] {col('bold', 'Daemon')}        — 24/7 auto-healing gateway on :8888 (leave running in background)")
         print()
         try:
-            mode = input(f"  {col('bold','Pick 1-4')} {col('dim','[Enter = 2]')}: ").strip() or "2"
+            mode = input(f"  {col('bold','Select mode [1-4]')} {col('dim','(default: 2)')}: ").strip() or "2"
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
 
-    if mode in ("1", "warp", "c", "C"):
+    mode = str(mode).strip().lower()
+    if mode in ("1", "warp", "c"):
         wm = AUTO_FREECF / "scripts" / "warp_manager.py"
-        print(col("cyan", "\n  Bringing up Cloudflare WARP (clean egress)…"))
-        run([py, str(wm), "up"])
-        run([py, str(wm), "status"])
-        print(col("green", "\n  Proxy ready: WARP tunnel"))
+        print(col("cyan", "\n  Starting Cloudflare WARP (clean egress)…\n"))
+        # ponytail: shells out to petani-proxy main.py -C, then reports status with warp_manager.py
+        rc = run([py, str(petani), "-C"], cwd=PETANI)
+        if wm.exists():
+            run([py, str(wm), "up"])
+            run([py, str(wm), "status"])
+        print(col("green", "\n  Proxy ready: WARP tunnel active"))
         print(col("dim", "  (turn off later with: kancahub warp down)\n"))
-        return 0
-
-    if mode in ("3", "residential", "w", "W"):
-        print(col("cyan", "\n  Hunting residential IPs via Webshare (needs a Webshare account)…"))
-        return run([py, str(petani), "-W", str(getattr(a, "accounts", 1) or 1)], cwd=PETANI)
-
-    if mode in ("4", "daemon", "g", "G"):
-        print(col("yellow", "\n  24/7 auto-healing gateway on :8888  (Ctrl-C to stop)"))
-        print(col("dim", "  This keeps rotating + auto-refilling the pool in the background.\n"))
-        rc = run([py, str(petani), "--daemon-gateway"], cwd=PETANI)
-        print(col("green", "\n  Proxy ready: http://127.0.0.1:8888"))
         return rc
 
-    # default: gateway
-    print(col("cyan", "\n  Starting rotating gateway on :8888 (harvests + auto-refills)…"))
-    print(col("dim", "  dashboard: http://127.0.0.1:8888/dashboard\n"))
-    rc = run([py, str(petani), "--serve", str(getattr(a, "port", 8888) or 8888),
-              "--target", str(getattr(a, "target", 30) or 30)], cwd=PETANI)
-    print(col("green", "\n  Proxy ready: http://127.0.0.1:8888"))
-    return rc
+    if mode in ("2", "gateway"):
+        port = str(getattr(a, "port", 8888) or 8888)
+        target = str(getattr(a, "target", 30) or 30)
+        print(col("green", f"\n  Proxy ready: http://127.0.0.1:{port}"))
+        print(col("cyan",  f"  Dashboard:   http://127.0.0.1:{port}/dashboard"))
+        print(col("dim",   f"  PAC URL:     http://127.0.0.1:{port}/proxy.pac\n"))
+        # ponytail: shells out to petani-proxy main.py --serve 8888 --target 30
+        return run([py, str(petani), "--serve", port, "--target", target], cwd=PETANI)
+
+    if mode in ("3", "residential", "w"):
+        accs = str(getattr(a, "accounts", 1) or 1)
+        print(col("cyan", f"\n  Hunting real residential IPs via Webshare (target {accs} accounts)…\n"))
+        # ponytail: shells out to petani-proxy main.py -W 1
+        return run([py, str(petani), "-W", accs], cwd=PETANI)
+
+    if mode in ("4", "daemon", "g"):
+        print(col("green", "\n  Proxy ready: http://127.0.0.1:8888"))
+        print(col("cyan",  "  Dashboard:   http://127.0.0.1:8888/dashboard"))
+        print(col("yellow", "  24/7 auto-healing gateway on :8888 (leave running in background, Ctrl-C to stop)…\n"))
+        # ponytail: shells out to petani-proxy main.py --daemon-gateway
+        return run([py, str(petani), "--daemon-gateway"], cwd=PETANI)
+
+    print(col("red", f"✗ unknown mode '{mode}'. Choose 1 (WARP), 2 (Gateway), 3 (Residential), or 4 (Daemon)."))
+    return 1
 
 
-
+def _proxy_export(a) -> int:
     src = PETANI / "output" / "live_elite.txt"
     if not src.exists():
         src = PETANI / "output" / "live_all.txt"
@@ -1215,6 +1229,54 @@ def cmd_region(a) -> int:
 
 # ═══════════════════════════════════════════════════════════════ k12
 
+def _k12_guided(py) -> int:
+    """Guided K-12 verification, mirroring run_cmd.bat's [1]-[13] modes."""
+    script = K12_DIR / "script.py"
+    if not script.exists():
+        print(col("red", f"✗ {script} not found"))
+        return 1
+
+    def _ask(prompt, default=""):
+        d = f" [Enter = {default}]" if default else ""
+        try:
+            return input(f"  {col('bold', prompt)}{d}: ").strip() or default
+        except (EOFError, KeyboardInterrupt):
+            print()
+            raise SystemExit(0)
+
+    print(col("bold", "\n  K-12 / SheerID verification (guided)\n"))
+    url = _ask("Paste the SheerID verification URL")
+    if not url:
+        print(col("red", "  ✗ need a URL"))
+        return 1
+
+    print(col("bold", "\n  Connection mode:"))
+    print("   [1] direct + temp email        (default, simplest)")
+    print("   [2] proxy ip:port")
+    print("   [3] proxy user:pass@ip:port")
+    print("   [4] debug, no proxy")
+    print("   [7] no temp email")
+    print("   [10] manual email (send to your inbox)")
+    print("   [g] use local gateway 127.0.0.1:8888 (run 'kancahub proxy start' first)")
+    mode = _ask("Pick", "1").lower()
+
+    cmd = [py, str(script), url]
+    if mode == "2":
+        cmd += ["--proxy", _ask("proxy IP:PORT")]
+    elif mode == "3":
+        cmd += ["--proxy", _ask("user:pass@IP:PORT")]
+    elif mode == "4":
+        cmd += ["--debug"]
+    elif mode == "7":
+        cmd += ["--no-temp-email"]
+    elif mode == "10":
+        cmd += ["--email", _ask("your email")]
+    elif mode == "g":
+        cmd += ["--proxy", "127.0.0.1:8888"]
+
+    return run(cmd, cwd=K12_DIR)
+
+
 def cmd_k12(a) -> int:
     py = pick_python()
     py_camo = pick_python(camoufox=True)
@@ -1245,16 +1307,20 @@ def cmd_k12(a) -> int:
         return run(cmd, cwd=K12_DIR)
 
     if sub == "auto":
-        flow = AUTO_FREECF / "scripts" / "auto_k12_flow_kancahub.py"
-        if not flow.exists():
-            flow = K12_DIR / "auto_k12_flow.py"
-        if not flow.exists():
-            print(col("red", "✗ auto_k12_flow not found"))
-            return 1
-        print(col("cyan", "Full auto flow: ChatGPT signup -> OTP -> session capture -> SheerID verify"))
-        print(col("dim", "  sessions -> k12_sessions.json  |  creds -> created_k12_accounts.txt"))
-        # run from the K-12 dir so `from script import K12Verifier` resolves
-        return run([py, str(flow)], cwd=K12_DIR)
+        # Prefer the tool's ORIGINAL proven flow (DrissionPage + temp.tf), which
+        # reliably walks ChatGPT signup -> SheerID and hands off to K12Verifier
+        # (auto-pass). Our experimental relay/nodriver flow is only a fallback.
+        original = K12_DIR / "auto_k12_flow.py"
+        experimental = AUTO_FREECF / "scripts" / "auto_k12_flow_kancahub.py"
+        if original.exists():
+            print(col("cyan", "Full auto flow (original tool): ChatGPT signup -> SheerID -> K12Verifier"))
+            print(col("dim", "  uses DrissionPage + temp.tf edu mailbox (proven auto-pass path)"))
+            return run([py, str(original)], cwd=K12_DIR)
+        if experimental.exists():
+            print(col("yellow", "Original auto flow missing; using experimental relay flow"))
+            return run([py, str(experimental)], cwd=K12_DIR)
+        print(col("red", "✗ no auto_k12_flow found"))
+        return 1
 
     if sub == "inject":
         inj = AUTO_FREECF / "scripts" / "chatgpt_9router.py"
@@ -1280,6 +1346,10 @@ def cmd_k12(a) -> int:
         if a.prune:
             cmd.append("--prune")
         return run(cmd, cwd=AUTO_FREECF)
+
+    if sub == "run":
+        # Guided menu that mirrors the original run_cmd.bat [1]-[13].
+        return _k12_guided(py)
 
     if sub == "modes":
         print(col("bold", "\nK-12 connection modes (maps to run_cmd.bat [1]-[12]):"))
@@ -1755,6 +1825,7 @@ def build_parser() -> argparse.ArgumentParser:
     kv.add_argument("--email", default=None)
     kv.add_argument("--no-temp-email", action="store_true")
     kv.add_argument("--ask-email", action="store_true")
+    ks.add_parser("run", help="guided: paste URL + pick mode (mirrors the original [1]-[13] menu)")
     ks.add_parser("auto", help="full auto: ChatGPT signup + OTP + session capture + SheerID verify")
     ki = ks.add_parser("inject", help="inject captured ChatGPT sessions into 9Router (codex)")
     ki.add_argument("--session", default=None, help="session json (default: auto-detect k12_sessions.json)")
@@ -1861,7 +1932,7 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
     page1 = [
         ("1", "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"]),
         ("2", "Check everything is healthy", "doctor", ["doctor"]),
-        ("3", "Start the proxy gateway", "proxy daemon", ["proxy", "daemon"]),
+        ("3", "Start the proxy gateway", "proxy start", ["proxy", "start"]),
         ("4", "Create TokenHarbor keys", "thk batch", ["thk", "batch"]),
         ("5", "Grok farm", "grok run", ["grok", "run"]),
         ("6", "K-12 teacher verification", "k12 auto", ["k12", "auto"]),
