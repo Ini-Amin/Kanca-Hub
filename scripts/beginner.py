@@ -174,28 +174,12 @@ def wizard_check() -> int:
 def wizard_proxy() -> int:
     hr()
     print(c("bold", "  Turn on a proxy (so signups don't get blocked)\n"))
-    print(c("dim", "  This finds working proxies and starts a local gateway on"))
-    print(c("dim", "  http://127.0.0.1:8888 . Other tools use it automatically.\n"))
-
-    how = ask("Find fresh free proxies (f) or use my own file (m)", "f").lower()
-    if how.startswith("m"):
-        pool = ask("Path to your proxy list file")
-        if not pool or not Path(pool).exists():
-            print(c("red", "  ✗ file not found; going back."))
-            return 0
-        print(c("cyan", "\n  ▶ Starting your proxy gateway (Ctrl-C to stop)…\n"))
-        rc = run_script("proxy_gateway.py", ["--pool", pool, "--port", "8888"])
-    else:
-        print(c("cyan", "\n  ▶ Step 1: finding working proxies (a few seconds)…\n"))
-        out = "/tmp/kancahub_pool.txt"
-        rc = run_script("proxy_lib.py", ["harvest", "--target", "15", "--out-txt", out])
-        if rc != 0 or not Path(out).exists():
-            print(c("red", "  ✗ couldn't find usable proxies right now. Try again later."))
-            ask("Press Enter to go back")
-            return 0
-        print(c("cyan", "\n  ▶ Step 2: starting your gateway on :8888 (Ctrl-C to stop)…\n"))
-        run_script("proxy_gateway.py", ["--pool", out, "--port", "8888"])
-
+    print(c("dim", "  Pick a mode and KancaHub starts it for you. Other tools then use it"))
+    print(c("dim", "  automatically at http://127.0.0.1:8888 .\n"))
+    print(c("dim", "  Not sure? Choose 1 (WARP) — it's free and safe.\n"))
+    run_script("kancahub.py", ["proxy", "start"])
+    print()
+    print(c("cyan", "  Tip: run  ") + c("bold", "kancahub proxy verify") + c("cyan", "  to PROVE your IP is hidden."))
     ask("\nPress Enter to go back")
     return 0
 
