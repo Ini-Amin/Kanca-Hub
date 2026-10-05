@@ -20,6 +20,10 @@ features (not just pass-throughs):
             run · web · gui · retry · pool · inject (SSO tokens -> 9Router via grok2api)
   github  GitHub Education account farm (signup + Education form helper)
             farm (--index N) · check   (CAPTCHA / ID-photo steps stay manual)
+  mail    School mailbox (BINUS M365) via browser — read signup OTPs
+            test (selftest) · otp (--timeout) · login
+  gmail   Gmail account farm (gmail-account-creator, nodriver)
+            farm (--count/--headless/--proxy/--out) · check
   k12     ChatGPT K-12 teacher verification (SheerID)
             auto (full account+verify) · verify (URL) · inject · sync ·
             link-finder (find SheerID links) · modes
@@ -58,6 +62,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -77,6 +82,12 @@ HARBOR = HOME / "harbor"
 GROK_REG = HOME / "grok-register"
 NINE_ROUTER_DB = HOME / ".9router" / "db" / "data.sqlite"
 VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
+CAMOUFOX_PY = HOME / ".local" / "share" / "auto-freecf" / "camoufox-venv" / "bin" / "python"
+CAMOUFOX_CACHE = HOME / ".cache" / "camoufox"
+TEMPIK_URL = "https://tempik.kancalabs.workers.dev/api/config"
+THK_NODE_ID = "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a"
+SCHOOL_PROFILE = HOME / ".config" / "auto-freecf" / "school-profile"
+ENV_FILE = HOME / ".config" / "auto-freecf" / ".env"
 
 GATEWAY_DEFAULT = "http://127.0.0.1:8888"
 RES_GW_DEFAULT = "http://127.0.0.1:8899"
@@ -128,7 +139,22 @@ class KancaHubParser(argparse.ArgumentParser):
         return text
 
 
-def pick_python() -> str:
+CAMOUFOX_VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "camoufox-venv" / "bin" / "python"
+
+
+def pick_python(camoufox: bool = False) -> str:
+    """Interpreter for child scripts.
+
+    camoufox=True returns the isolated python3.11 venv that has camoufox +
+    playwright (scripts converted to Camoufox MUST run there; the main venv is
+    python3.13 and has neither). Falls back to the main venv if absent.
+    """
+    if camoufox:
+        cv = str(CAMOUFOX_VENV_PY)
+        if CAMOUFOX_VENV_PY.exists() and os.access(cv, os.X_OK):
+            return cv
+        print(col("yellow", "⚠️ camoufox venv not found; falling back to the main venv "
+                            "(camoufox/playwright may be missing)"))
     v = str(VENV_PY)
     if VENV_PY.exists() and os.access(v, os.X_OK):
         return v
@@ -162,6 +188,36 @@ def _gateway_alive(gateway: str = GATEWAY_DEFAULT) -> bool:
             return True
     except Exception:
         return False
+
+def _http_status(url: str, timeout: float = 6.0) -> int | None:
+    """GET a URL and return the HTTP status code, or None on any failure."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "kancahub-doctor/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.getcode() or 200
+    except urllib.error.HTTPError as e:  # reachable, just not 2xx
+        return e.code
+    except Exception:
+        return None
+
+def _env_get(key: str, env_file: Path) -> str:
+    """Read a single KEY=value out of a dotenv file (no interpolation)."""
+    if not env_file.exists():
+        return ""
+    try:
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line.startswith(key + "=") and not line.startswith("#"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+def _count_lines(p: Path) -> int:
+    try:
+        return sum(1 for ln in p.read_text().splitlines() if ln.strip())
+    except OSError:
+        return 0
 
 
 # ═══════════════════════════════════════════════════════════════ doctor
@@ -227,6 +283,132 @@ def cmd_doctor(_a) -> int:
             print(f"  {'✅' if up else '➖'} WARP tunnel {'(up)' if up else '(down)'}")
     except Exception:
         pass
+
+    # ── Camoufox (isolated venv + fetched browser binary) ──────────
+    print(col("bold", "\n  Camoufox:"))
+    cf_py = CAMOUFOX_PY
+    cf_py_ok = cf_py.exists() and os.access(str(cf_py), os.X_OK)
+    print(f"  {'✅' if cf_py_ok else '❌'} camoufox venv python ({cf_py})")
+    if cf_py_ok:
+        r = subprocess.run(
+            [str(cf_py), "-c", "import camoufox, playwright"],
+            capture_output=True, text=True,
+        )
+        imp_ok = r.returncode == 0
+        print(f"  {'✅' if imp_ok else '❌'} import camoufox + playwright")
+        if not imp_ok:
+            tail = (r.stderr or r.stdout or "").strip().splitlines()
+            if tail:
+                print(col("dim", f"      {tail[-1][:100]}"))
+    else:
+        print("  ❌ import camoufox + playwright (venv python missing)")
+    cf_cache = CAMOUFOX_CACHE
+    try:
+        cf_fetched = cf_cache.exists() and any(cf_cache.iterdir())
+    except OSError:
+        cf_fetched = False
+    if cf_fetched:
+        n_entries = len(list(cf_cache.iterdir()))
+        print(f"  ✅ browser binary fetched (~/.cache/camoufox, {n_entries} entries)")
+    else:
+        print("  ❌ browser binary fetched (~/.cache/camoufox empty — run: camoufox fetch)")
+
+    # ── Tempik mail worker (HTTP reachability) ─────────────────────
+    print(col("bold", "\n  Tempik:"))
+    tempik_code = _http_status(TEMPIK_URL, timeout=6.0)
+    if tempik_code == 200:
+        print(f"  ✅ GET {TEMPIK_URL} -> 200")
+    elif tempik_code is None:
+        print(f"  ❌ GET {TEMPIK_URL} -> unreachable")
+    else:
+        print(f"  ❌ GET {TEMPIK_URL} -> HTTP {tempik_code} (expected 200)")
+
+    # ── School mailbox (M365 / BINUS) ──────────────────────────────
+    print(col("bold", "\n  School mailbox:"))
+    env_file = ENV_FILE
+    school_email = _env_get("SCHOOL_EMAIL", env_file)
+    print(f"  {'✅' if school_email else '❌'} SCHOOL_EMAIL "
+          f"{school_email if school_email else '(not set in ' + str(env_file) + ')'}")
+    school_pw = bool(_env_get("SCHOOL_MAIL_PASSWORD", env_file))
+    print(f"  {'✅' if school_pw else '❌'} SCHOOL_MAIL_PASSWORD set")
+    prof = SCHOOL_PROFILE
+    prof_ok = prof.is_dir() and any(prof.iterdir())
+    if prof_ok:
+        print(f"  ✅ school profile dir ({prof.name}, logged-in session cached)")
+    elif prof.is_dir():
+        print(f"  ➖ school profile dir ({prof.name} exists but empty — run: kancahub mail test)")
+    else:
+        print(f"  ❌ school profile dir ({prof} missing)")
+
+    # ── Outputs / state files ──────────────────────────────────────
+    print(col("bold", "\n  Outputs & state:"))
+    state = [
+        ("results.json (CF signup)", AUTO_FREECF / "results.json"),
+        ("results.json (signup_from_scratch)", AUTO_FREECF / "signup_from_scratch" / "results.json"),
+        ("github_accounts.json", AUTO_FREECF / "github_accounts.json"),
+        ("k12_sessions.json", K12_DIR / "k12_sessions.json"),
+        ("region.json", HOME / ".config" / "auto-freecf" / "region.json"),
+    ]
+    for label, path in state:
+        if path.exists():
+            size = path.stat().st_size
+            extra = ""
+            if path.name == "github_accounts.json" or path.name == "results.json":
+                try:
+                    data = json.loads(path.read_text())
+                    n = len(data) if isinstance(data, list) else len(data.get("accounts", [])) if isinstance(data, dict) else 0
+                    extra = f", {n} entries"
+                except Exception:
+                    extra = ""
+            print(f"  ✅ {label} ({size} bytes{extra})")
+        else:
+            print(f"  ➖ {label} (absent)")
+
+    proxies = AUTO_FREECF / "signup_from_scratch" / "proxies.txt"
+    if proxies.exists():
+        n_prox = _count_lines(proxies)
+        print(f"  {'✅' if n_prox else '➖'} proxies.txt ({n_prox} proxies)")
+    else:
+        print("  ❌ proxies.txt (missing)")
+
+    # ── 9Router connection inventory ───────────────────────────────
+    print(col("bold", "\n  9Router connections:"))
+    if NINE_ROUTER_DB.exists():
+        import sqlite3
+        try:
+            con = sqlite3.connect(f"file:{NINE_ROUTER_DB}?mode=ro", uri=True)
+            def _cnt(where: str, params: tuple = ()) -> tuple[int, int]:
+                row = con.execute(
+                    f"SELECT COUNT(*), COALESCE(SUM(isActive), 0) FROM providerConnections {where}",
+                    params,
+                ).fetchone()
+                return int(row[0]), int(row[1])
+            cf_t, cf_a = _cnt("WHERE provider = ?", ("cloudflare-ai",))
+            cx_t, cx_a = _cnt("WHERE provider = ?", ("codex",))
+            thk_t, thk_a = _cnt("WHERE provider = ?", (THK_NODE_ID,))
+            xai_t, xai_a = _cnt("WHERE provider = ?", ("xai",))
+            print(f"  {'✅' if cf_t else '➖'} cloudflare-ai : {cf_t} total, {cf_a} active")
+            print(f"  {'✅' if cx_t else '➖'} codex (ChatGPT): {cx_t} total, {cx_a} active")
+            print(f"  {'✅' if thk_t else '➖'} TokenHarbor (thk): {thk_t} total, {thk_a} active")
+            print(f"  {'✅' if xai_t else '➖'} xai (Grok OAuth): {xai_t} total, {xai_a} active")
+            con.close()
+        except Exception as e:  # noqa: BLE001
+            print(col("red", f"  ❌ could not read DB: {e}"))
+    else:
+        print(col("red", f"  ❌ 9Router DB not found: {NINE_ROUTER_DB}"))
+
+    # ── Scripts built since the last doctor pass ───────────────────
+    print(col("bold", "\n  Scripts:"))
+    wanted = [
+        "proxy_gateway.py", "grok_driver.py", "grok_9router.py", "github_farm.py",
+        "sheerid_link_finder.py", "school_mail_browser.py", "gmail_creator.py",
+        "harbor_config.py", "camoufox_helpers.py",
+    ]
+    for name in wanted:
+        p = AUTO_FREECF / "scripts" / name
+        print(f"  {'✅' if p.exists() else '❌'} {name}")
+
+    print()
     return 0
 
 
@@ -626,6 +808,26 @@ def cmd_thk(a) -> int:
     if sub == "sync":
         return _thk_sync(a, py)
 
+    if sub == "setup-env":
+        helper = AUTO_FREECF / "scripts" / "harbor_config.py"
+        if not helper.exists():
+            print(col("red", f"✗ harbor_config.py not found at {helper}"))
+            return 1
+        cmd = [py, str(helper)]
+        for flag, val in (("--harbor-dir", getattr(a, "harbor_dir", None)),
+                          ("--env-file", getattr(a, "env_file", None)),
+                          ("--proxies-src", getattr(a, "proxies_src", None)),
+                          ("--tempik-url", getattr(a, "tempik_url", None))):
+            if val:
+                cmd += [flag, val]
+        if getattr(a, "no_proxies", False):
+            cmd.append("--no-proxies")
+        if getattr(a, "status", False):
+            cmd.append("--status")
+        if getattr(a, "dry_run", False):
+            cmd.append("--dry-run")
+        return run(cmd, cwd=AUTO_FREECF)
+
     print(col("red", "✗ unknown thk command"))
     return 1
 
@@ -763,7 +965,7 @@ def cmd_grok(a) -> int:
 
 def cmd_github(a) -> int:
     """GitHub Education / account farm — wraps scripts/github_farm.py."""
-    py = pick_python()
+    py = pick_python(camoufox=True)
     farm = AUTO_FREECF / "scripts" / "github_farm.py"
     if not farm.exists():
         print(col("red", f"✗ github_farm.py not found at {farm}"))
@@ -814,6 +1016,7 @@ def cmd_region(a) -> int:
 
 def cmd_k12(a) -> int:
     py = pick_python()
+    py_camo = pick_python(camoufox=True)
     sub = a.k12_cmd
 
     if sub == "verify":
@@ -902,7 +1105,7 @@ def cmd_k12(a) -> int:
         extra = [x for x in (a.extra or [])]
         if extra and extra[0] == "--":
             extra = extra[1:]
-        return run([py, str(finder)] + extra, cwd=AUTO_FREECF)
+        return run([py_camo, str(finder)] + extra, cwd=AUTO_FREECF)
 
     print(col("red", "✗ unknown k12 command"))
     return 1
