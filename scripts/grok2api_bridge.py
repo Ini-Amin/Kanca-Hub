@@ -35,33 +35,48 @@ WHAT IT DOES
     instead of the loaded pool (this is how grok_9router.py's per-token mode
     works — it sets apiKey = the SSO token).
 
-UPSTREAM — READ THIS (honesty section)
---------------------------------------
-The exact *wire shape* of the xAI/Grok "chat" upstream when authenticated ONLY
-by an SSO cookie is not fully pinned down in the sources we have:
+UPSTREAM — GROUNDED (probed 2026-10-05)
+---------------------------------------
+Grok/xAI has TWO different auth surfaces and they are NOT interchangeable:
 
-  * grok-register sets `cookie: sso=<t>; sso-rw=<t>` and then talks to
-    google-Play-Spanner-esque **gRPC-web** endpoints on grok.com / accounts.x.ai
-    for account settings (registration_browser.py: set_tos_accepted,
-    update_nsfw_settings). Those are account-management RPCs, not chat.
-  * The OAuth-minted CPA credentials use `base_url = https://cli-chat-proxy.grok.com/v1`
-    (cpa_xai/schema.py) — an OpenAI-shaped /v1 surface — but that credential is a
-    Bearer access token, not an SSO cookie.
-  * We did not find in-repo evidence of the cookie-authenticated /v1/chat/completions
-    request body or the exact host used by real grok2api deployments.
+  * OAuth Bearer — `https://cli-chat-proxy.grok.com/v1`, an OpenAI-shaped /v1
+    surface. This is what grok-register's CPA export mints (access_token /
+    refresh_token, scope "grok-cli:access api:access"; see cpa_xai/schema.py).
+    Probed live: an anonymous GET /v1/models answers 401
+    ("Invalid or expired credentials ... no auth context"). It does NOT accept
+    an SSO cookie.
+  * SSO cookie — `POST https://grok.com/rest/app-chat/conversations/new`, the
+    endpoint the grok.com web app itself calls, with the token in the
+    `sso=<t>; sso-rw=<t>` cookies (exactly what registration_browser.py's
+    enable_nsfw_for_token and sso_risk.inspect_sso_account_state set). Probed
+    live: an anonymous POST answers
+    `{"error":{"code":16,"message":"No credentials presented..."}}` and a dummy
+    cookie answers `...Bad credentials...` — the route and the cookie auth are
+    therefore correct; only a valid SSO is missing.
 
-So this bridge makes a *reasonable* choice and makes it trivial to change:
+Because a grok-register SSO is a COOKIE (not a Bearer), the default upstream is
+the grok.com app-chat route:
 
-  --upstream-base   default https://cli-chat-proxy.grok.com
-  --upstream-path   default /v1/chat/completions   (append to base)
+  --upstream-base   default https://grok.com
+  --upstream-path   default /rest/app-chat/conversations/new
   --auth-mode       cookie (default) | bearer
-  --upstream-model  optional model-name remap, e.g. grok-4=grok-4-latest
+  --cf-clearance    optional Cloudflare cf_clearance cookie value
+  --raw             skip translation (send body verbatim, return upstream as-is)
 
-With `--auth-mode cookie` (default) the SSO token is sent as
-`Cookie: sso=<t>; sso-rw=<t>`; with `--auth-mode bearer` it is sent as
-`Authorization: Bearer <t>`. Flip whichever your upstream actually wants. If the
-upstream replies 4xx, the bridge returns the upstream status and a truncated body
-so you can see exactly what it expects and adjust the flags — no guesswork hidden.
+With `--auth-mode cookie` the OpenAI request is translated to Grok's
+`{"message","modelName"}` shape and the streamed reply is folded back into an
+OpenAI `chat.completion`. `--raw` bypasses that so you can inspect the real wire
+shape if grok.com changes.
+
+For an OAuth Bearer credential instead, use the OAuth surface:
+  --upstream-base https://cli-chat-proxy.grok.com --upstream-path /v1/chat/completions --auth-mode bearer
+
+HONESTY: grok.com sits behind Cloudflare and expects a real browser TLS
+fingerprint, so the bridge uses curl_cffi Chrome impersonation when available
+(`--no-impersonate` forces plain httpx). The *request* shape and the auth
+mechanism above are grounded and live-probed; the app-chat *response* body is
+parsed best-effort (result.response.message / .token) and returns the raw
+upstream body on any mismatch so nothing is hidden.
 
 CLI
 ---
@@ -105,6 +120,11 @@ except Exception:  # pragma: no cover - import-time guard
     httpx = None  # type: ignore[assignment]
 
 try:
+    from curl_cffi.requests import AsyncSession as _CurlAsyncSession  # Chrome TLS impersonation
+except Exception:  # pragma: no cover - import-time guard
+    _CurlAsyncSession = None  # type: ignore[assignment]
+
+try:
     from fastapi import FastAPI, Header, Request
     from fastapi.responses import JSONResponse
 except Exception:  # pragma: no cover - import-time guard
@@ -119,7 +139,10 @@ GROK_REGISTER_DIR = Path(os.environ.get("GROK_REGISTER_DIR", Path.home() / "grok
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
-DEFAULT_UPSTREAM_BASE = "https://cli-chat-proxy.grok.com"
+# SSO-cookie auth talks to the grok.com web app's own chat route (see UPSTREAM above).
+DEFAULT_UPSTREAM_BASE = "https://grok.com"
+DEFAULT_UPSTREAM_CHAT_PATH = "/rest/app-chat/conversations/new"
+DEFAULT_UPSTREAM_RESPONSES_PATH = "/rest/app-chat/conversations/new"
 DEFAULT_UPSTREAM_MODEL = "grok-4"
 
 # Models advertised by GET /v1/models (OpenAI shape). 9Router only needs the ids.
@@ -132,6 +155,67 @@ def _clean_sso(raw: str) -> str:
     if t.lower().startswith("sso="):
         t = t[4:]
     return t.split(";")[0].strip()
+
+
+def _messages_to_prompt(messages: Any) -> str:
+    """Flatten an OpenAI messages array into one prompt string for grok.com."""
+    if not isinstance(messages, list):
+        return str(messages or "")
+    parts: list[str] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "user")
+        content = m.get("content")
+        if isinstance(content, list):  # OpenAI multi-part content
+            content = " ".join(
+                str(c.get("text", "")) for c in content if isinstance(c, dict)
+            )
+        text = str(content or "").strip()
+        if not text:
+            continue
+        parts.append(f"{role}: {text}" if role != "user" else text)
+    return "\n\n".join(parts)
+
+
+def _extract_reply(result: dict, raw: bool) -> tuple[str, str | None]:
+    """Pull (text, model) out of grok.com's app-chat JSON, best-effort."""
+    if not isinstance(result, dict):
+        return str(result), None
+    model = result.get("modelName") or result.get("model")
+    node = result.get("result") if isinstance(result.get("result"), dict) else result
+    for container in (node, result):
+        if not isinstance(container, dict):
+            continue
+        resp = container.get("response")
+        if isinstance(resp, dict):
+            for key in ("message", "token", "text", "content"):
+                if resp.get(key):
+                    return str(resp[key]), (model if isinstance(model, str) else None)
+        if isinstance(resp, str) and resp:
+            return resp, (model if isinstance(model, str) else None)
+        for key in ("message", "text", "content"):
+            if isinstance(container.get(key), str) and container[key]:
+                return container[key], (model if isinstance(model, str) else None)
+    return "", (model if isinstance(model, str) else None)
+
+
+def _to_openai(payload: dict, model: str) -> dict:
+    """OpenAI chat.completion envelope from a grok.com app-chat response."""
+    text, upstream_model = _extract_reply(payload, raw=False)
+    now = int(time.time())
+    return {
+        "id": f"chatcmpl-grok2api-{now}",
+        "object": "chat.completion",
+        "created": now,
+        "model": upstream_model or model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": text},
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
 
 
 # --------------------------------------------------------------------------- tokens
@@ -217,6 +301,9 @@ def build_app(args: argparse.Namespace) -> "FastAPI":
     upstream_responses_path = args.upstream_responses_path
     auth_mode = args.auth_mode
     default_model = args.upstream_model
+    cf_clearance = str(getattr(args, "cf_clearance", "") or "").strip()
+    use_impersonate = bool(getattr(args, "impersonate", True)) and _CurlAsyncSession is not None
+    raw_mode = bool(getattr(args, "raw", False))
 
     app = FastAPI(title="grok2api_bridge", version="0.1.0")
 
@@ -233,45 +320,98 @@ def build_app(args: argparse.Namespace) -> "FastAPI":
     def auth_headers(sso: str) -> dict[str, str]:
         if auth_mode == "bearer":
             return {"Authorization": f"Bearer {sso}"}
-        # default: cookie mode, mirroring registration_browser.py
-        return {"Cookie": f"sso={sso}; sso-rw={sso}"}
+        # default: cookie mode, mirroring registration_browser.py / sso_risk.py
+        cookie = f"sso={sso}; sso-rw={sso}"
+        if cf_clearance:
+            cookie += f"; cf_clearance={cf_clearance}"
+        return {"Cookie": cookie}
 
     async def forward(path: str, body: dict, sso: str) -> "JSONResponse":
-        if httpx is None:
-            return JSONResponse({"error": {"message": "httpx unavailable"}}, status_code=500)
         model = str(body.get("model") or default_model)
         if args.model_map:
             model = args.model_map.get(model, model)
-        payload = dict(body)
-        payload["model"] = model
+
+        if raw_mode or auth_mode == "bearer":
+            payload = dict(body)
+            payload["model"] = model
+        else:
+            # Translate OpenAI -> grok.com app-chat shape.
+            payload = {
+                "message": _messages_to_prompt(body.get("messages")),
+                "modelName": model,
+                "fileAttachments": [],
+                "imageAttachments": [],
+                "disableSearch": False,
+                "enableImageGeneration": True,
+                "returnImageBytes": False,
+                "returnRawGrokInXaiRequest": False,
+                "enableImageStreaming": True,
+                "imageGenerationCount": 2,
+                "forceConcise": False,
+                "toolOverrides": {},
+                "enableSideBySide": True,
+                "sendFinalMetadata": True,
+                "isReasoning": False,
+                "disableTextFollowUps": False,
+                "responseMetadata": {"modelConfigOverride": {"modelMap": {}}},
+            }
+
         url = upstream_base + path
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "grok2api_bridge/0.1",
+            "User-Agent": "grok2api_bridge/0.2",
             **auth_headers(sso),
         }
+        if auth_mode == "cookie" and not raw_mode:
+            headers["origin"] = "https://grok.com"
+            headers["referer"] = "https://grok.com/"
         try:
-            async with httpx.AsyncClient(timeout=args.timeout) as client:
-                resp = await client.post(url, headers=headers, json=payload)
+            if use_impersonate:
+                async with _CurlAsyncSession(impersonate="chrome", timeout=args.timeout) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+            else:
+                if httpx is None:
+                    return JSONResponse({"error": {"message": "httpx unavailable"}}, status_code=500)
+                async with httpx.AsyncClient(timeout=args.timeout) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse(
                 {"error": {"message": f"upstream request failed: {type(exc).__name__}: {exc}",
                            "type": "upstream_error", "upstream": url}},
                 status_code=502,
             )
+
+        status = resp.status_code
         ctype = resp.headers.get("content-type", "")
+        text = resp.text
+        parsed = None
         if "application/json" in ctype:
             try:
-                return JSONResponse(resp.json(), status_code=resp.status_code)
+                parsed = resp.json()
             except Exception:  # noqa: BLE001
-                pass
-        # Non-JSON (e.g. SSE text or an HTML error) — surface it so the caller can adjust flags.
+                parsed = None
+            # grok.com returns application/json even for its {"error":...} envelope.
+            if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+                return JSONResponse(parsed, status_code=status if status >= 400 else 502)
+            if status >= 400:
+                return JSONResponse(
+                    {"error": {"message": "upstream error", "upstream_status": status,
+                               "upstream": url, "body": text[:2000]}},
+                    status_code=status,
+                )
+            if raw_mode or auth_mode == "bearer":
+                return JSONResponse(parsed if parsed is not None else {"raw": text[:4000]},
+                                    status_code=status)
+            return JSONResponse(_to_openai(parsed if isinstance(parsed, dict) else {}, model),
+                                status_code=200)
+
+        # Non-JSON (SSE text or an HTML error) — surface it so flags can be adjusted.
         return JSONResponse(
             {"error": {"message": "non-JSON upstream response",
-                       "upstream_status": resp.status_code, "upstream": url,
-                       "body": resp.text[:2000]}},
-            status_code=resp.status_code if resp.status_code >= 400 else 502,
+                       "upstream_status": status, "upstream": url,
+                       "body": text[:2000]}},
+            status_code=status if status >= 400 else 502,
         )
 
     @app.get("/healthz")
@@ -282,6 +422,8 @@ def build_app(args: argparse.Namespace) -> "FastAPI":
             "upstream_base": upstream_base,
             "upstream_chat_path": upstream_chat_path,
             "auth_mode": auth_mode,
+            "impersonate": "chrome" if use_impersonate else "off",
+            "raw": raw_mode,
             "time": int(time.time()),
         })
 
@@ -349,12 +491,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--upstream-base", default=os.environ.get("GROK2API_UPSTREAM", DEFAULT_UPSTREAM_BASE),
                     help=f"xAI/Grok upstream base URL (default: {DEFAULT_UPSTREAM_BASE}; "
                          "also env GROK2API_UPSTREAM)")
-    ap.add_argument("--upstream-path", default="/v1/chat/completions",
-                    help="chat path appended to --upstream-base (default: /v1/chat/completions)")
-    ap.add_argument("--upstream-responses-path", default="/v1/responses",
-                    help="responses path appended to --upstream-base (default: /v1/responses)")
+    ap.add_argument("--upstream-path", default=DEFAULT_UPSTREAM_CHAT_PATH,
+                    help=f"chat path appended to --upstream-base (default: {DEFAULT_UPSTREAM_CHAT_PATH})")
+    ap.add_argument("--upstream-responses-path", default=DEFAULT_UPSTREAM_RESPONSES_PATH,
+                    help=f"responses path appended to --upstream-base (default: {DEFAULT_UPSTREAM_RESPONSES_PATH})")
     ap.add_argument("--auth-mode", choices=["cookie", "bearer"], default="cookie",
                     help="how to present the SSO token upstream: Cookie sso=... (default) or Bearer")
+    ap.add_argument("--cf-clearance", default=os.environ.get("GROK2API_CF_CLEARANCE", ""),
+                    help="optional Cloudflare cf_clearance cookie value (also env GROK2API_CF_CLEARANCE)")
+    ap.add_argument("--no-impersonate", dest="impersonate", action="store_false",
+                    help="use plain httpx instead of curl_cffi Chrome TLS impersonation")
+    ap.add_argument("--raw", action="store_true",
+                    help="do not translate: send the request body verbatim and return the upstream body as-is")
+    ap.set_defaults(impersonate=True, raw=False)
     ap.add_argument("--upstream-model", default=DEFAULT_UPSTREAM_MODEL,
                     help=f"model used when the request omits one (default: {DEFAULT_UPSTREAM_MODEL})")
     ap.add_argument("--model-map", default="",
@@ -386,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  tokens loaded        : {app.state.token_count}")
     print(f"  upstream             : {args.upstream_base}{args.upstream_path}")
     print(f"  auth mode            : {args.auth_mode}")
+    print(f"  TLS impersonation    : {'chrome' if args.impersonate and _CurlAsyncSession else 'off'}")
     print(f"  default model        : {args.upstream_model}")
     print(f"  wire into 9Router    : kancahub grok inject --base-url http://{args.host}:{args.port}/v1")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

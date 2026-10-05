@@ -196,6 +196,174 @@ def rotate_gateway(pool_file: str, port: int = 8899, scheme: str = "auto",
     ])
 
 
+def find_free_port(host: str = "127.0.0.1") -> int:
+    """Find a random unallocated local port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
+def get_my_ip(timeout: float = 5.0) -> str | None:
+    """Fetch external public IP directly."""
+    for url in ("https://api.ipify.org", "https://icanhazip.com", "https://checkip.amazonaws.com"):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "curl/7.88.1"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                text = resp.read().decode("utf-8", "ignore").strip()
+                if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", text):
+                    return text
+        except Exception:
+            continue
+    return None
+
+
+def check_gateway_egress(gateway_url: str, retries: int = 4, timeout: float = 6.0) -> str | None:
+    """Fetch external IP routed through gateway_url, trying across pool rotation."""
+    import subprocess
+    for attempt in range(retries):
+        try:
+            r = subprocess.run(
+                ["curl", "-s", "-m", str(int(timeout)), "-x", gateway_url, "https://api.ipify.org"],
+                capture_output=True, text=True,
+            )
+            body = (r.stdout or "").strip()
+            if body and re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", body):
+                return body
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return None
+
+
+def stop_gateway(proc: subprocess.Popen | None) -> None:
+    """Safely terminate a background gateway process."""
+    if proc is not None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+
+
+def ensure_clean_egress(
+    prefer_pool: str | Path | None = None,
+    target_ip: str | None = None,
+    verbose: bool = True,
+) -> tuple[str | None, subprocess.Popen | None]:
+    """
+    Ensure a local rotating gateway running on verified clean proxies whose exit
+    IP differs from the host/blocked IP.
+
+    1. Checks prefer_pool if provided and has alive proxies.
+    2. Else harvests and validates fresh public proxies (SOCKS5, HTTP).
+    3. Spawns scripts/proxy_gateway.py in the background on a free port.
+    4. Verifies gateway egress through https://api.ipify.org.
+    5. Returns (gateway_url, proc) or (None, None).
+    """
+    import subprocess
+    import tempfile
+
+    real_ip = get_my_ip()
+    forbidden_ips = set()
+    if real_ip:
+        forbidden_ips.add(real_ip)
+    if target_ip:
+        forbidden_ips.add(target_ip)
+
+    if verbose:
+        print(f"  [egress] Real / blocked IP: {real_ip or target_ip or 'unknown'}", file=sys.stderr)
+
+    temp_pool_path: str | None = None
+
+    # 1. Check prefer_pool if given
+    if prefer_pool and Path(prefer_pool).exists():
+        if verbose:
+            print(f"  [egress] Checking health of preferred pool {prefer_pool}…", file=sys.stderr)
+        alive, _ = health(str(prefer_pool), timeout=3.0, workers=20)
+        if alive:
+            tfile = tempfile.NamedTemporaryFile("w+", delete=False, prefix="clean_egress_pool_", suffix=".txt")
+            tfile.write("\n".join(alive) + "\n")
+            tfile.close()
+            temp_pool_path = tfile.name
+            if verbose:
+                print(f"  [egress] ✓ Using {len(alive)} verified proxies from preferred pool", file=sys.stderr)
+
+    # 2. Harvest + validate if needed
+    if not temp_pool_path:
+        if verbose:
+            print("  [egress] Preferred pool has no live proxies; harvesting from public feeds…", file=sys.stderr)
+        # Prioritize SOCKS5 for reliable HTTPS TCP tunneling
+        cands = harvest(protocols=("socks5", "http"), verbose=False)
+        live = validate(cands, target=4, timeout=3.5, workers=80)
+        if not live:
+            cands = harvest(protocols=("socks5", "http", "socks4"), verbose=False)
+            live = validate(cands, target=4, timeout=4.0, workers=100)
+        if not live:
+            if verbose:
+                print("  [egress] ✗ All candidate proxies failed validation; no live proxy found.", file=sys.stderr)
+            return None, None
+
+        tfile = tempfile.NamedTemporaryFile("w+", delete=False, prefix="clean_egress_pool_", suffix=".txt")
+        tfile.write("\n".join(f"{p['scheme']}://{p['proxy']}" for p in live) + "\n")
+        tfile.close()
+        temp_pool_path = tfile.name
+        if verbose:
+            print(f"  [egress] ✓ Harvested {len(live)} live proxies -> {temp_pool_path}", file=sys.stderr)
+
+    # 3. Find free port & start gateway
+    port = find_free_port()
+    here = Path(__file__).resolve().parent
+    gateway_script = here / "proxy_gateway.py"
+    py = sys.executable
+
+    proc = subprocess.Popen(
+        [py, "-u", str(gateway_script), "--pool", temp_pool_path, "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # 4. Wait for gateway ready
+    deadline = time.time() + 8.0
+    ready = False
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                ready = True
+                break
+        except (OSError, ConnectionRefusedError):
+            time.sleep(0.2)
+
+    if not ready:
+        stop_gateway(proc)
+        if verbose:
+            print(f"  [egress] ✗ Gateway on port {port} failed to start.", file=sys.stderr)
+        return None, None
+
+    # 5. Verify egress differs from real/blocked IP
+    gateway_url = f"http://127.0.0.1:{port}"
+    egress_ip = check_gateway_egress(gateway_url, retries=5, timeout=7.0)
+    if not egress_ip:
+        stop_gateway(proc)
+        if verbose:
+            print("  [egress] ✗ Gateway could not connect to external network.", file=sys.stderr)
+        return None, None
+
+    if egress_ip in forbidden_ips:
+        stop_gateway(proc)
+        if verbose:
+            print(f"  [egress] ✗ Gateway exit IP {egress_ip} matches blocked IP.", file=sys.stderr)
+        return None, None
+
+    if verbose:
+        print(f"  [egress] ✓ Clean egress gateway ready: {gateway_url} (exit IP: {egress_ip})", file=sys.stderr)
+
+    return gateway_url, proc
+
+
 def _cli() -> int:
     import argparse
     ap = argparse.ArgumentParser(description="KancaHub native proxy toolkit")
