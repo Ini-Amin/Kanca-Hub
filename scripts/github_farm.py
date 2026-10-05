@@ -334,6 +334,45 @@ async def detect_captcha(tab) -> str | None:
     return None
 
 
+async def detect_access_restriction(tab) -> str | None:
+    """
+    GitHub sometimes serves a network-level block instead of the signup form:
+    'Access is temporarily restricted' / 'We detected unusual activity'.
+
+    This is NOT solvable by the script — it's tied to the egress IP (often a
+    shared WARP/Cloudflare or datacenter range). Detect it so we report honestly
+    instead of a misleading 'input not found'.
+
+    Two signatures are checked:
+      1. Visible text (when the interstitial renders its DOM).
+      2. Structural: an anti-bot challenge page with NO inputs and NO visible
+         body text but a `dd={...}` / `cmsg` challenge payload (DataDome-style),
+         which is what a blocked network actually returns to CDP.
+    """
+    body = (await _page_text(tab) or "")
+    low = body.lower()
+    if "temporarily restricted" in low or "unusual activity from your device" in low:
+        m = re.search(r'\((IP [^)]+)\)', body)
+        ip = m.group(1) if m else ""
+        return f"network/IP block: 'Access is temporarily restricted' {ip}".strip()
+    if "automated (bot) activity on your network" in low:
+        return "network/IP block: bot activity flagged on this network"
+
+    # Structural signature: challenge page with no form.
+    n_input = await js(tab, "document.querySelectorAll('input').length", -1)
+    if n_input == 0:
+        html = await js(tab, "document.documentElement ? document.documentElement.innerHTML : ''", "")
+        challengeish = any(k in (html or "") for k in ("dd={", "cmsg", "challenge", "__dd",
+                                                       "datadome", "cf-chl", "challenge-platform"))
+        if challengeish:
+            return ("network/IP block: anti-bot challenge page (no form rendered). "
+                    "GitHub is challenging this egress IP — switch proxy/VPN and retry.")
+        if not low.strip():
+            return ("no signup form rendered and page body empty — likely an anti-bot "
+                    "challenge/network block. Switch egress IP and retry.")
+    return None
+
+
 # ─────────────────────────────────────────────────────────── school mailbox
 
 async def school_login(tab, email: str, password: str) -> None:
@@ -498,11 +537,26 @@ async def do_signup(tab, email: str, password: str, username: str,
     await asyncio.sleep(6)
     await screenshot(tab, "01_signup")
 
+    # Network-level block? Report honestly instead of a bogus selector error.
+    blocked = await detect_access_restriction(tab)
+    if blocked:
+        res["stage"] = "access_restricted"
+        res["blocked"] = blocked
+        res["notes"].append("Switch egress IP (different proxy/VPN) and retry; "
+                            "GitHub is blocking this network, not our selectors.")
+        await screenshot(tab, "00_access_restricted")
+        print(f"      [gh] ❌ {blocked}", flush=True)
+        print("      [gh]    this is an IP/network block — retry from another egress", flush=True)
+        return res
+
     # ── Step 1: email ──────────────────────────────────────────────
     print("      [gh] step 1/4: email", flush=True)
     if not await fill_first_input(tab, ['input#email', 'input[name=email]',
                                         'input[type=email]', 'input[autocomplete=email]'], email):
+        blocked = await detect_access_restriction(tab)
         res["stage"] = "email_input_not_found"
+        if blocked:
+            res["blocked"] = blocked
         res["notes"].append(f"url={await js(tab, 'location.href', '')}")
         await screenshot(tab, "01_email_missing")
         return res
@@ -675,6 +729,12 @@ async def do_education(tab, email: str, username: str, dry_run: bool) -> dict:
     await asyncio.sleep(7)
     await screenshot(tab, "10_education")
     res["url"] = await js(tab, "location.href", "")
+
+    blocked = await detect_access_restriction(tab)
+    if blocked:
+        res["stage"] = "access_restricted"
+        res["needs_human"].append(f"{blocked} — switch egress IP and retry.")
+        return res
 
     body = (await _page_text(tab) or "")
     low = body.lower()

@@ -7,16 +7,22 @@ features (not just pass-throughs):
 
   stack   Auto-FreeCF + PetaniProxy-aware Cloudflare pipeline
             signup (create accounts) · login (existing accounts/Google) ·
+            cookie-import (Cookie-Editor JSON -> token) ·
             validate · sync (prune dead 9Router conns) · manage · web
   proxy   PetaniProxy
             harvest · fast · gateway/serve · daemon · residential (Webshare) ·
+            res-gateway (bridge for authenticated proxies) ·
             warp · grok (xAI farm) · pipeline · sync9r · export · stats · api
   warp    Cloudflare WARP tunnel (clean egress IPs for signup)
   region  signup region profiles (promo/bonus targeting: US/UK/SG/ID/…)
   thk     TokenHarbor (harbor): create keys + inject/sync with 9Router
   grok    Grok xAI farm (grok-register: SSO risk gate, 5 mail providers, pool)
+            run · web · gui · retry · pool · inject (SSO tokens -> 9Router via grok2api)
+  github  GitHub Education account farm (signup + Education form helper)
+            farm (--index N) · check   (CAPTCHA / ID-photo steps stay manual)
   k12     ChatGPT K-12 teacher verification (SheerID)
-            auto (full account+verify) · verify (URL) · modes
+            auto (full account+verify) · verify (URL) · inject · sync ·
+            link-finder (find SheerID links) · modes
   yowes   13-country teacher document generator
             list · schools · make · k12 (US teacher docs) · gui · mcp
   doctor  health/dependency check across everything
@@ -28,11 +34,16 @@ Examples
   kancahub region set us                     # target US promos
   kancahub stack signup -n 3 --warp          # full pipeline on WARP
   kancahub stack sync --prune                # drop dead 9Router connections
+  kancahub stack cookie-import cookies.json akun-1   # Cookie-Editor export -> accounts.json
   kancahub proxy daemon                       # 24/7 auto-healing gateway :8888
   kancahub proxy residential -n 2             # Webshare hunter
+  kancahub proxy res-gateway --pool res.txt --port 8899
   kancahub thk batch 3 && kancahub thk inject # TokenHarbor keys -> 9Router
   kancahub grok run                           # grok-register farm (CLI)
+  kancahub grok inject --base-url http://127.0.0.1:8000 --dry-run
+  kancahub github farm --index 1 --dry-run    # GitHub signup + Education helper
   kancahub k12 auto                           # ChatGPT signup + SheerID verify
+  kancahub k12 link-finder                    # find SheerID verification links
   kancahub yowes make --country us --first John --last Doe \
       --school "Norton Elementary"
 
@@ -433,6 +444,19 @@ def cmd_stack(a) -> int:
             cmd += ["--open"]
         return run(cmd, cwd=AUTO_FREECF)
 
+    if sub == "cookie-import":
+        # process_cookies.py usage: process_cookies.py <cookies.json> <account_label>
+        # (sys.argv[1]=cookie file, sys.argv[2]=label; writes accounts.json beside itself).
+        pc = AUTO_FREECF / "process_cookies.py"
+        if not pc.exists():
+            print(col("red", f"✗ process_cookies.py not found at {pc}"))
+            return 1
+        cookies = Path(a.cookies).expanduser().resolve()  # absolute: subprocess runs in AUTO_FREECF
+        if not cookies.exists():
+            print(col("red", f"✗ cookies file not found: {cookies}"))
+            return 1
+        return run([py, str(pc), str(cookies), a.label], cwd=AUTO_FREECF)
+
     print(col("red", "✗ unknown stack command"))
     return 1
 
@@ -715,7 +739,52 @@ def cmd_grok(a) -> int:
             print(col("dim", f"no grok2api pool yet ({tk})"))
         return 0
 
+    if sub == "inject":
+        inj = AUTO_FREECF / "scripts" / "grok_9router.py"
+        if not inj.exists():
+            print(col("red", f"✗ grok_9router.py not found at {inj}"))
+            return 1
+        cmd = [py, str(inj)]
+        if a.input:
+            cmd += ["-i", str(Path(a.input).expanduser())]
+        if a.base_url:
+            cmd += ["--base-url", a.base_url]
+        if a.verify:
+            cmd.append("--verify")
+        if a.dry_run:
+            cmd.append("--dry-run")
+        return run(cmd, cwd=AUTO_FREECF)
+
     print(col("red", "✗ unknown grok command"))
+    return 1
+
+
+# ═══════════════════════════════════════════════════════════════ github
+
+def cmd_github(a) -> int:
+    """GitHub Education / account farm — wraps scripts/github_farm.py."""
+    py = pick_python()
+    farm = AUTO_FREECF / "scripts" / "github_farm.py"
+    if not farm.exists():
+        print(col("red", f"✗ github_farm.py not found at {farm}"))
+        return 1
+    sub = a.github_cmd
+
+    if sub == "check":
+        return run([py, str(farm), "--check"], cwd=AUTO_FREECF)
+
+    if sub == "farm":
+        cmd = [py, str(farm), "--index", str(a.index)]
+        if a.headless:
+            cmd.append("--headless")
+        if a.proxy:
+            cmd += ["--proxy", a.proxy]
+        if a.dry_run:
+            cmd.append("--dry-run")
+        print(col("yellow", "Note: CAPTCHA and the Education ID/photo attestation remain manual steps."))
+        return run(cmd, cwd=AUTO_FREECF)
+
+    print(col("red", "✗ unknown github command"))
     return 1
 
 
@@ -823,6 +892,17 @@ def cmd_k12(a) -> int:
         for n, label, ex in rows:
             print(f"  [{n:>2}] {label:22s} {col('dim', ex)}")
         return 0
+
+    if sub == "link-finder":
+        finder = AUTO_FREECF / "scripts" / "sheerid_link_finder.py"
+        if not finder.exists():
+            print(col("red", f"✗ sheerid_link_finder.py not found at {finder}"))
+            print(col("dim", "  It has not been created yet — add scripts/sheerid_link_finder.py, then re-run."))
+            return 1
+        extra = [x for x in (a.extra or [])]
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        return run([py, str(finder)] + extra, cwd=AUTO_FREECF)
 
     print(col("red", "✗ unknown k12 command"))
     return 1
@@ -986,6 +1066,49 @@ def build_parser() -> argparse.ArgumentParser:
     grt.add_argument("--pending", default=None)
     grt.add_argument("--out", default=None)
     gs.add_parser("pool", help="show the grok2api token pool")
+    gin = gs.add_parser("inject", help="inject Grok SSO tokens into 9Router via a grok2api bridge",
+                        description="Wraps scripts/grok_9router.py. 9Router's built-in 'xai' provider is OAuth-only, "
+                                    "so SSO tokens go through a grok2api openai-compatible node "
+                                    "(--base-url or env GROK2API_BASE).")
+    gin.add_argument("-i", "--input", default=None,
+                     help="token.json, accounts_*.txt, or a directory (default: ~/grok-register)")
+    gin.add_argument("--base-url", default=None, help="grok2api base URL (default: env GROK2API_BASE)")
+    gin.add_argument("--dry-run", action="store_true", help="show planned rows, write nothing")
+    gin.add_argument("--verify", action="store_true", help="test each key against the bridge first")
+
+    # ---- github (Education / account farm) ----
+    ghp = sub.add_parser(
+        "github", help="GitHub Education: account farm + Student Pack application helper",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "GitHub Education / account-farm flow (scripts/github_farm.py, nodriver):\n"
+            "\n"
+            "  1. signup    new GitHub account via github.com/signup using a plus-addressed\n"
+            "               school mailbox (raymondi+gh<N>@binus.ac.id, --index N)\n"
+            "  2. verify    reads GitHub's 8-digit launch code live from the school M365\n"
+            "               mailbox (Outlook Web)\n"
+            "  3. education opens the GitHub Education application form and fills the fields\n"
+            "               it can (school, school email, name)\n"
+            "  4. save      account saved to ~/Auto-FreeCF/github_accounts.json\n"
+            "\n"
+            "NOT automated (finish by hand): Arkose/CAPTCHA puzzles, the student-ID photo /\n"
+            "identity attestation on the Education form, MFA/device checks, GitHub's manual review.\n"
+            "It stops before any attestation or upload. Treat it as a helper, not a turnkey farmer.\n"
+            "\n"
+            "Config: ~/.config/auto-freecf/.env  (SCHOOL_EMAIL, SCHOOL_MAIL_PASSWORD, SCHOOL_MAIL_URL)\n"
+            "\n"
+            "Examples:\n"
+            "  kancahub github check\n"
+            "  kancahub github farm --index 1 --dry-run     # walk the flow, no submit\n"
+            "  kancahub github farm --index 2 --headless"),
+    )
+    ghs = ghp.add_subparsers(dest="github_cmd")
+    gf = ghs.add_parser("farm", help="sign up a GitHub account + start the Education application")
+    gf.add_argument("--index", type=int, default=1, help="N for raymondi+gh<N>@binus.ac.id (default 1)")
+    gf.add_argument("--headless", action="store_true", help="run the browser headless")
+    gf.add_argument("--dry-run", action="store_true", help="walk the flow + screenshot, do not submit")
+    gf.add_argument("--proxy", default=None, help="proxy URL, e.g. http://user:pass@host:port")
+    ghs.add_parser("check", help="check deps + school mailbox config, then exit")
 
     # ---- proxy ----
     pp = sub.add_parser("proxy", help="PetaniProxy: harvest proxies, rotating gateway & background daemon")
@@ -1109,6 +1232,14 @@ def build_parser() -> argparse.ArgumentParser:
     sw.add_argument("--port", type=int, default=8080)
     sw.add_argument("--open", action="store_true")
 
+    sci = ss.add_parser("cookie-import",
+                        help="import a Cookie-Editor JSON export -> extract account_id + mint token -> accounts.json",
+                        description="Wraps Auto-FreeCF/process_cookies.py: loads a Cookie-Editor JSON export, "
+                                    "verifies the session, extracts account_id, mints a token and appends to "
+                                    "accounts.json.")
+    sci.add_argument("cookies", help="Cookie-Editor JSON export file")
+    sci.add_argument("label", help="account label (e.g. azisjati92, akun-1)")
+
     # ---- k12 ----
     kp = sub.add_parser("k12", help="ChatGPT K-12: automate teacher verification & SheerID approval")
     ks = kp.add_subparsers(dest="k12_cmd")
@@ -1127,6 +1258,11 @@ def build_parser() -> argparse.ArgumentParser:
     ksy = ks.add_parser("sync", help="verify + prune ChatGPT (codex) connections")
     ksy.add_argument("--prune", action="store_true")
     ks.add_parser("modes", help="show the 12 connection modes")
+    klf = ks.add_parser("link-finder", help="find SheerID verification links (scripts/sheerid_link_finder.py)",
+                        description="Find SheerID verification links. Extra args after `--` are passed through "
+                                    "to scripts/sheerid_link_finder.py.")
+    klf.add_argument("extra", nargs=argparse.REMAINDER,
+                     help="arguments passed straight to sheerid_link_finder.py (e.g. -- --help)")
 
     # ---- yowes ----
     yp = sub.add_parser("yowes", help="teacher document generator: create ID cards & letters (13 countries)")
@@ -1170,6 +1306,11 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_thk(args)
     if g == "grok":
         return cmd_grok(args)
+    if g == "github":
+        if not getattr(args, "github_cmd", None):
+            p.parse_args(["github", "--help"])
+            return 1
+        return cmd_github(args)
     if g == "proxy":
         if not getattr(args, "proxy_cmd", None):
             p.parse_args(["proxy", "--help"])
@@ -1207,7 +1348,9 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
         ("5", "Grok farm", "grok run", ["grok", "run"]),
         ("6", "K-12 teacher verification", "k12 auto", ["k12", "auto"]),
         ("7", "Manage WARP tunnel", "warp", ["warp"]),
-        ("8", "Help & command reference", "--help", ["--help"]),
+        ("8", "GitHub Education account farm", "github farm", ["github", "farm"]),
+        ("9", "Inject Grok tokens into 9Router", "grok inject", ["grok", "inject"]),
+        ("10", "Help & command reference", "--help", ["--help"]),
         ("0", "Exit", "", []),
     ]
     for key, desc, cmd_str, _ in menu:
@@ -1217,7 +1360,7 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
 
     while True:
         try:
-            choice = input(f" {C['bold']}Select an option [0-8]: {C['reset']}").strip()
+            choice = input(f" {C['bold']}Select an option [0-10]: {C['reset']}").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
             return 0
@@ -1227,11 +1370,11 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
 
         match = next((item for item in menu if item[0] == choice), None)
         if not match:
-            print(col("yellow", "  Please enter a valid option between 0 and 8."))
+            print(col("yellow", "  Please enter a valid option between 0 and 10."))
             continue
 
         key, desc, cmd_str, cmd_args = match
-        if key == "8":
+        if key == "10":
             p.print_help()
             return 0
 
