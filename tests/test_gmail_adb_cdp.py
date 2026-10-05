@@ -120,6 +120,23 @@ class TestStateDetectorSource(unittest.TestCase):
                         "birthday must be returned BEFORE the generic input[type=tel] phone check")
 
 
+class TestUsernameSuggestionHandling(unittest.TestCase):
+    def test_run_one_handles_suggested_usernames(self):
+        """Google may offer usernameRadio suggestions with the text field hidden."""
+        import inspect
+        import scripts.gmail_adb as m
+        src = inspect.getsource(m.run_one)
+        self.assertIn("usernameRadio", src,
+                      "run_one must handle the suggested-address radio screen")
+
+    def test_state_recognises_username_step_with_radios(self):
+        import inspect
+        import scripts.gmail_adb as m
+        src = inspect.getsource(m.state)
+        self.assertIn("usernameRadio", src,
+                      "state() must treat the radio-suggestion screen as 'username'")
+
+
 class TestPasswordConfirmSelector(unittest.TestCase):
     def test_run_one_handles_passwdagain(self):
         import inspect

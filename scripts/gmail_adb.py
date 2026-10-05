@@ -308,7 +308,9 @@ def state(cdp: CDP) -> str:
       if(/myaccount\\.google\\.com|mail\\.google\\.com/.test(url)) return 'success';
       if(/couldn.t create|can.t create|too many|verify it.s you/.test(txt)) return 'blocked';
       if(vis('input[name=firstName]')) return 'name';
-      if(vis('input[name=Username]')) return 'username';
+      // Username step has two shapes: a plain visible text field, OR a list of
+      // suggested addresses (radio buttons) with the text field hidden.
+      if(vis('input[name=Username]') || (document.querySelectorAll('input[name=usernameRadio]').length && /create an email address|choose a gmail address|create a gmail address/i.test(txt))) return 'username';
       if(vis('input[name=Passwd]')) return 'password';
       // Birthday/gender screen FIRST. Google renders a stray (but "visible" by
       // offsetParent) input[type=tel] on the birthday page, which previously
@@ -427,19 +429,50 @@ def run_one(cdp: CDP, args) -> dict:
         rec["status"] = f"failed:{s}"
         rec["error"] = detect_blocked(cdp) or s
         return rec
-    # type a unique username
-    cdp.js(type_js("input[name=Username]", username))
-    cdp.js(click_text_js("next"))
-    time.sleep(2)
-    s = wait_state(cdp, {"password", "username"})
-    if s == "username":
-        # username taken -> regenerate once
-        username = gen_username(first, last)
-        rec["email"] = f"{username}@gmail.com"
+    # Username step: either a plain text field, or a list of Google-suggested
+    # addresses (radio buttons) with the field hidden. Handle both.
+    def _pick_suggested():
+        """Click a suggested usernameRadio (prefer one matching our base)."""
+        return cdp.js(
+            "(args=>{const [base]=args;"
+            "const rs=[...document.querySelectorAll('input[name=usernameRadio]')]"
+            ".filter(r=>(r.value||'')!=='custom');"
+            "if(!rs.length)return null;"
+            "const pick=rs.find(r=>r.value&&base&&base.startsWith(r.value.slice(0,6)))||rs[0];"
+            "pick.click();return pick.value;})"
+            f"({[username]})")
+
+    if cdp.js("document.querySelectorAll('input[name=usernameRadio]').length"):
+        chosen = _pick_suggested()
+        cdp.js(click_text_js("next"))
+        time.sleep(3)
+        s = wait_state(cdp, {"password", "username"})
+        if s == "password" and chosen:
+            email = f"{chosen}@gmail.com"
+            rec["email"] = email
+            print(f"  picked suggested address: {email}")
+    else:
+        # type a unique username
         cdp.js(type_js("input[name=Username]", username))
         cdp.js(click_text_js("next"))
         time.sleep(2)
-        s = wait_state(cdp, {"password"})
+        s = wait_state(cdp, {"password", "username"})
+        if s == "username":
+            # suggestions may have appeared, or the name is taken -> handle both
+            if cdp.js("document.querySelectorAll('input[name=usernameRadio]').length"):
+                chosen = _pick_suggested()
+                cdp.js(click_text_js("next"))
+                time.sleep(3)
+                if chosen:
+                    rec["email"] = f"{chosen}@gmail.com"
+                s = wait_state(cdp, {"password", "username"})
+            if s != "password":
+                username = gen_username(first, last)
+                rec["email"] = f"{username}@gmail.com"
+                cdp.js(type_js("input[name=Username]", username))
+                cdp.js(click_text_js("next"))
+                time.sleep(2)
+                s = wait_state(cdp, {"password"})
 
     if s != "password":
         rec["status"] = f"failed:{s}"
