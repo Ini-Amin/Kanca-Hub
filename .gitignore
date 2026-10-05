@@ -107,3 +107,4 @@ k12_sessions.json
 created_k12_accounts.txt
 scripts/created_k12_accounts.txt
 scripts/k12_sessions.json
+.search_keys.env
