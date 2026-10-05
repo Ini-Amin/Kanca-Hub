@@ -26,6 +26,9 @@ It unifies:
 | `thk` | **TokenHarbor** — create free API keys and inject/sync them with 9Router. |
 | `proxy` | **PetaniProxy** — harvest public proxies, run a rotating gateway, use your own residential proxies (Webshare). |
 | `grok` | Grok/xAI account registration (grok-register backend). |
+| `github` | GitHub Education signup helper — uses the school mailbox to create GitHub accounts and start the Education application (CAPTCHA / student-ID upload stays manual). |
+| `mail` | School Outlook (M365) inbox reader — scrapes signup OTPs from the web UI (IMAP basic auth is blocked). |
+| `gmail` | Gmail account farm (nodriver + Chrome) — creates Gmail accounts; phone verification stays manual. |
 | `k12` | ChatGPT K-12 / SheerID teacher verification. *(Out of scope for this guide — see the K-12 docs.)* |
 | `yowes` | 13-country teacher document generator — make ID cards / letters **for your own use**. |
 | `doctor` | One-shot health check: files, Python modules, binaries, gateway, WARP. |
@@ -111,9 +114,16 @@ kancahub
   [5] Grok farm                               (grok run)
   [6] K-12 teacher verification               (k12 auto)
   [7] Manage WARP tunnel                      (warp)
-  [8] Help & command reference                (--help)
+  [8] GitHub Education account farm           (github farm)
+  [9] Inject Grok tokens into 9Router         (grok inject)
+  [p] Switch to page 2                        (mail · gmail · harbor)
+  [h] Help & command reference                (--help)
   [0] Exit
 ```
+
+Page 2 adds: school-mailbox `test`/`otp`, `gmail farm`, `thk setup-env`,
+`stack login`, `stack sync --prune`, `proxy harvest`, `k12 link-finder`,
+`yowes list`.
 
 Pick a number and KancaHub runs the matching command for you.
 
@@ -217,6 +227,30 @@ kancahub thk setup                 # interactive first-run setup
 kancahub thk batch 3               # create N accounts → thk_live_ keys
 kancahub thk inject --verify       # push keys into 9Router
 kancahub thk sync --prune          # verify + prune TokenHarbor connections
+kancahub thk setup-env --status    # report harbor config (config.toml/proxies)
+```
+
+### GitHub Education / school mail / Gmail
+
+```bash
+kancahub github check                              # verify school mailbox config
+kancahub github farm --index 1 --dry-run           # walk the GitHub signup flow
+kancahub mail test                                 # log in + list inbox subjects
+kancahub mail otp --timeout 300                    # wait for an OpenAI OTP
+kancahub gmail check                               # check Gmail farm dependencies
+kancahub gmail farm --count 2 --proxy http://127.0.0.1:8888
+```
+
+Config for all three: `~/.config/auto-freecf/.env` (`SCHOOL_EMAIL`,
+`SCHOOL_MAIL_PASSWORD`, `SCHOOL_MAIL_URL`). CAPTCHA / student-ID / phone
+verification steps stay manual.
+
+### Advanced helpers
+
+```bash
+kancahub stack cookie-import cookies.json akun-1   # Cookie-Editor JSON -> token
+kancahub proxy res-gateway --pool res.txt --port 8899
+kancahub k12 link-finder -- --help                 # find SheerID links
 ```
 
 ### yowes — documents for your own use

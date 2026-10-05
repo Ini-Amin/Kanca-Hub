@@ -1,5 +1,13 @@
 # KancaHub — Command Cheat-Sheet
 
+> **VERIFIED 2026-10-05** — smoke-tested against `scripts/kancahub.py` with the
+> managed venv. Every command below parses (`--help` exit 0). No-side-effect
+> invocations that were actually run: `doctor`, `warp status`, `region list` /
+> `region current` / `region show us`, `proxy stats`, `grok pool`,
+> `github check`, `gmail check`, `k12 modes`, `yowes list`,
+> `yowes schools --country us`. Account-creating / mail-sending / server
+> commands were only checked at the `--help` level by design.
+
 One line per command, with a runnable example. `kancahub` with no arguments
 opens the interactive menu. Add `--help` to any group/command for options.
 
@@ -17,11 +25,12 @@ opens the interactive menu. Add `--help` to any group/command for options.
 |---|---|---|
 | `kancahub stack signup` | Create new Cloudflare accounts + Workers AI tokens (runs the full signup→verify→inject pipeline) | `kancahub stack signup -n 1 --warp` |
 | `kancahub stack login` | Log in to an EXISTING account (email:password or Google) | `kancahub stack login you@x.com:pass` |
-| `kancahub stack inject` | Inject existing `results.json` keys into 9Router | `kancahub stack inject -i results.json --verify` |
+| `kancahub stack inject` | Inject existing `results.json` keys into 9Router | `kancahub stack inject -i results.json --dry-run` |
 | `kancahub stack validate` | Validate a single `cfut_` token | `kancahub stack validate --token cfut_x --account-id abc123` |
 | `kancahub stack sync` | Verify + prune dead 9Router connections | `kancahub stack sync --prune` |
 | `kancahub stack manage` | Verify/list CF tokens via `cf_workerai_manager` | `kancahub stack manage --token-file tokens.txt --out-csv out.csv` |
 | `kancahub stack web` | Launch the Auto-FreeCF web UI | `kancahub stack web --port 8080 --open` |
+| `kancahub stack cookie-import` | Import a Cookie-Editor JSON export → extract `account_id` + mint token → `accounts.json` | `kancahub stack cookie-import cookies.json akun-1` |
 
 Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy URL` · `--proxy-pool FILE` · `--gateway [URL]` · `--headless` · `--fast` · `--workers N` · `--delay S` · `--retry N` · `--no-inject` · `--export-txt FILE` · `--output FILE`.
 
@@ -50,13 +59,14 @@ Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy
 |---|---|---|
 | `kancahub thk setup` | Full interactive setup on TokenHarbor | `kancahub thk setup` |
 | `kancahub thk batch` | Create N TokenHarbor accounts | `kancahub thk batch 3` |
-| `kancahub thk create-key` | Create an API key for an existing account | `kancahub thk create-key --label main` |
+| `kancahub thk create-key` | Create an API key for an existing account (account chosen interactively) | `kancahub thk create-key` |
 | `kancahub thk test-key` | Test a `thk_` key | `kancahub thk test-key thk_live_xxx` |
 | `kancahub thk enable-free` | Enable free models for an account | `kancahub thk enable-free` |
 | `kancahub thk check-proxies` | Scan configured proxies | `kancahub thk check-proxies` |
-| `kancahub thk status` | Account free-tier status | `kancahub thk status` |
+| `kancahub thk status` | Account free-tier status — ⚠️ **currently broken** (see Known issues) | `kancahub thk status --help` |
 | `kancahub thk inject` | Inject `thk_` keys into 9Router | `kancahub thk inject -i account.json --verify` |
 | `kancahub thk sync` | Verify + prune TokenHarbor connections | `kancahub thk sync --prune` |
+| `kancahub thk setup-env` | Wire `harbor` config: `config.toml` + Tempik base_url + capsolver + proxies | `kancahub thk setup-env --status` |
 
 ## `proxy` — PetaniProxy
 
@@ -76,6 +86,7 @@ Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy
 | `kancahub proxy test` | Validate a proxy pool | `kancahub proxy test --pool signup_from_scratch/proxies.txt` |
 | `kancahub proxy stats` | Live gateway stats | `kancahub proxy stats` |
 | `kancahub proxy api` | Call a gateway REST endpoint | `kancahub proxy api /api/all` |
+| `kancahub proxy res-gateway` | Bridge gateway for residential/authenticated proxies (`--pool` required) | `kancahub proxy res-gateway --pool res.txt --port 8899` |
 
 ## `grok` — Grok/xAI farm (grok-register)
 
@@ -86,7 +97,7 @@ Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy
 | `kancahub grok gui` | Launch the Tk GUI | `kancahub grok gui` |
 | `kancahub grok retry` | Retry a pending file | `kancahub grok retry --pending accounts_1.txt.pending.jsonl` |
 | `kancahub grok pool` | Show the grok2api token pool | `kancahub grok pool` |
-| `kancahub grok inject` | Inject SSO tokens into 9Router via a grok2api bridge | `kancahub grok inject --base-url http://127.0.0.1:8787/v1` |
+| `kancahub grok inject` | Inject Grok SSO tokens into 9Router via a grok2api bridge | `kancahub grok inject --base-url http://127.0.0.1:8787/v1 --dry-run` |
 
 ### Grok SSO → 9Router (`grok2api_bridge`)
 
@@ -110,6 +121,41 @@ Flags: `--host` `--port` (default `127.0.0.1:8787`), `--tokens FILE`,
 `--model-map find=replace`. The exact SSO-authenticated upstream wire shape is
 uncertain — adjust with `--upstream-base` / `--auth-mode` (see module docstring).
 
+## `github` — GitHub Education signup helper
+
+> Helper flow only. Arkose/CAPTCHA puzzles, the student-ID photo / identity
+> attestation, MFA and GitHub's manual review are **not** automated — finish
+> those by hand. Saves to `~/Auto-FreeCF/github_accounts.json`.
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub github farm` | Sign up a GitHub account + start the Education application (school mailbox + M365 OTP) | `kancahub github farm --index 1 --dry-run` |
+| `kancahub github check` | Check deps + school mailbox config, then exit | `kancahub github check` |
+
+Config: `~/.config/auto-freecf/.env` (`SCHOOL_EMAIL`, `SCHOOL_MAIL_PASSWORD`, `SCHOOL_MAIL_URL`).
+
+## `mail` — school Outlook inbox reader (M365/nodriver)
+
+> M365 blocks IMAP basic auth, so the OTP is scraped from the web UI. The
+> session lives in `~/.config/auto-freecf/school-profile` and survives runs.
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub mail test` | Log in and list recent inbox subjects (selftest) | `kancahub mail test` |
+| `kancahub mail otp` | Wait for an OpenAI/ChatGPT verification code | `kancahub mail otp --timeout 300` |
+| `kancahub mail login` | Log in and leave the browser open for inspection | `kancahub mail login` |
+
+## `gmail` — Gmail account farm (nodriver + Chrome)
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub gmail farm` | Create N Gmail accounts, append results to the JSON out file | `kancahub gmail farm --count 2 --proxy http://127.0.0.1:8888` |
+| `kancahub gmail dry-run` | Walk the flow without submitting | `kancahub gmail dry-run` |
+| `kancahub gmail check` | Report dependencies and exit | `kancahub gmail check` |
+
+> Headless cannot complete phone verification — expect `pending_verification` /
+> `failed` rows unless you run headed and finish by hand.
+
 ## `k12` — ChatGPT K-12 teacher verification
 
 > Out of scope for the beginner guide; listed here for completeness.
@@ -120,7 +166,8 @@ uncertain — adjust with `--upstream-base` / `--auth-mode` (see module docstrin
 | `kancahub k12 verify` | Verify a SheerID URL | `kancahub k12 verify <sheerid-url> --gateway` |
 | `kancahub k12 inject` | Inject captured sessions into 9Router | `kancahub k12 inject --session k12_sessions.json` |
 | `kancahub k12 sync` | Verify + prune ChatGPT (codex) connections | `kancahub k12 sync --prune` |
-| `kancahub k12 modes` | Show the 12 connection modes | `kancahub k12 modes` |
+| `kancahub k12 modes` | Show the connection modes (maps to `run_cmd.bat` [1]–[12]; prints the 8 the wrapper exposes) | `kancahub k12 modes` |
+| `kancahub k12 link-finder` | Find SheerID verification links (passthrough to `scripts/sheerid_link_finder.py`) | `kancahub k12 link-finder -- --help` |
 
 ## `yowes` — teacher document generator (for your own use)
 
@@ -144,5 +191,18 @@ kancahub region set us
 kancahub stack signup -n 1 --warp
 kancahub stack sync --prune
 kancahub proxy daemon
-kancahub thk batch 3 && kancahub thk inject
+kancahub thk batch 3 && kancahub thk inject --dry-run
 ```
+
+---
+
+## Known issues (reported, not fixed)
+
+- `kancahub thk status` exits with an argparse error: the wrapper calls
+  `tools.tokenharbor.cli status` without credentials, but that CLI requires
+  `--email` and `--password`. The `--help` still works; the command itself does
+  not. Fix belongs in `scripts/kancahub.py` / `harbor` CLI, not in these docs.
+- `kancahub gmail dry-run --help` shows `--count` / `--proxy` / `--out` with no
+  help text (cosmetic).
+- `kancahub k12 modes` claims "12 connection modes" but only prints 8 (modes
+  5, 6, 8, 9, 11, 12 are not exposed by the wrapper). Doc now says 8.

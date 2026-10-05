@@ -213,6 +213,8 @@ def main() -> int:
     ap.add_argument("--proxies-src", default=str(AUTO_FREECF_PROXIES),
                     help=f"source proxies.txt (default {AUTO_FREECF_PROXIES})")
     ap.add_argument("--tempik-url", default=TEMPIK_BASE_URL, help=f"Tempik base URL (default {TEMPIK_BASE_URL})")
+    ap.add_argument("--turnstile-provider", default="camoufox", choices=["camoufox", "capsolver"],
+                    help="Turnstile solver provider (default: camoufox [free in-browser])")
     ap.add_argument("--no-proxies", action="store_true", help="skip refreshing harbor's proxy list")
     ap.add_argument("--dry-run", action="store_true", help="show actions without writing")
     ap.add_argument("--status", action="store_true", help="only report current harbor config")
@@ -226,20 +228,25 @@ def main() -> int:
     proxies_src = Path(args.proxies_src).expanduser()
     dry = args.dry_run
 
-    print(f"\n{'=' * 66}\n  harbor_config — Tempik + Capsolver + proxies\n{'=' * 66}")
+    print(f"\n{'=' * 66}\n  harbor_config — Tempik + Turnstile (Camoufox) + proxies\n{'=' * 66}")
 
     if args.status:
         print(f"  harbor dir    : {harbor_dir} ({'ok' if harbor_dir.exists() else ERR('MISSING')})")
         print(f"  config.toml   : {cfg_path} ({'ok' if cfg_path.exists() else ERR('MISSING')})")
         cur = None
+        cur_solver = None
         if cfg_path.exists():
-            m = re.search(r'\[tempik\][^\[]*?base_url\s*=\s*"([^"]*)"', cfg_path.read_text(), re.S)
+            text = cfg_path.read_text()
+            m = re.search(r'\[tempik\][^\[]*?base_url\s*=\s*"([^"]*)"', text, re.S)
             cur = m.group(1) if m else None
+            m2 = re.search(r'\[turnstile\][^\[]*?provider\s*=\s*"([^"]*)"', text, re.S)
+            cur_solver = m2.group(1) if m2 else "camoufox (default)"
         print(f"  tempik url    : {cur or ERR('(unset)')}")
+        print(f"  turnstile     : {cur_solver}")
         have_key = caps_path.exists() and caps_path.read_text().strip() != ""
-        print(f"  capsolver key : {caps_path} ({'ok' if have_key else WARN('MISSING')})")
+        print(f"  capsolver key : {caps_path} ({'ok' if have_key else DIM('none [optional - using camoufox]')})")
         env_key = read_env_value(env_path, "CAPSOLVER_API_KEY")
-        print(f"  env key       : {'set' if env_key else ERR('absent')} ({env_path})")
+        print(f"  env key       : {'set' if env_key else DIM('absent')} ({env_path})")
         print(f"  proxies       : {proxies_dst} ({'ok' if proxies_dst.exists() else WARN('none')})")
         print()
         return 0
