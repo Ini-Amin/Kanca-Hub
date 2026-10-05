@@ -190,6 +190,34 @@ async def click_continue(tab, timeout: float = 5.0) -> bool:
     """, False))
 
 
+async def install_popup_hook(tab) -> None:
+    """Record URLs passed to window.open (and target=_blank clicks).
+
+    nodriver cannot see popup tabs in browser.targets, and the K-12 'Verify
+    status' button opens SheerID in a new tab. So we hook window.open to capture
+    the URL before it opens.
+    """
+    await js(tab, """(()=>{
+        if (window.__kh_opened) return 1;
+        window.__kh_opened=[];
+        const o=window.open;
+        window.open=function(u){ try{ window.__kh_opened.push(String(u)); }catch(e){} return o.apply(this,arguments); };
+        // also capture anchor clicks with target=_blank
+        document.addEventListener('click', function(ev){
+            const a=ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+            if(a && a.href){ try{ window.__kh_opened.push(String(a.href)); }catch(e){} }
+        }, true);
+        return 1;})()""", "")
+
+
+async def read_popup_hook(tab) -> list[str]:
+    raw = await js(tab, "JSON.stringify(window.__kh_opened||[])", "[]")
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except Exception:
+        return []
+
+
 async def find_sheerid_anchor(tab) -> str:
     """Return the SheerID URL from the DOM, if present.
 
@@ -786,11 +814,12 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
 
         # ---- click "Verify status" (waits out the 'Checking eligibility...' phase) ----
         print("[5/6] Driving K-12 verification page…", flush=True)
-        # make sure we're driving exactly one page
+        # pick the k12 tab; do NOT close others — the SheerID popup is a tab
+        # nodriver can't enumerate, so aggressive closing would kill it.
         kt = await find_live_tab(browser, "k12-verification", "chatgpt.com")
         if kt is not None:
             tab = kt
-        await keep_only(browser, tab)
+        await install_popup_hook(tab)
         sheerid = None
 
         def _find_sheerid_in(url: str) -> str:
@@ -811,26 +840,28 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
             clicked = await click_verify_status(tab, wait_ready=60)
             if clicked:
                 print(f"      [click] Verify status #{round_+1}", flush=True)
-            # give the click time to produce a redirect / new tab / anchor
-            for _ in range(10):
+            # the SheerID URL may now be captured by the window.open hook
+            for _ in range(12):
                 await asyncio.sleep(1.5)
+                for u in await read_popup_hook(tab):
+                    if _find_sheerid_in(u):
+                        sheerid = u
+                        print(f"      [+] SheerID from popup hook: {sheerid[:80]}", flush=True)
+                        break
+                if sheerid:
+                    break
+                _u = await js(tab, "location.href", "")
+                if _find_sheerid_in(_u):
+                    sheerid = _u
+                    break
                 href = await find_sheerid_anchor(tab)
                 if _find_sheerid_in(href):
                     sheerid = href
                     break
-                for t in list(browser.targets):
-                    if getattr(t, "type_", "") != "page":
-                        continue
-                    u = await js(t, "location.href", "")
-                    if _find_sheerid_in(u):
-                        sheerid = u
-                        break
-                if sheerid:
-                    break
             if sheerid:
                 break
             _u = await js(tab, "location.href", "")
-            print(f"      [verify round {round_+1}] url={_u[:70]}", flush=True)
+            print(f"      [verify round {round_+1}] url={_u[:70]} hook={await read_popup_hook(tab)}", flush=True)
 
         if sheerid:
             print(f"      [+] SheerID URL: {sheerid[:90]}", flush=True)
