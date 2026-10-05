@@ -481,6 +481,33 @@ async def set_field(tab, selector: str, value, label: str = "") -> bool:
     return bool(await tab.evaluate(f"({SET_FIELD_JS})({_json.dumps([selector, value, label])})"))
 
 
+async def warm_session(tab, seconds: float = 12.0) -> None:
+    """Browse normal Google pages first so the signup looks less bot-like.
+
+    Google's phone gate is triggered much less often for a session that has
+    already interacted with google.com (cookies + consent accepted).
+    """
+    try:
+        log("  warming session (visiting google.com first)…")
+        await tab.get("https://www.google.com/")
+        await sleep(2, 4)
+        # accept a consent page if present
+        await click_button(tab, ["Accept all", "I agree", "Accept", "Agree", "Terima semua", "Setuju"])
+        await sleep(1, 2)
+        # a couple of small, human-ish moves
+        try:
+            await tab.evaluate("window.scrollBy(0, 300)")
+        except Exception:
+            pass
+        await sleep(1, 2)
+        await tab.get("https://accounts.google.com/")
+        await sleep(2, 4)
+        await click_button(tab, ["Accept all", "I agree", "Accept", "Agree", "Terima semua", "Setuju"])
+        await sleep(1, 2)
+    except Exception as e:  # noqa: BLE001
+        log(f"  (warming skipped: {e})")
+
+
 async def handle_phone_step(tab, st: Settings, args: argparse.Namespace) -> str:
     """Phone/SMS verification is MANUAL.  Waits for the human to finish it.
 
@@ -531,7 +558,14 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
     email = f"{username}@gmail.com"
     log(f"account: {full!r} -> {email}")
 
-    profile = tempfile.mkdtemp(prefix="gmail-creator-")
+    _reuse = getattr(args, "reuse_profile", None)
+    _save_profile = False  # keep the profile when reusing
+    if _reuse:
+        profile = _reuse
+        os.makedirs(profile, exist_ok=True)
+        _save_profile = True
+    else:
+        profile = tempfile.mkdtemp(prefix="gmail-creator-")
     browser_args = ["--lang=en-US", "--no-first-run", "--no-default-browser-check"]
     if proxy:
         browser_args.append(f"--proxy-server={proxy}")
@@ -549,6 +583,10 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
             browser_args=browser_args,
             sandbox=(os.geteuid() != 0),
         )
+        # Warm the session FIRST (reduces Google's phone/SMS gate).
+        if getattr(args, "warm", True):
+            await warm_session(tab)
+
         tab = await browser.get(SIGNUP_URL)
         await sleep(2, 3)
 
@@ -650,7 +688,8 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
                 browser.stop()
             except Exception:
                 pass
-        shutil.rmtree(profile, ignore_errors=True)
+        if not _save_profile:
+            shutil.rmtree(profile, ignore_errors=True)
 
     if reached_password:
         record = {"email": email, "password": password, "created_at": utcnow(), "status": status}
@@ -708,6 +747,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="pick a UA from config/user_agents.txt (off by default: those are Windows UAs "
                         "and mismatch a Linux browser)")
     p.add_argument("--chrome", metavar="PATH", help="browser executable (default: auto-detect)")
+    p.add_argument("--warm", dest="warm", action="store_true", default=True,
+                   help="visit google.com first to reduce the phone/SMS gate (default: on)")
+    p.add_argument("--no-warm", dest="warm", action="store_false",
+                   help="skip the pre-signup warming step")
+    p.add_argument("--reuse-profile", metavar="DIR", default=None,
+                   help="use (and keep) a persistent Chrome profile at DIR instead of a "
+                        "throw-away one; a warmed profile lowers the phone gate")
     p.add_argument("--verify-timeout", type=int, default=600, metavar="SEC",
                    help="seconds to wait for manual phone verification (default 600)")
     p.add_argument("--delay", type=float, default=30.0, metavar="SEC", help="pause between accounts (default 30)")
