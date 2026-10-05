@@ -406,9 +406,11 @@ def main_tab(browser):
 async def find_live_tab(browser, *substrs):
     """Return the page tab whose LIVE url contains any substring.
 
-    `evaluate('location.href')` works even when `targets[].url` is blank, so we
-    probe every page target directly. Falls back to main_tab.
+    Prefers the URL that appears LATEST in targets (newest tab), because the
+    signup flow opens new tabs and the newest is the one on the active step.
+    Falls back to main_tab.
     """
+    best = None
     for t in list(browser.targets):
         try:
             if getattr(t, "type_", "") != "page":
@@ -420,8 +422,31 @@ async def find_live_tab(browser, *substrs):
             continue
         for s in substrs:
             if s in u:
-                return t
-    return main_tab(browser)
+                best = t  # keep the last (newest) match
+    return best or main_tab(browser)
+
+
+async def keep_only(browser, keep_tab):
+    """Close every page tab except keep_tab.
+
+    The signup flow opens new tabs and leaves the old ones (e.g. a dead
+    email-verification tab), which desynchronises the state machine. Closing
+    them ensures the flow drives exactly one page.
+    """
+    closed = 0
+    for t in list(browser.targets):
+        try:
+            if getattr(t, "type_", "") != "page":
+                continue
+            if t is keep_tab:
+                continue
+            await t.close()
+            closed += 1
+        except Exception:
+            pass
+    if closed:
+        print(f"      [tabs] closed {closed} stale tab(s)", flush=True)
+    return closed
 
 
 async def live_url(tab) -> str:
@@ -716,9 +741,11 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
         # Re-acquire the live tab by URL (the signup may have moved to a new tab).
         # NOTE: do NOT call browser.get() here — that would start a fresh tab and
         # drop the authenticated context.
-        lt = await find_live_tab(browser, "about-you", "auth.openai.com", "chatgpt.com")
+        lt = await find_live_tab(browser, "about-you", "k12-verification", "auth.openai.com", "chatgpt.com")
         if lt is not None:
             tab = lt
+        # collapse to a single page tab so the state machine stays in sync
+        await keep_only(browser, tab)
         _au = await js(tab, "location.href", "")
         if not _au:
             # try every page target directly
@@ -759,6 +786,11 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
 
         # ---- click "Verify status" (waits out the 'Checking eligibility...' phase) ----
         print("[5/6] Driving K-12 verification page…", flush=True)
+        # make sure we're driving exactly one page
+        kt = await find_live_tab(browser, "k12-verification", "chatgpt.com")
+        if kt is not None:
+            tab = kt
+        await keep_only(browser, tab)
         sheerid = None
 
         def _find_sheerid_in(url: str) -> str:
