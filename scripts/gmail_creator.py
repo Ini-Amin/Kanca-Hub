@@ -599,6 +599,7 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
     if args.use_ua_file and st.user_agents:
         browser_args.append(f"--user-agent={random.choice(st.user_agents)}")
     browser = None
+    tab = None
     record: Optional[dict] = None
     status = "failed"
     reached_password = False
@@ -610,6 +611,7 @@ async def create_one(uc, st: Settings, args: argparse.Namespace, proxy: Optional
             browser_args=browser_args,
             sandbox=(os.geteuid() != 0),
         )
+        tab = await browser.get("about:blank")
         # Warm the session FIRST (reduces Google's phone/SMS gate).
         if getattr(args, "warm", True):
             await warm_session(tab)
