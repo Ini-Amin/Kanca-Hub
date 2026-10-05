@@ -31,6 +31,15 @@ from pathlib import Path
 import nodriver as uc
 import requests
 
+try:
+    from gateway_session import apply_gateway_session, is_gateway
+except ImportError:
+    try:
+        from scripts.gateway_session import apply_gateway_session, is_gateway
+    except Exception:
+        def is_gateway(p=None): return False
+        async def apply_gateway_session(p, s=None): return False
+
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
 K12_DIR = HOME / "petani-proxy" / "Farm-Acc-ChatGPT-K-12-Teachers" / "PyRuntime_64"
@@ -669,6 +678,10 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
     result = {"success": False, "email": email, "password": password}
     try:
         tab = await browser.get(f"{CHATGPT}/auth/login/?next=%2Fk12-verification")
+        if is_gateway(proxy):
+            await apply_gateway_session(browser, email)
+            await apply_gateway_session(tab, email)
+            print(f"      📌 Sticky session applied (id={email})", flush=True)
         await asyncio.sleep(6)
 
         # email

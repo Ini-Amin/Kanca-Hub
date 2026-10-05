@@ -53,6 +53,15 @@ from camoufox.async_api import AsyncCamoufox
 from playwright.async_api import Error as PWError
 from playwright.async_api import TimeoutError as PWTimeout
 
+try:
+    from gateway_session import apply_gateway_session, is_gateway
+except ImportError:
+    try:
+        from scripts.gateway_session import apply_gateway_session, is_gateway
+    except Exception:
+        def is_gateway(p=None): return False
+        async def apply_gateway_session(p, s=None): return False
+
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
 K12_DIR = HOME / "petani-proxy" / "Farm-Acc-ChatGPT-K-12-Teachers" / "PyRuntime_64"
@@ -749,6 +758,10 @@ async def run_flow(
     async with AsyncCamoufox(**kwargs) as browser:
         page = await browser.new_page()
         context = page.context
+        if is_gateway(proxy):
+            await apply_gateway_session(context, email)
+            await apply_gateway_session(page, email)
+            print(f"      📌 Sticky session applied (id={email})", flush=True)
         opened_urls: list[str] = []  # every popup/new page URL we see
         context.on("page", lambda p: opened_urls.append(p.url))
 

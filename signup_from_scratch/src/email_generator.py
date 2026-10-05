@@ -7,8 +7,23 @@ Architecture:
 """
 
 import httpx
+import os
 import random
+import sys
+from pathlib import Path
 from typing import Optional
+
+try:
+    from gateway_session import gateway_headers, is_gateway
+except ImportError:
+    try:
+        _sp = str(Path(__file__).resolve().parent.parent.parent / "scripts")
+        if _sp not in sys.path:
+            sys.path.insert(0, _sp)
+        from gateway_session import gateway_headers, is_gateway
+    except Exception:
+        def is_gateway(p=None): return False
+        def gateway_headers(s=None): return {}
 
 # Hardcoded community relay — auto-updated, always available
 PUBLIC_RELAY = "https://convergence-lobby-portal-planes.trycloudflare.com/new_address"
@@ -35,24 +50,34 @@ class EmailGenerator:
         timeout: int = 60,
         fallback_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        proxy: Optional[str] = None,
+        session_id: Optional[str] = None,
     ):
         self.api_url = api_url
         self.fallback_url = fallback_url
         self.domains = domains
         self.timeout = timeout
         self.api_key = api_key
+        self.proxy = proxy
+        self.session_id = session_id
         self._client: Optional[httpx.Client] = None
         self._active_url: str = api_url
         self._tier_used: str = "primary"
 
     def _headers(self) -> dict:
         """Auth headers for a private backend (e.g. Supabase temp-mail-api)."""
-        return {"x-api-key": self.api_key} if self.api_key else {}
+        h = {"x-api-key": self.api_key} if self.api_key else {}
+        if self.proxy and is_gateway(self.proxy):
+            h.update(gateway_headers(self.session_id))
+        return h
 
     @property
     def client(self) -> httpx.Client:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.Client(timeout=self.timeout)
+            client_kw = {"timeout": self.timeout}
+            if self.proxy:
+                client_kw["proxy"] = self.proxy
+            self._client = httpx.Client(**client_kw)
         return self._client
 
     def _try_create(self, url: str, username: Optional[str], domain: str) -> dict:

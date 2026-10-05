@@ -112,6 +112,7 @@ def main() -> int:
     if args.gateway:
         import urllib.request
         import urllib.error
+        os.environ["GATEWAY_ACTIVE"] = "1"
         print(f"  gateway: {args.gateway} (checking…)")
         try:
             opener = urllib.request.build_opener(
@@ -140,6 +141,8 @@ def main() -> int:
         effective_proxy = args.gateway or args.proxy
         if effective_proxy:
             cmd += ["--proxy", effective_proxy]
+        if args.gateway:
+            cmd += ["--gateway", args.gateway]
         if args.proxy_pool:
             cmd += ["--proxy-pool", args.proxy_pool]
         if args.headless:

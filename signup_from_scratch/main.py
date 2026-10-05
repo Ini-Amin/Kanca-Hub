@@ -38,6 +38,16 @@ import nodriver as uc
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+try:
+    from gateway_session import apply_gateway_session, gateway_headers, is_gateway
+except ImportError:
+    def is_gateway(proxy_url=None): return False
+    def gateway_headers(session_id=None): return {}
+    async def apply_gateway_session(page_or_tab, session_id=None): return False
 
 from src.email_generator import EmailGenerator
 from src.signup_flow import signup
@@ -158,6 +168,10 @@ def parse_args():
         "--fast", action="store_true",
         help="Submit-first mode: quick Turnstile interaction, submit immediately, retry only if blocked"
     )
+    parser.add_argument(
+        "--gateway", type=str, default=None,
+        help="Local rotating proxy gateway URL (e.g. http://127.0.0.1:8888) with sticky sessions"
+    )
     return parser.parse_args()
 
 
@@ -167,6 +181,7 @@ async def create_account(
     headless: bool = False,
     browser: uc.Browser = None,
     fast: bool = False,
+    gateway: str = None,
 ) -> dict:
     """
     Create a single Cloudflare account with API token.
@@ -181,16 +196,29 @@ async def create_account(
     token_name = config.get("token_name", "workers-ai-auto")
     mail_api = config.get("mail_api", "https://convergence-lobby-portal-planes.trycloudflare.com/new_address")
 
+    # Determine if running via local rotating gateway (e.g. PetaniProxy)
+    effective_gw = gateway or (proxy if is_gateway(proxy) else None)
+    expected_email = f"{username}@{domain}"
+    session_id = expected_email if effective_gw else None
+    if effective_gw:
+        os.environ["GATEWAY_SESSION_ID"] = session_id
+        print(f"  📌 Sticky session enabled via gateway {effective_gw} (id={session_id})")
+
     # Create temp email
     email_gen = EmailGenerator(
         mail_api,
         config["mail_domains"],
         fallback_url=config.get("mail_fallback"),
         api_key=config.get("mail_api_key"),
+        proxy=effective_gw,
+        session_id=session_id,
     )
     try:
         mail = email_gen.create(username=username, domain=domain)
         email = mail["email"]
+        if effective_gw and email != session_id:
+            session_id = email
+            os.environ["GATEWAY_SESSION_ID"] = session_id
     except Exception as e:
         return {"status": "error", "error": f"Email creation failed: {e}", "email": f"{username}@{domain}"}
     finally:
@@ -216,10 +244,15 @@ async def create_account(
         )
         own_browser = True
 
+    if effective_gw:
+        await apply_gateway_session(browser, session_id)
+
     try:
         # Phase 0: Navigate to signup
         print("  [0/4] Pre-flight check...")
         page = await browser.get("https://dash.cloudflare.com/sign-up")
+        if effective_gw:
+            await apply_gateway_session(page, session_id)
         # Wait for the email field to actually mount (slow residential proxies
         # can need well over the old fixed 8s). Poll up to ~45s.
         ready = False
@@ -265,6 +298,8 @@ async def create_account(
             timeout=config.get("email_verify_timeout", 120),
             poll_interval=config.get("email_verify_poll_interval", 5),
             api_key=config.get("mail_api_key"),
+            proxy=effective_gw,
+            session_id=session_id,
         )
         if verify_result.success:
             print("  ✅ Email verified")
@@ -336,6 +371,8 @@ async def create_account(
             "created_at": timestamp(),
         }
     finally:
+        if effective_gw:
+            os.environ.pop("GATEWAY_SESSION_ID", None)
         if own_browser:
             try:
                 browser.stop()
@@ -378,6 +415,7 @@ async def main():
     # Load config
     config = load_config(args.config)
     proxy = args.proxy or config.get("proxy")
+    gateway = args.gateway or (proxy if is_gateway(proxy) else None)
     # Proxy pool (rotation): CLI flag, else config "proxy_pool" (file path).
     proxy_pool = load_proxy_pool(args.proxy_pool or config.get("proxy_pool"))
     output_file = args.output or config.get("output_file", "results.json")
@@ -411,6 +449,8 @@ async def main():
         print(f"  Proxy: pool of {len(proxy_pool)} (rotating per account)")
     else:
         print(f"  Proxy: {proxy or 'None (direct)'}")
+    if gateway:
+        print(f"  Sticky Gateway: {gateway} (pinned per account)")
     print(f"  Delay between: {delay}s")
     print(f"  Output: {output_file}")
     print(f"  Headless: {args.headless or config.get('headless', False)}")
@@ -445,6 +485,7 @@ async def main():
         result: dict = {"status": "error", "error": "not_started"}
         success = False
         account_proxy = next_proxy()
+        account_gw = gateway or (account_proxy if is_gateway(account_proxy) else None)
         for attempt in range(max_retry):
             if attempt > 0:
                 dashboard_state.update(worker_id, "signup", f"Retry {attempt}/{max_retry - 1}", index=index)
@@ -455,6 +496,7 @@ async def main():
                 proxy=account_proxy,
                 headless=args.headless or config.get("headless", False),
                 fast=args.fast,
+                gateway=account_gw,
             )
             if result.get("email"):
                 dashboard_state.update(worker_id, "validate", result.get("status", "done"), email=result["email"], index=index)
