@@ -1182,14 +1182,30 @@ def cmd_mail(a) -> int:
 # ═══════════════════════════════════════════════════════════════ gmail
 
 def cmd_gmail(a) -> int:
-    """Gmail account farm — wraps scripts/gmail_creator.py."""
+    """Gmail account farm — wraps scripts/gmail_creator.py (and gmail_adb.py)."""
     py = pick_python()
     gc = AUTO_FREECF / "scripts" / "gmail_creator.py"
+    sub = getattr(a, "gmail_cmd", None)
+
+    # Android/ADB path (real device skips Google's phone gate).
+    if sub == "adb":
+        adbg = AUTO_FREECF / "scripts" / "gmail_adb.py"
+        if not adbg.exists():
+            print(col("red", "✗ gmail_adb.py not found"))
+            return 1
+        cmd = [py, str(adbg), "--count", str(getattr(a, "count", 1) or 1)]
+        if getattr(a, "package", None):
+            cmd += ["--package", a.package]
+        if getattr(a, "password", None):
+            cmd += ["--password", a.password]
+        if getattr(a, "dry_run", False):
+            cmd.append("--dry-run")
+        print(col("cyan", "Using the Android phone (ADB) — trusted-device path"))
+        return run(cmd, cwd=AUTO_FREECF)
+
     if not gc.exists():
         print(col("red", f"✗ gmail_creator.py not found at {gc}"))
         return 1
-
-    sub = getattr(a, "gmail_cmd", None)
 
     if sub == "check":
         return run([py, str(gc), "--check"], cwd=AUTO_FREECF)
@@ -1676,6 +1692,12 @@ def build_parser() -> argparse.ArgumentParser:
     gmd.add_argument("--proxy", default=None)
     gmd.add_argument("--out", default=None)
     gms.add_parser("check", help="report dependencies and exit")
+    gma = gms.add_parser("adb", help="create Gmail via a real Android phone (ADB) — skips the phone gate")
+    gma.add_argument("--count", type=int, default=1)
+    gma.add_argument("--package", default="com.android.chrome",
+                     help="browser package on the phone (default com.android.chrome)")
+    gma.add_argument("--password", default=None)
+    gma.add_argument("--dry-run", action="store_true")
 
     # ---- proxy ----
     pp = sub.add_parser("proxy", help="PetaniProxy: harvest proxies, rotating gateway & background daemon")
