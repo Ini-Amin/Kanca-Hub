@@ -190,12 +190,65 @@ async def click_continue(tab, timeout: float = 5.0) -> bool:
     """, False))
 
 
-async def click_verify_status(tab, timeout: float = 4.0) -> bool:
-    """Click the K-12 'Verify status' button via a real CDP mouse click."""
-    for el in await _query_all(tab, "button"):
-        if (el.get("text") or "").strip() == "Verify status":
-            if await _cdp_click_el(tab, el):
-                return True
+async def find_sheerid_anchor(tab) -> str:
+    """Return the SheerID URL from the DOM, if present.
+
+    Per research: the K-12 page delivers the SheerID URL as a plain
+    <a href="https://services.sheerid.com/verify/..."> anchor. Reading the href
+    is far more reliable than clicking the button. We also scan the whole HTML
+    and any iframes for a sheerid.com/verify URL.
+    """
+    # 1) anchor href
+    href = await js(tab, """(()=>{for(const a of document.querySelectorAll('a[href]')){
+        const h=a.href||''; if(h.includes('sheerid.com/verify')) return h;} return '';})()""", "")
+    if href:
+        return href
+    # 2) any element with the URL in an attribute
+    href = await js(tab, """(()=>{const els=document.querySelectorAll('[href],[data-href],[data-url]');
+        for(const e of els){ for(const a of ['href','data-href','data-url']){
+        const v=e.getAttribute(a)||''; if(v.includes('sheerid.com/verify')) return v; }} return '';})()""", "")
+    if href:
+        return href
+    # 3) scan full HTML (covers React-embedded URLs / __NEXT_DATA__)
+    html = await js(tab, "document.documentElement ? document.documentElement.outerHTML : ''", "")
+    if html:
+        m = re.search(r'https://services\.sheerid\.com/verify/[^\s"\'<>\\]+', html)
+        if m:
+            return m.group(0)
+    # 4) scan JS globals
+    href = await js(tab, """(()=>{try{const s=JSON.stringify(window.__NEXT_DATA__||{});
+        const m=s.match(/https:\\/\\/services\\.sheerid\\.com\\/verify\\/[^"\\\\]+/);return m?m[0]:'';}catch(e){return '';}})()""", "")
+    if href:
+        return href.replace("\\/", "/")
+    # 5) iframes
+    for f in tab.frames if hasattr(tab, "frames") else []:
+        try:
+            u = await js(f, "location.href", "")
+            if "sheerid.com/verify" in u:
+                return u
+        except Exception:
+            pass
+    return ""
+
+
+async def click_verify_status(tab, wait_ready: float = 60.0) -> bool:
+    """Click the K-12 verification button via a real CDP mouse click.
+
+    The button first renders as "Checking eligibility..." (disabled) while
+    OpenAI calls the eligibility API, then becomes "Verify status". We must wait
+    for that transition before clicking — clicking during the check does nothing.
+    """
+    deadline = time.time() + wait_ready
+    while time.time() < deadline:
+        btns = await _query_all(tab, "button")
+        for el in btns:
+            t = (el.get("text") or "").strip()
+            if t == "Verify status":
+                return await _cdp_click_el(tab, el)
+            if t in ("Checking eligibility...", "Checking eligibility"):
+                # still waiting on the API; back off and retry
+                break
+        await asyncio.sleep(1.5)
     return False
 
 
@@ -574,9 +627,25 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
         await click_continue(tab)
         await asyncio.sleep(4)
 
-        # password (account creation)
+        # password (account creation). The create-account page has TWO password
+        # fields (password + confirm). Fill all password inputs that are empty.
         if await js(tab, "!!document.querySelector('input[type=password]')", False):
-            await react_fill(tab, 'input[type=password]', password)
+            n_pw = await js(tab, "document.querySelectorAll('input[type=password]').length", 1)
+            for idx in range(int(n_pw) if n_pw else 1):
+                sel = f"input[type=password]:nth-of-type({idx+1})" if n_pw > 1 else "input[type=password]"
+                # prefer index-based selection for reliability
+                sels = [f"input[type=password][name=password]", "input[type=password]"]
+                try:
+                    await cdp_type(tab, sels[0], password) if idx == 0 else await cdp_type(tab, sels[1], password)
+                except Exception:
+                    await cdp_type(tab, "input[type=password]", password)
+            # fallback: ensure the field(s) hold the password
+            await js(tab, f"""(()=>{{const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+                const ps=[...document.querySelectorAll('input[type=password]')];
+                ps.forEach(e=>{{ if(!e.value){{ e.focus(); e.click(); s.call(e,{json.dumps(password)});
+                    e.dispatchEvent(new InputEvent('input',{{bubbles:true,data:{json.dumps(password)},inputType:'insertText'}}));
+                    e.dispatchEvent(new Event('change',{{bubbles:true}})); }} }});
+                return ps.map(e=>e.value.length);}})()""", "[]")
             await asyncio.sleep(1)
             await click_continue(tab)
             await asyncio.sleep(4)
@@ -676,30 +745,48 @@ async def run_flow(headless: bool = False, proxy: str | None = None) -> dict:
                 print(f"      [wait i={i}] url={_u[:70]}", flush=True)
             await asyncio.sleep(1)
 
-        # ---- the critical part: click "Verify status" with a REAL mouse click ----
+        # ---- click "Verify status" (waits out the 'Checking eligibility...' phase) ----
         print("[5/6] Driving K-12 verification page…", flush=True)
         sheerid = None
-        for round_ in range(28):
-            await asyncio.sleep(2)
 
-            # already on sheerid? (tab URL may have changed after a redirect)
+        def _find_sheerid_in(url: str) -> str:
+            return url if "sheerid.com/verify" in url else ""
+
+        for round_ in range(8):
             _u = await js(tab, "location.href", "")
-            if "sheerid.com/verify" in _u:
+            if _find_sheerid_in(_u):
                 sheerid = _u
                 break
-
-            # <a> to sheerid?
-            href = await js(tab, """(()=>{for(const a of document.querySelectorAll('a')){
-                const h=a.href||''; if(h.includes('sheerid.com/verify')) return h;} return '';})()""", "")
-            if href:
+            # PRIMARY: read the SheerID anchor/href straight from the DOM
+            href = await find_sheerid_anchor(tab)
+            if _find_sheerid_in(href):
                 sheerid = href
+                print(f"      [+] SheerID from DOM: {sheerid[:80]}", flush=True)
                 break
-
-            # real CDP click on "Verify status"
-            clicked = await click_verify_status(tab)
+            # wait for the button to become clickable, then click
+            clicked = await click_verify_status(tab, wait_ready=60)
             if clicked:
-                print(f"      [click] Verify status #{round_+1} on {_u[:50]}", flush=True)
-            await asyncio.sleep(3)
+                print(f"      [click] Verify status #{round_+1}", flush=True)
+            # give the click time to produce a redirect / new tab / anchor
+            for _ in range(10):
+                await asyncio.sleep(1.5)
+                href = await find_sheerid_anchor(tab)
+                if _find_sheerid_in(href):
+                    sheerid = href
+                    break
+                for t in list(browser.targets):
+                    if getattr(t, "type_", "") != "page":
+                        continue
+                    u = await js(t, "location.href", "")
+                    if _find_sheerid_in(u):
+                        sheerid = u
+                        break
+                if sheerid:
+                    break
+            if sheerid:
+                break
+            _u = await js(tab, "location.href", "")
+            print(f"      [verify round {round_+1}] url={_u[:70]}", flush=True)
 
         if sheerid:
             print(f"      [+] SheerID URL: {sheerid[:90]}", flush=True)
