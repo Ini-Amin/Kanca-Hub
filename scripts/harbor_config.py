@@ -267,10 +267,18 @@ def main() -> int:
                 "created": OK("✓")}.get(st, WARN("?"))
         print(f"      {mark} {st}  ({cfg_path})")
 
-    # ── 2. Capsolver key ────────────────────────────────────────────────
-    print(f"\n  [{OK('2')}] Capsolver key -> {caps_path}")
+    # ── 2. [turnstile].provider ─────────────────────────────────────────
+    print(f"\n  [{OK('2')}] Turnstile solver provider -> {args.turnstile_provider}")
+    if cfg_path.exists():
+        st = set_toml_value(cfg_path, "turnstile", "provider", args.turnstile_provider, dry)
+        mark = {"updated": OK("✓"), "unchanged": DIM("="), "would-update": WARN("~"),
+                "created": OK("✓")}.get(st, WARN("?"))
+        print(f"      {mark} {st}  ({cfg_path})")
+
+    # ── 3. Capsolver key (optional) ─────────────────────────────────────
+    print(f"\n  [{OK('3')}] Capsolver key -> {caps_path}")
     key = read_env_value(env_path, "CAPSOLVER_API_KEY")
-    if key:
+    if key and "REPLACE-ME" not in key:
         if dry:
             print(f"      {WARN('~')} would write key ({len(key)} chars) to {caps_path}")
         else:
@@ -279,12 +287,10 @@ def main() -> int:
             os.chmod(caps_path, 0o600)
             print(f"      {OK('✓')} wrote key from {env_path} ({len(key)} chars, mode 600)")
     else:
-        print(f"      {WARN('⚠')} CAPSOLVER_API_KEY not found in {env_path}")
-        print(f"      add it:  echo 'CAPSOLVER_API_KEY=CAP-xxxxxxxx' >> {env_path}")
-        print(f"      then:    {env_path.name} re-run this script  (leaving harbor key file untouched)")
+        print(f"      {DIM('•')} Capsolver key optional (Camoufox solver provides free Turnstile solving)")
 
-    # ── 3. proxy list (optional) ────────────────────────────────────────
-    print(f"\n  [{OK('3')}] harbor proxy list"), 
+    # ── 4. proxy list (optional) ────────────────────────────────────────
+    print(f"\n  [{OK('4')}] harbor proxy list"), 
     if args.no_proxies:
         print(f"      {DIM('skipped (--no-proxies)')}")
     else:
@@ -292,19 +298,11 @@ def main() -> int:
         mark = OK("✓") if st.startswith(("wrote", "unchanged")) else (WARN("~") if st.startswith("would") else DIM("="))
         print(f"      {mark} {st}")
 
-    # ── 4. ensure CAPSOLVER_API_KEY exists in .env ──────────────────────
-    print(f"\n  [{OK('4')}] .env placeholder -> {env_path}")
-    st = ensure_env_key(env_path, "CAPSOLVER_API_KEY", "CAP-xxxxxxxx-REPLACE-ME", dry)
-    msg = {
-        "present": f"{DIM('=')} already set (not touched)",
-        "appended": f"{OK('✓')} appended placeholder (set your real CAPSOLVER_API_KEY)",
-        "created": f"{OK('✓')} created file with placeholder",
-        "would-append": f"{WARN('~')} would append placeholder",
-    }.get(st, st)
-    print(f"      {msg}")
-
     print(f"\n{'=' * 66}")
-    print("  next: kancahub thk status   (or: kancahub thk batch 1)")
+    print("  Run TokenHarbor CLI with free Camoufox solver:")
+    print("    /home/amen/.local/share/auto-freecf/camoufox-venv/bin/python -m tools.tokenharbor.cli batch 1")
+    print("  Or via KancaHub:")
+    print("    kancahub thk batch 1")
     print(f"{'=' * 66}\n")
     return rc
 
