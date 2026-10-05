@@ -101,3 +101,9 @@ signup_from_scratch/proxies.txt
 
 # Run outputs (contain real tokens)
 *_test.json
+
+# K-12 runtime outputs (credentials/sessions — never commit)
+k12_sessions.json
+created_k12_accounts.txt
+scripts/created_k12_accounts.txt
+scripts/k12_sessions.json
