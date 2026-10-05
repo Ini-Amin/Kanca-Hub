@@ -80,13 +80,15 @@ async def verify_cloudflare_email(
     timeout: int = 120,
     poll_interval: int = 5,
     api_key: str | None = None,
+    proxy: str | None = None,
+    session_id: str | None = None,
 ) -> EmailVerifyResult:
     """Poll temp inbox, open Cloudflare verification link in the same browser session."""
     if not jwt:
         return EmailVerifyResult(False, error="missing_mail_jwt")
 
     print("  [verify] Waiting for Cloudflare verification email...")
-    gen = EmailGenerator(mail_api, [], api_key=api_key)
+    gen = EmailGenerator(mail_api, [], api_key=api_key, proxy=proxy, session_id=session_id)
     start = time.time()
 
     try:

@@ -652,6 +652,19 @@ def cmd_grok(a) -> int:
     sub = a.grok_cmd or "run"
 
     if sub == "run":
+        driver = AUTO_FREECF / "scripts" / "grok_driver.py"
+        if driver.exists() and not a.petani:
+            cmd = [py, str(driver), "-n", str(getattr(a, "accounts", 1))]
+            if getattr(a, "headless", False):
+                cmd += ["--headless"]
+            if getattr(a, "proxy_pool", None):
+                cmd += ["--proxy-pool", a.proxy_pool]
+            if getattr(a, "proxy", None):
+                cmd += ["--proxy", a.proxy]
+            if getattr(a, "workers", None):
+                cmd += ["--workers", str(a.workers)]
+            print(col("cyan", "Using grok non-interactive driver (SSO risk gate, relay mail, pool export)"))
+            return run(cmd, cwd=AUTO_FREECF)
         if (GROK_REG / "grok_register_ttk.py").exists() and not a.petani:
             cmd = [py, "grok_register_ttk.py", "cli"]
             print(col("cyan", "Using grok-register backend (SSO risk gate, 5 mail providers, pool export)"))
@@ -955,6 +968,9 @@ def build_parser() -> argparse.ArgumentParser:
     gr = gs.add_parser("run", help="run the registration flow")
     gr.add_argument("-n", "--accounts", type=int, default=1)
     gr.add_argument("--headless", action="store_true")
+    gr.add_argument("--proxy-pool", default=None, help="path to proxy pool file")
+    gr.add_argument("--proxy", default=None, help="single proxy URL (e.g. http://127.0.0.1:8888)")
+    gr.add_argument("--workers", type=int, default=1, help="concurrent worker threads")
     gr.add_argument("--petani", action="store_true", help="use PetaniProxy farm instead")
     gs.add_parser("web", help="launch the WebUI (127.0.0.1:8092)")
     gs.add_parser("gui", help="launch the Tk GUI")
