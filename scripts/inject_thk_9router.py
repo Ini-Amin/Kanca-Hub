@@ -47,7 +47,12 @@ def now_iso() -> str:
 def load_accounts(path: str) -> list[dict]:
     data = json.loads(Path(path).read_text())
     if isinstance(data, dict):
-        data = data.get("accounts") or data.get("results") or []
+        # harbor's _save_account writes a bare single-account object when the
+        # file did not previously exist; accept that as well as wrapped lists.
+        if data.get("api_key") or data.get("key"):
+            data = [data]
+        else:
+            data = data.get("accounts") or data.get("results") or []
     return [a for a in data if isinstance(a, dict)]
 
 
