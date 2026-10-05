@@ -86,6 +86,29 @@ Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy
 | `kancahub grok gui` | Launch the Tk GUI | `kancahub grok gui` |
 | `kancahub grok retry` | Retry a pending file | `kancahub grok retry --pending accounts_1.txt.pending.jsonl` |
 | `kancahub grok pool` | Show the grok2api token pool | `kancahub grok pool` |
+| `kancahub grok inject` | Inject SSO tokens into 9Router via a grok2api bridge | `kancahub grok inject --base-url http://127.0.0.1:8787/v1` |
+
+### Grok SSO → 9Router (`grok2api_bridge`)
+
+9Router's built-in `xai` provider is OAuth-only, so grok.com **SSO cookie**
+tokens need a "grok2api" OpenAI-compatible endpoint. `scripts/grok2api_bridge.py`
+provides one locally: it loads tokens from grok-register's `token.json`
+(`ssoBasic[].token`) or `accounts_*.txt` and forwards `/v1/chat/completions` +
+`/v1/models` to xAI/Grok with the `sso=` cookie.
+
+```bash
+# start the bridge (managed venv)
+/home/amen/.local/share/auto-freecf/venv/bin/python scripts/grok2api_bridge.py --port 8787
+# point 9Router at it
+kancahub grok inject --base-url http://127.0.0.1:8787/v1
+# or set the env var used by grok_9router.py
+export GROK2API_BASE=http://127.0.0.1:8787
+```
+
+Flags: `--host` `--port` (default `127.0.0.1:8787`), `--tokens FILE`,
+`--auth-mode cookie|bearer`, `--upstream-base`, `--upstream-path`,
+`--model-map find=replace`. The exact SSO-authenticated upstream wire shape is
+uncertain — adjust with `--upstream-base` / `--auth-mode` (see module docstring).
 
 ## `k12` — ChatGPT K-12 teacher verification
 

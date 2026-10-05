@@ -103,7 +103,39 @@ kancahub grok run            # CLI registration flow
 kancahub grok web            # WebUI on 127.0.0.1:8092
 kancahub grok pool           # show grok2api token pool
 kancahub grok retry --pending accounts_1.txt.pending.jsonl
+kancahub grok inject --base-url http://127.0.0.1:8787/v1   # SSO tokens -> 9Router
 ```
+
+#### Grok SSO tokens → 9Router via `grok2api_bridge`
+
+9Router's built-in `xai` provider is **OAuth-only** (accessToken/refreshToken/
+idToken), so grok.com **SSO cookie** tokens cannot go there directly. Instead
+they are served through an OpenAI-compatible "grok2api" endpoint and 9Router
+gets a normal `openai-compatible` node pointing at it.
+
+`scripts/grok2api_bridge.py` is that minimal endpoint. It loads SSO tokens from
+grok-register's `token.json` (`ssoBasic[].token`) or `accounts_*.txt`, and
+forwards `POST /v1/chat/completions` + `GET /v1/models` to xAI/Grok using the
+`sso=<token>; sso-rw=<token>` cookie. FastAPI/uvicorn, no extra deps.
+
+```bash
+# 1. start the bridge (managed venv has fastapi/uvicorn/httpx)
+/home/amen/.local/share/auto-freecf/venv/bin/python \
+    scripts/grok2api_bridge.py --port 8787
+
+# 2. wire it into 9Router (registers an openai-compatible node)
+kancahub grok inject --base-url http://127.0.0.1:8787/v1 --dry-run   # preview
+kancahub grok inject --base-url http://127.0.0.1:8787/v1            # write
+
+# or via env (grok_9router.py reads GROK2API_BASE)
+export GROK2API_BASE=http://127.0.0.1:8787
+```
+
+Useful flags: `--tokens FILE`, `--host`, `--port` (default `127.0.0.1:8787`),
+`--auth-mode cookie|bearer`, `--upstream-base`, `--upstream-path`,
+`--model-map grok-4=grok-4-latest`. See the module docstring for the
+**uncertainty note** about the exact SSO-authenticated upstream wire shape —
+the upstream URL/auth mode are one flag away from being changed.
 
 ### `proxy` — PetaniProxy
 ```bash
