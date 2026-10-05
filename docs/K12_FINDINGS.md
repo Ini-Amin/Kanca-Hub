@@ -54,3 +54,24 @@ SheerID URL -> script.py K12Verifier.verify() (proven, self-contained).
    or register a `.edu.xx`-style domain with MX we control).
 2. Point the K-12 signup at it (both signup + SheerID contact email).
 3. Then SheerID handoff should work; feed the URL to script.py's K12Verifier.
+
+---
+
+## UPDATE (2026-10-05): temp.tf / high.edu.pl — domain receives, API broken
+
+Verified via Gmail "sent" record: mail TO `qtep3mu4ji@high.edu.pl` IS delivered
+(Gmail shows it delivered at 14:43).
+
+BUT temp.tf's read API cannot return it. `/api/check` (correctly called as
+`POST {"email":..., "wait":bool}` — confirmed from temp.tf's own JS bundle)
+returns `{"data":[]}` forever, for every address.
+
+Root cause visible in https://temp.tf/api/stats :
+    "accounts": {"gmail":5,"outlook":25,"hotmail":26,"highEduPl":1},
+    "breakdown": {"highEduPl":"3760620109779060"}   <- 3.76 QUADRILLION
+The high.edu.pl per-address counter is corrupted, so messages are received by
+the domain but never associated with the address in the API.
+
+CONCLUSION: high.edu.pl (temp.tf) is unusable as an API-readable inbox, even
+though the domain accepts mail. Need a DIFFERENT source of a school-eligible,
+API-readable inbox.
