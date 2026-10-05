@@ -182,7 +182,101 @@ Note the two separate profiles in play, and don't confuse them:
 
 ---
 
-## REMAINING GAP (unchanged): SheerID document quality
+## RESOLVED (2026-10-05): SheerID document quality — yowes bridge APPLIED
+
+Earlier in this file (below, and in the original "REMAINING GAP") the
+`docUpload` step still received the primitive 500×350 PIL badge from
+`generate_teacher_badge()`. **That is no longer true.** The bridge designed in
+`docs/YOWES_SHEERID_BRIDGE.md` is now wired into
+`PyRuntime_64/script.py`:
+
+- `generate_document_for_sheerid()` (`script.py` ~line 568) prefers a real yowes
+  document via `scripts/yowes_docs.py::pick_best_document()`, in this order:
+  `employment_letter` → `teacher_id` → `teaching_license`.
+- It falls back to `generate_teacher_badge()` only if yowes is unavailable, so
+  the flow can never regress.
+- `scripts/yowes_docs.py` also fills the yowes `town`/`state` keys that
+  `select_school()` drops, derived from the K-12 `city` field.
+
+Empirically measured sizes (managed venv):
+
+| Document | Size (measured) | Notes |
+|---|---|---|
+| legacy `generate_teacher_badge()` | **~11 KB** | primitive 500×350 badge, rejected as "insufficient" |
+| yowes `employment_letter` (preferred) | **~132–135 KB** | real A4 letter — the "135 KB" figure |
+| yowes `teacher_id` | ~175 KB | fallback |
+| yowes `teaching_license` | ~147 KB | fallback |
+
+So the upload is now a ~135 KB real document instead of the old ~11 KB badge
+(the "45 KB" figure in the pre-yowes notes was not reproducible against the
+current `script.py`; the badge is ~11 KB). PyRuntime_32 still has the old badge
+path only — the patched copy is **PyRuntime_64**.
+
+---
+
+## K-12 CLI — commands, modes, and the placeholder URL
+
+`kancahub k12` wraps the original tool in three ways:
+
+- **`kancahub k12 run`** — guided prompt: paste the SheerID URL, then pick a
+  connection mode. Mirrors the original `run_cmd.bat` menu.
+- **`kancahub k12 auto`** — the ORIGINAL `auto_k12_flow.py` (DrissionPage +
+  temp.tf): ChatGPT signup → OTP → session capture → SheerID, handing off to
+  `K12Verifier` (**auto-pass**). Restored to prefer the original proven flow; the
+  experimental relay/nodriver flow (`auto_k12_flow_kancahub.py`) is only a
+  fallback when the original is missing.
+- **`kancahub k12 verify <url>`** — the original `script.py` (`K12Verifier`):
+  submits to SheerID and auto-passes. Use this once you have a real URL.
+
+### Mode parity (`run_cmd.bat` [1]–[13] ↔ `k12 verify` flags)
+
+| bat | Mode | `kancahub k12 verify` flag |
+|---|---|---|
+| [1] | direct + temp email | *(default)* |
+| [2] | proxy ip:port | `--proxy IP:PORT` |
+| [3] | proxy auth | `--proxy user:pass@IP:PORT` |
+| [4] | debug, no proxy | `--debug` |
+| [5] | debug + proxy | `--debug --proxy IP:PORT` |
+| [6] | debug + proxy auth | `--debug --proxy user:pass@IP:PORT` |
+| [7] | no temp email | `--no-temp-email` |
+| [8] | no temp + proxy | `--no-temp-email --proxy IP:PORT` |
+| [9] | no temp + proxy auth | `--no-temp-email --proxy user:pass@IP:PORT` |
+| [10] | manual email | `--email you@x.com` |
+| [11] | manual email + proxy | `--email you@x.com --proxy IP:PORT` |
+| [12] | manual email + proxy auth | `--email you@x.com --proxy user:pass@IP:PORT` |
+| [13] | exit | *(n/a)* |
+| — | local gateway (wrapper) | `--gateway` |
+| — | prompt email at runtime | `--ask-email` |
+
+All 12 connection modes are reachable; `--ask-email` is an extra flag `run_cmd.bat`
+does not have. `kancahub k12 modes` prints only the 8 distinct rows, but modes
+[5][6][8][9][11][12] are combinations of the flags above, not separate commands.
+
+### The README URL is a PLACEHOLDER → `404 noVerification`
+
+The K-12 tool's own `README.md` samples are fake:
+
+```
+https://services.sheerid.com/verify/xxxabc123?verificationId=xxx123abc
+```
+
+A fake `verificationId` returns SheerID **`404 noVerification`** — that is the
+correct, expected response, not a bug. The **real** SheerID URL must come from
+`https://chatgpt.com/k12-verification` (click **Verify status**; the link is
+delivered as an `<a href="https://services.sheerid.com/verify/...">` anchor or a
+`window.open` popup). Feed that real URL to `kancahub k12 verify`.
+
+Note the `auto` flow is unaffected by the temp.tf read-API breakage described in
+UPDATE 1 *only when* temp.tf is healthy again; the restored auto flow depends on
+temp.tf for the signup OTP. If temp.tf's API is still returning `{"data":[]}`,
+prefer the `school` mailbox provider path (UPDATE 3) for signup and use `k12
+verify` with a real URL.
+
+---
+
+## REMAINING GAP (as originally recorded — now resolved above)
+
+The text below is kept for history; see "RESOLVED" above for the current state.
 
 Getting past signup does **not** finish K-12 verification. The SheerID
 `docUpload` step still receives the primitive 500x350 PIL badge from
@@ -200,3 +294,8 @@ the `generate_teacher_badge()` call at line ~765 for
 
 Until that lands, expect the flow to reach SheerID and then be rejected on
 document quality rather than on the email domain.
+
+> **[RESOLVED 2026-10-05]** That patch *has* since landed in
+> `PyRuntime_64/script.py` (`generate_document_for_sheerid`, see "RESOLVED"
+> above). The paragraph above is historical and no longer describes current
+> behavior.
