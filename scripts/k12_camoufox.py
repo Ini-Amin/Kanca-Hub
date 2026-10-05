@@ -53,7 +53,8 @@ CREATED = K12_DIR / "created_k12_accounts.txt"
 
 CHATGPT = "https://chatgpt.com"
 
-BUTTON_LABELS = ("Continue", "Next", "Sign up", "Verify", "Submit", "Log in")
+BUTTON_LABELS = ("Continue", "Next", "Sign up", "Verify", "Submit", "Log in",
+                 "Finish creating account", "Create account", "Finish")
 SESSION_COOKIES = ("__Secure-next-auth.session-token", "next-auth.session-token",
                    "__Secure-authjs.session-token")
 
@@ -112,16 +113,30 @@ def _relay_poll_mail(jwt: str) -> list[dict]:
     return d if isinstance(d, list) else d.get("results", [])
 
 
+def _req(method: str, url: str, *, retries: int = 4, **kw):
+    """HTTP request with retry/backoff for transient timeouts (fresh WARP tunnels
+    reset/fail the first connection)."""
+    last = None
+    for i in range(retries):
+        try:
+            r = requests.request(method, url, timeout=kw.pop("timeout", 30), **kw)
+            return r
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last = e
+            time.sleep(2 * (i + 1))
+    raise last
+
+
 def _mailtm_create_mailbox() -> dict:
     """Register a random address on mail.tm and fetch its JWT."""
     local = "k" + "".join(random.choices(string.ascii_lowercase + string.digits, k=11))
     address = f"{local}@{MAILTM_DOMAIN}"
     pw = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-    r = requests.post(f"{MAILTM_BASE}/accounts", json={"address": address, "password": pw},
-                      headers=_MAILTM_HEADERS, timeout=30)
+    r = _req("POST", f"{MAILTM_BASE}/accounts", json={"address": address, "password": pw},
+             headers=_MAILTM_HEADERS, timeout=30)
     r.raise_for_status()
-    r = requests.post(f"{MAILTM_BASE}/token", json={"address": address, "password": pw},
-                      headers=_MAILTM_HEADERS, timeout=30)
+    r = _req("POST", f"{MAILTM_BASE}/token", json={"address": address, "password": pw},
+             headers=_MAILTM_HEADERS, timeout=30)
     r.raise_for_status()
     return {"address": address, "token": r.json()["token"], "provider": "mailtm"}
 
@@ -129,7 +144,7 @@ def _mailtm_create_mailbox() -> dict:
 def _mailtm_poll_mail(token: str) -> list[dict]:
     """List messages, fetch each in full, normalise to the keys wait_for_otp expects."""
     h = {**_MAILTM_HEADERS, "Authorization": f"Bearer {token}"}
-    r = requests.get(f"{MAILTM_BASE}/messages", headers=h, timeout=30)
+    r = _req("GET", f"{MAILTM_BASE}/messages", headers=h, timeout=30)
     r.raise_for_status()
     d = r.json()
     items = d if isinstance(d, list) else (d.get("hydra:member") or d.get("member") or [])
@@ -137,7 +152,7 @@ def _mailtm_poll_mail(token: str) -> list[dict]:
     for it in items:
         full = it
         try:
-            fr = requests.get(f"{MAILTM_BASE}/messages/{it['id']}", headers=h, timeout=30)
+            fr = _req("GET", f"{MAILTM_BASE}/messages/{it['id']}", headers=h, timeout=30)
             fr.raise_for_status()
             full = fr.json()
         except Exception:  # noqa: BLE001  fall back to the list summary (subject/intro)
@@ -260,6 +275,25 @@ async def type_into(page, selector: str, value: str, label: str | None = None) -
             await page.keyboard.press("Delete")
             await el.press_sequentially(str(value), delay=random.randint(45, 90), timeout=15000)
             got = await el.input_value(timeout=2000)
+        except Exception:
+            pass
+        ok = got.strip() == str(value).strip()
+    if not ok:
+        # last resort: React-safe native setter + input event (worked for nodriver)
+        try:
+            await js(page, """(()=>{const e=document.querySelector(%s); if(!e) return '';
+                e.focus();
+                const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+                if(s) s.call(e,%s); else e.value=%s;
+                e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s,inputType:'insertText'}));
+                e.dispatchEvent(new Event('change',{bubbles:true}));
+                return e.value;})()""" % (json.dumps(selector), json.dumps(str(value)),
+                                          json.dumps(str(value)), json.dumps(str(value))), "")
+            got = ""
+            try:
+                got = await el.input_value(timeout=2000)
+            except Exception:
+                got = await js(page, f"(()=>{{const e=document.querySelector({json.dumps(selector)});return e?e.value:'';}})()", "") or ""
         except Exception:
             pass
         ok = got.strip() == str(value).strip()
@@ -406,6 +440,7 @@ async def fill_about_you(page) -> bool:
     await asyncio.sleep(0.5)
 
     age_sel = None
+    bsel = None
     for sel in ("input[name=age]", "input[id*=age i]", "input[type=number]"):
         if await has(page, sel):
             age_sel = sel
@@ -457,6 +492,21 @@ async def fill_about_you(page) -> bool:
 
     print(f"      [about-you] name={name!r} age={age} dob={dob!r} filled={filled}", flush=True)
     await asyncio.sleep(0.8)
+
+    # GATE: don't click until the required field really holds a value, else the
+    # form shows 'Enter a valid age to continue' and we never advance.
+    want_sel = age_sel or bsel
+    if want_sel:
+        for attempt in range(4):
+            cur = await js(page, f"(()=>{{const e=document.querySelector({json.dumps(want_sel)});return e?e.value:'';}})()", "") or ""
+            if str(cur).strip():
+                break
+            print(f"      [about-you] field empty (attempt {attempt+1}); refilling…", flush=True)
+            filled = await type_into(page, want_sel, str(age) if want_sel == age_sel else dob, "about-you-retry")
+            await asyncio.sleep(0.6)
+        final = await js(page, f"(()=>{{const e=document.querySelector({json.dumps(want_sel)});return e?e.value:'';}})()", "") or ""
+        print(f"      [about-you] final field value={final!r}", flush=True)
+
     ok = await click_continue(page)
     if not ok:
         btns = await js(page, """JSON.stringify([...document.querySelectorAll('button')]
