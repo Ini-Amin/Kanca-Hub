@@ -30,6 +30,14 @@ Mail Providers & Custom Domain Setup:
     or pass --domain school.edu.pl on the CLI.
   * K12_MAIL_PROVIDER='mailtm':
     Uses public mail.tm API (maxxspace.com) for testing non-gated steps.
+  * K12_MAIL_PROVIDER='school':
+    Uses the REAL school mailbox (binus.ac.id / Microsoft 365) — the address is
+    a plus-address of SCHOOL_EMAIL, e.g. raymondi+oct1@binus.ac.id (--index N
+    picks N). OpenAI accepts binus.ac.id as a school domain, so this is the
+    provider that gets past the "register with a school email address" gate.
+    No mailbox is created over HTTP: the OTP is read from the already-logged-in
+    M365 session by shelling out to scripts/school_mail_browser.py (nodriver),
+    which re-uses the persisted profile ~/.config/auto-freecf/school-profile.
 
 Sessions are captured from /api/auth/session and saved for 9Router.
 """
@@ -43,6 +51,7 @@ import os
 import random
 import re
 import string
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -107,11 +116,41 @@ MAIL_BASE = f"{SUPABASE_URL}/functions/v1/temp-mail-api"
 DOMAINS = (_ENV.get("K12_DOMAINS") or ",".join(_CFG.get("mail_domains") or ["kancalabs.biz.id"])).split(",")
 
 
-# Pluggable mail provider: K12_MAIL_PROVIDER = 'relay' (default) | 'mailtm'
+# Pluggable mail provider: K12_MAIL_PROVIDER = 'relay' (default) | 'mailtm' | 'school'
 MAIL_PROVIDER = (os.environ.get("K12_MAIL_PROVIDER") or _ENV.get("K12_MAIL_PROVIDER") or "relay").strip().lower()
 MAILTM_BASE = "https://api.mail.tm"
 MAILTM_DOMAIN = "maxxspace.com"  # the only mail.tm domain
 _MAILTM_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+
+# ── school mailbox (real binus.ac.id / M365) ─────────────────────────────
+# The signup address is a plus-address of SCHOOL_EMAIL: raymondi+oct1@binus.ac.id.
+# Everything lands in the one real inbox; the +oct<N> tag just keeps each run's
+# thread separable. Reading the OTP re-uses scripts/school_mail_browser.py
+# (nodriver + persisted profile ~/.config/auto-freecf/school-profile).
+SCHOOL_MAIL_SCRIPT = AUTO_FREECF / "scripts" / "school_mail_browser.py"
+SCHOOL_PROFILE_DIR = HOME / ".config" / "auto-freecf" / "school-profile"
+# school_mail_browser.py needs nodriver, which is installed in the managed venv
+# but NOT in the camoufox venv this file runs under.
+MANAGED_VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
+
+def school_email_default() -> str:
+    """SCHOOL_EMAIL from the environment or ~/.config/auto-freecf/.env."""
+    return (os.environ.get("SCHOOL_EMAIL") or _ENV.get("SCHOOL_EMAIL") or "").strip()
+
+def school_address(base_email: str, index: int = 1) -> str:
+    """raymondi@binus.ac.id + index 1 -> raymondi+oct1@binus.ac.id"""
+    base = (base_email or "").strip()
+    if "@" not in base:
+        return ""
+    local, _, dom = base.partition("@")
+    local = local.split("+", 1)[0]  # never stack tags on an already-tagged address
+    return f"{local}+oct{int(index)}@{dom}"
+
+def _school_mail_python() -> str:
+    """Interpreter that can import nodriver (managed venv preferred)."""
+    if MANAGED_VENV_PY.exists() and os.access(str(MANAGED_VENV_PY), os.X_OK):
+        return str(MANAGED_VENV_PY)
+    return sys.executable
 
 
 def _relay_create_mailbox(custom_domain: str | None = None) -> dict:
@@ -196,8 +235,21 @@ def _mailtm_poll_mail(token: str) -> list[dict]:
     return out
 
 
-def create_mailbox(provider: str | None = None, domain: str | None = None) -> dict:
+def create_mailbox(provider: str | None = None, domain: str | None = None,
+                   index: int = 1, school_email: str | None = None) -> dict:
     prov = (provider or MAIL_PROVIDER or "relay").strip().lower()
+    if prov == "school":
+        # Nothing to create — the mailbox already exists. Mint the plus-address.
+        base = school_email or school_email_default()
+        if not base:
+            raise RuntimeError(
+                "school provider needs a school address — set SCHOOL_EMAIL in "
+                "~/.config/auto-freecf/.env or pass --school-email"
+            )
+        addr = school_address(base, index)
+        if not addr:
+            raise RuntimeError(f"malformed school email: {base!r}")
+        return {"address": addr, "provider": "school", "base": base, "index": index}
     if prov == "mailtm":
         return _mailtm_create_mailbox()
     return _relay_create_mailbox(domain)
@@ -205,9 +257,57 @@ def create_mailbox(provider: str | None = None, domain: str | None = None) -> di
 
 def poll_mail(jwt: str, provider: str | None = None) -> list[dict]:
     prov = (provider or MAIL_PROVIDER or "relay").strip().lower()
+    if prov == "school":
+        # The school mailbox is read through a browser subprocess, not HTTP.
+        # See school_otp_via_subprocess(); this keeps the relay/mailtm signature.
+        return []
     if prov == "mailtm":
         return _mailtm_poll_mail(jwt)
     return _relay_poll_mail(jwt)
+
+
+def school_otp_via_subprocess(timeout: int = 180, cwd: Path | None = None) -> str | None:
+    """Read the next OpenAI OTP from the real school mailbox.
+
+    Shells out to scripts/school_mail_browser.py, which drives a nodriver Chrome
+    against the PERSISTED profile (~/.config/auto-freecf/school-profile). That
+    session must already be logged in — run `kancahub mail test` (or
+    `school_mail_browser.py login`) once by hand to establish it, and re-run it
+    whenever Microsoft expires it (MFA cannot be completed unattended).
+    The child prints `[school] OTP ...: <code>` and we scrape the 6 digits back.
+    """
+    if not SCHOOL_MAIL_SCRIPT.exists():
+        print(f"      ✗ school_mail_browser.py not found at {SCHOOL_MAIL_SCRIPT}", flush=True)
+        return None
+
+    py = _school_mail_python()
+    cmd = [py, str(SCHOOL_MAIL_SCRIPT), "otp", "--timeout", str(int(timeout))]
+    print(f"      [school] $ {' '.join(cmd)}", flush=True)
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd or SCHOOL_MAIL_SCRIPT.parent),
+            capture_output=True, text=True, timeout=timeout + 120,
+        )
+    except subprocess.TimeoutExpired:
+        print("      ✗ school mailbox reader timed out", flush=True)
+        return None
+    except Exception as e:  # noqa: BLE001
+        print(f"      ✗ school mailbox reader failed: {e}", flush=True)
+        return None
+
+    out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    for line in out.splitlines():
+        if "otp" in line.lower():
+            print(f"      {line.strip()}", flush=True)
+    # child prints: "[school] OTP from subject: 123456"
+    m = re.search(r"OTP[^0-9]{0,40}(\d{6})", out)
+    if m:
+        return m.group(1)
+    if proc.returncode != 0:
+        print(f"      ✗ school mailbox reader exit={proc.returncode} "
+              f"(is the M365 session still logged in? run: kancahub mail test)", flush=True)
+    return None
 
 
 def _blob(m: dict) -> str:
@@ -215,6 +315,10 @@ def _blob(m: dict) -> str:
 
 
 async def wait_for_otp(jwt: str, timeout: int = 180, provider: str | None = None) -> str | None:
+    prov = (provider or MAIL_PROVIDER or "relay").strip().lower()
+    if prov == "school":
+        print(f"      [school] reading OTP from the real M365 inbox (max {timeout}s)…", flush=True)
+        return await asyncio.to_thread(school_otp_via_subprocess, timeout)
     print(f"      [mail] polling relay for OTP (max {timeout}s)…", flush=True)
     start = time.time()
     seen = set()
@@ -723,6 +827,8 @@ async def run_flow(
     proxy: str | None = None,
     mail_provider: str | None = None,
     domain: str | None = None,
+    index: int = 1,
+    school_email: str | None = None,
 ) -> dict:
     print("=" * 60, flush=True)
     print("  CHATGPT K-12 (Camoufox / Playwright)", flush=True)
@@ -731,11 +837,23 @@ async def run_flow(
     prov = (mail_provider or MAIL_PROVIDER or "relay").strip().lower()
     if prov == "relay" and (not SUPABASE_URL or not MAIL_KEY):
         return {"success": False, "error": "mail_relay_unconfigured"}
+    if prov == "school":
+        base = school_email or school_email_default()
+        if not base:
+            return {"success": False, "error": "school_email_unset",
+                    "hint": "set SCHOOL_EMAIL in ~/.config/auto-freecf/.env or pass --school-email"}
+        if not SCHOOL_PROFILE_DIR.is_dir():
+            print(f"      [!] {SCHOOL_PROFILE_DIR} missing — the OTP reader will need an "
+                  f"interactive M365 login first (run: kancahub mail test)", flush=True)
 
-    print(f"[1/6] Creating mailbox (provider={prov}, domain={domain or 'auto'})…", flush=True)
-    mail = create_mailbox(provider=prov, domain=domain)
+    print(f"[1/6] Creating mailbox (provider={prov}, domain={domain or 'auto'}"
+          f"{f', index={index}' if prov == 'school' else ''})…", flush=True)
+    mail = create_mailbox(provider=prov, domain=domain, index=index, school_email=school_email)
     email, jwt = mail["address"], (mail.get("jwt") or mail.get("token"))
     print(f"      [+] {email}", flush=True)
+    if prov == "school":
+        print(f"      [+] school mailbox (base={mail.get('base')}); OTP read from the "
+              f"persisted M365 profile", flush=True)
     password = gen_password()
     print(f"[2/6] Password: {password}", flush=True)
 
@@ -800,7 +918,8 @@ async def run_flow(
             await asyncio.sleep(4)
 
         # ---- OTP: wait for mail, find the field, fill, VERIFY, then submit.
-        print("[4/6] Waiting for OTP from relay…", flush=True)
+        print(f"[4/6] Waiting for OTP from "
+              f"{'the school mailbox (binus.ac.id)' if prov == 'school' else 'relay'}…", flush=True)
         otp = await wait_for_otp(jwt, timeout=180, provider=prov)
         if otp:
             otp_sel = None
@@ -1001,16 +1120,37 @@ async def run_flow(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="ChatGPT K-12 flow on Camoufox (Firefox anti-detect)")
+    ap = argparse.ArgumentParser(
+        description="ChatGPT K-12 flow on Camoufox (Firefox anti-detect)",
+        epilog=(
+            "Providers:\n"
+            "  relay   (default) Supabase temp-mail relay with K12_DOMAINS\n"
+            "  mailtm  public mail.tm (disposable — OpenAI blocks it at signup)\n"
+            "  school  REAL binus.ac.id M365 mailbox via plus-addressing\n"
+            "\n"
+            "School provider example:\n"
+            "  K12_MAIL_PROVIDER=school python3 scripts/k12_camoufox.py --index 1\n"
+            "  # -> raymondi+oct1@binus.ac.id ; OTP read from the persisted\n"
+            "  #    M365 profile ~/.config/auto-freecf/school-profile\n"
+            "  # Requires a live M365 session: run `kancahub mail test` first.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     ap.add_argument("--headless", action="store_true",
                     help="run under Xvfb ('virtual' headless) instead of a visible window")
     ap.add_argument("--proxy", default=None, help="http(s)/socks5 proxy URL; geoip follows its exit IP")
-    ap.add_argument("--mail-provider", choices=["relay", "mailtm"], default=None,
-                    help="mail backend: 'relay' (default, Supabase relay with K12_DOMAINS) or 'mailtm'")
+    ap.add_argument("--mail-provider", choices=["relay", "mailtm", "school"], default=None,
+                    help="mail backend: 'relay' (default), 'mailtm', or 'school' "
+                         "(real binus.ac.id M365 inbox via plus-addressing)")
     ap.add_argument("--domain", default=None,
                     help="custom domain to request from mail relay (e.g. your school .edu.pl domain)")
+    ap.add_argument("--index", type=int, default=1,
+                    help="plus-address tag for the school provider: raymondi+oct<N>@binus.ac.id (default 1)")
+    ap.add_argument("--school-email", default=None,
+                    help="school address to plus-tag (default: SCHOOL_EMAIL env / .env)")
     a = ap.parse_args()
-    r = asyncio.run(run_flow(headless=a.headless, proxy=a.proxy, mail_provider=a.mail_provider, domain=a.domain))
+    r = asyncio.run(run_flow(headless=a.headless, proxy=a.proxy, mail_provider=a.mail_provider,
+                             domain=a.domain, index=a.index, school_email=a.school_email))
     print(json.dumps(r, indent=2, default=str))
     return 0 if r.get("success") else 1
 
