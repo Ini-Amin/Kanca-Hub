@@ -509,15 +509,42 @@ async def warm_session(tab, seconds: float = 12.0) -> None:
 
 
 async def handle_phone_step(tab, st: Settings, args: argparse.Namespace) -> str:
-    """Phone/SMS verification is MANUAL.  Waits for the human to finish it.
+    """Try to SKIP phone verification; only then fall back to manual.
 
-    A provider (see FiveSimStub) could be plugged in here; it is intentionally
-    not called.  Returns 'success', 'blocked', or 'timeout'.
+    Google sometimes shows the phone screen but lets you continue with
+    'Not now' / 'Skip'. We click those aggressively first. If Google truly
+    forces a number, a headless run can't finish it.
     """
+    # 1) Aggressively try to skip the phone prompt.
+    skip_labels = ["not now", "skip", "no thanks", "do it later", "cancel",
+                   "nanti saja", "lewati", "tidak sekarang"]
+    for _ in range(6):
+        cur = await state(tab)
+        if cur != "phone":
+            if cur == "success":
+                return "success"
+            if cur == "blocked":
+                return "blocked"
+            if cur == "post":
+                await finish_post_screens(tab)
+                return "success"
+            break
+        # try a skip control; also try the generic advance labels
+        if not await click_button(tab, skip_labels):
+            if not await click_button(tab, NEXT_LABELS):
+                break
+        await asyncio.sleep(2)
+
+    # 2) Re-check: did skipping work?
+    cur = await state(tab)
+    if cur not in ("phone", "code"):
+        return "success" if cur in ("success", "post") else cur
+
+    # 3) Truly forced -> only a human / SMS provider can finish.
     if args.headless:
-        log("  phone verification required; headless -> cannot wait for a human")
+        log("  phone verification is FORCED by Google; headless cannot finish it")
         return "timeout"
-    log(f"  >>> PHONE VERIFICATION: complete it in the browser window "
+    log(f"  >>> PHONE VERIFICATION: finish it in the browser window "
         f"(waiting up to {args.verify_timeout}s) <<<")
     end = time.time() + args.verify_timeout
     while time.time() < end:
