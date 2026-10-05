@@ -58,6 +58,9 @@ PROXY / POOL
                 one upstream proxy is pinned for the whole flow.
   --pool FILE   newline-separated proxy list; one is chosen per --index (rotation).
                 Auto-detects the gateway and applies sticky sessions for it too.
+  --retries N   opt-in: when the signup is blocked with 'access_restricted' (anti-bot
+                network block), retry up to N times, each with the NEXT unused proxy
+                from --pool. Default 0 = single attempt (unchanged behavior).
   Exit IP / geo follow the proxy when geoip=True.
 
 CONFIG (~/.config/auto-freecf/.env) — same keys the school reader uses:
@@ -72,6 +75,7 @@ CLI:
     python3 github_farm.py --index 1 --headless
     python3 github_farm.py --index 1 --proxy http://127.0.0.1:8888
     python3 github_farm.py --index 1 --pool signup_from_scratch/proxies.txt
+    python3 github_farm.py --index 1 --pool signup_from_scratch/proxies.txt --retries 5
 
 Output: ~/Auto-FreeCF/github_accounts.json (gitignored).
 """
@@ -246,6 +250,31 @@ def pick_proxy(proxy: str | None, pool_file: str | None, index: int) -> tuple[st
         chosen = pool[(max(index, 1) - 1) % len(pool)]
         return chosen, f"pool #{((max(index, 1) - 1) % len(pool)) + 1}/{len(pool)}"
     return None, "direct (no proxy)"
+
+def should_retry_access_restricted(stage: str | None, attempt: int, retries: int,
+                                   has_pool: bool) -> bool:
+    """
+    Pure decision helper: should the signup be retried on the NEXT pool proxy?
+
+    True only when GitHub served an anti-bot network block (stage ==
+    'access_restricted'), the caller explicitly opted in (retries > 0), there
+    are retries left (attempt is the 1-based number of the attempt that just
+    finished; retry while 1 <= attempt <= retries), and a non-empty proxy pool
+    is available to rotate to. Default (retries=0) is always False, i.e.
+    exactly today's single-attempt behavior.
+    """
+    return (stage == "access_restricted" and retries > 0
+            and 1 <= attempt <= retries and has_pool)
+
+def next_pool_proxy(pool: list[str], used: list[str], index: int) -> str | None:
+    """
+    Pick the next proxy from a (verified/live) pool that was not already tried
+    in this run. Returns None when every pool entry has been used.
+    """
+    remaining = [p for p in pool if p not in used]
+    if not remaining:
+        return None
+    return remaining[(max(index, 1) - 1) % len(remaining)]
 
 
 # ─────────────────────────────────────────────────────────── playwright helpers
@@ -971,7 +1000,7 @@ def build_email(index: int) -> str:
 
 
 async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
-              dry_run: bool, no_proxy: bool = False) -> int:
+              dry_run: bool, no_proxy: bool = False, retries: int = 0) -> int:
     if AsyncCamoufox is None:
         print("=" * 60, flush=True)
         print("  ✗ Camoufox is not importable in this interpreter.", flush=True)
@@ -1044,73 +1073,101 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
         "note": "School mailbox is the ONLY address used (plus-addressing). Does not touch 'Ini-Amin'.",
     }
 
-    kwargs: dict = dict(
-        headless="virtual" if headless else False,  # 'virtual' = Xvfb, avoids headless leaks
-        geoip=True,
-        humanize=True,
-        os="windows",
-    )
-    pd = _proxy_dict(chosen_proxy)
-    if pd:
-        kwargs["proxy"] = pd
+    retry_pool = _load_pool(pool) if pool else []
+    used_proxies: list[str] = [chosen_proxy] if chosen_proxy else []
+    attempt = 0
+
     # Camoufox text-entry logging can leak the launch code; quiet it a touch.
     try:
-        async with AsyncCamoufox(**kwargs) as browser:
-            page = await browser.new_page()
-            context = page.context
-            if is_gw:
-                await apply_gateway_session(context, email)
-                await apply_gateway_session(page, email)
-                print(f"      📌 Sticky gateway session applied (id={email})", flush=True)
-
+        while True:
+            attempt += 1
+            attempt_is_gw = bool(is_gateway(chosen_proxy) or gateway_proc is not None)
+            kwargs: dict = dict(
+                headless="virtual" if headless else False,  # 'virtual' = Xvfb, avoids headless leaks
+                geoip=True,
+                humanize=True,
+                os="windows",
+            )
+            pd = _proxy_dict(chosen_proxy)
+            if pd:
+                kwargs["proxy"] = pd
             try:
-                await page.goto(GITHUB_SIGNUP, wait_until="domcontentloaded")
-                await asyncio.sleep(6)
+                async with AsyncCamoufox(**kwargs) as browser:
+                    page = await browser.new_page()
+                    context = page.context
+                    if attempt_is_gw:
+                        await apply_gateway_session(context, email)
+                        await apply_gateway_session(page, email)
+                        print(f"      📌 Sticky gateway session applied (id={email})", flush=True)
 
-                signup = await do_signup(page, email, password, username, dry_run)
-                record["signup"] = signup
-                if signup.get("username"):
-                    record["username"] = signup["username"]
-
-                print("\n  --- signup result ---", flush=True)
-                print(f"      success : {signup.get('success')}", flush=True)
-                print(f"      stage   : {signup.get('stage')}", flush=True)
-                print(f"      blocked : {signup.get('blocked')}", flush=True)
-                for n in signup.get("notes", []):
-                    print(f"      note    : {n}", flush=True)
-
-                edu = {"stage": "skipped", "needs_human": ["Signup did not complete."]}
-                if signup.get("success") or (dry_run and signup.get("stage") != "access_restricted"):
                     try:
-                        edu = await do_education(page, email, record["username"], dry_run)
-                    except Exception as e:
-                        edu = {"stage": "error", "needs_human": [f"Education navigation failed: {e}"]}
-                record["education"] = edu
+                        await page.goto(GITHUB_SIGNUP, wait_until="domcontentloaded")
+                        await asyncio.sleep(6)
 
-                print("\n  --- education result ---", flush=True)
-                print(f"      stage   : {edu.get('stage')}", flush=True)
-                print(f"      filled  : {', '.join(edu.get('filled', [])) or '(none)'}", flush=True)
-                for h in edu.get("needs_human", []):
-                    print(f"      human → : {h}", flush=True)
+                        signup = await do_signup(page, email, password, username, dry_run)
+                        record["signup"] = signup
+                        if signup.get("username"):
+                            record["username"] = signup["username"]
 
-                # Only persist a usable account. A blocked/failed signup must NOT
-                # be written as if it succeeded (it would look like a real account).
-                if signup.get("success") and not dry_run:
-                    save_account(record)
-                else:
-                    print(f"      [skip] not saved to {ACCOUNTS_FILE.name} "
-                          f"(signup success={signup.get('success')}, "
-                          f"stage={signup.get('stage')}, dry_run={dry_run})", flush=True)
-                return 0 if signup.get("success") or dry_run else 1
-            finally:
-                if not headless:
-                    print("\n  browser left open 8s for inspection…", flush=True)
-                    await asyncio.sleep(8)
-    except Exception as e:  # noqa: BLE001
-        print(f"  ✗ browser/flow error: {type(e).__name__}: {e}", flush=True)
-        record["error"] = f"{type(e).__name__}: {e}"
-        # do not persist a record for a crashed flow
-        return 1
+                        print("\n  --- signup result ---", flush=True)
+                        print(f"      success : {signup.get('success')}", flush=True)
+                        print(f"      stage   : {signup.get('stage')}", flush=True)
+                        print(f"      blocked : {signup.get('blocked')}", flush=True)
+                        for n in signup.get("notes", []):
+                            print(f"      note    : {n}", flush=True)
+
+                        # OPT-IN: rotate to the next proxy from --pool on an anti-bot
+                        # network block. Default (retries=0 or no pool) is exactly the
+                        # old single-attempt behavior; success is never faked.
+                        if should_retry_access_restricted(
+                                signup.get("stage"), attempt, retries, bool(retry_pool)):
+                            nxt = next_pool_proxy(retry_pool, used_proxies, index)
+                            if nxt:
+                                used_proxies.append(nxt)
+                                chosen_proxy = nxt
+                                proxy_src = f"pool retry {attempt}/{retries}"
+                                record["proxy"] = chosen_proxy
+                                record["push_to_note"] = proxy_src
+                                print(f"      [egress] ↻ anti-bot block on attempt "
+                                      f"{attempt}/{retries + 1}; rotating to next pool "
+                                      f"proxy and retrying…", flush=True)
+                                continue
+                            print("      [egress] no unused proxy left in pool; "
+                                  "not retrying.", flush=True)
+
+                        edu = {"stage": "skipped", "needs_human": ["Signup did not complete."]}
+                        if signup.get("success") or (dry_run and signup.get("stage") != "access_restricted"):
+                            try:
+                                edu = await do_education(page, email, record["username"], dry_run)
+                            except Exception as e:
+                                edu = {"stage": "error", "needs_human": [f"Education navigation failed: {e}"]}
+                        record["education"] = edu
+
+                        print("\n  --- education result ---", flush=True)
+                        print(f"      stage   : {edu.get('stage')}", flush=True)
+                        print(f"      filled  : {', '.join(edu.get('filled', [])) or '(none)'}", flush=True)
+                        for h in edu.get("needs_human", []):
+                            print(f"      human → : {h}", flush=True)
+
+                        # Only persist a usable account. A blocked/failed signup must NOT
+                        # be written as if it succeeded (it would look like a real account).
+                        if signup.get("success") and not dry_run:
+                            record["signup_attempts"] = attempt
+                            save_account(record)
+                        else:
+                            print(f"      [skip] not saved to {ACCOUNTS_FILE.name} "
+                                  f"(signup success={signup.get('success')}, "
+                                  f"stage={signup.get('stage')}, dry_run={dry_run})", flush=True)
+                        return 0 if signup.get("success") or dry_run else 1
+                    finally:
+                        if not headless:
+                            print("\n  browser left open 8s for inspection…", flush=True)
+                            await asyncio.sleep(8)
+            except Exception as e:  # noqa: BLE001
+                print(f"  ✗ browser/flow error: {type(e).__name__}: {e}", flush=True)
+                record["error"] = f"{type(e).__name__}: {e}"
+                # do not persist a record for a crashed flow
+                return 1
     finally:
         if gateway_proc is not None:
             stop_gateway(gateway_proc)
@@ -1129,6 +1186,10 @@ def main() -> int:
                     help="proxy URL; supports the KancaHub gateway http://127.0.0.1:8888 (X-Session-ID)")
     ap.add_argument("--pool", default=None,
                     help="proxy list file; one chosen per --index for rotation")
+    ap.add_argument("--retries", type=int, default=0, metavar="N",
+                    help="opt-in: on an anti-bot 'access_restricted' block, retry the "
+                         "signup with the next proxy from --pool, up to N times "
+                         "(default 0 = single attempt, unchanged behavior)")
     ap.add_argument("--no-proxy", action="store_true",
                     help="force direct connection (bypass auto clean egress gateway)")
     ap.add_argument("--dry-run", action="store_true",
@@ -1137,7 +1198,8 @@ def main() -> int:
 
     if args.check:
         return run_check()
-    return asyncio.run(run(args.index, args.headless, args.proxy, args.pool, args.dry_run, no_proxy=args.no_proxy))
+    return asyncio.run(run(args.index, args.headless, args.proxy, args.pool, args.dry_run,
+                           no_proxy=args.no_proxy, retries=max(0, args.retries)))
 
 
 if __name__ == "__main__":
