@@ -44,8 +44,13 @@ import requests
 TEMP_TF_ACCOUNT_API = "https://temp.tf/api/account?providers=high.edu.pl,outlook.com,hotmail.com,gmail.com&dot=1&plus=1"
 TEMP_TF_CHECK_API = "https://temp.tf/api/check"
 
-# Where to append captured sessions (consumed by chatgpt_9router.py inject)
-SESSION_OUT = os.environ.get("K12_SESSION_OUT", "k12_sessions.json")
+# Where to append captured sessions (consumed by chatgpt_9router.py inject).
+# Default to the K-12 tool dir so `kancahub k12 inject` (which looks under
+# K12_DIR) finds it regardless of the current working directory. Override with
+# K12_SESSION_OUT.
+K12_DIR = Path(os.path.expanduser("~/petani-proxy/Farm-Acc-ChatGPT-K-12-Teachers/PyRuntime_64"))
+_default_sessions = (K12_DIR / "k12_sessions.json") if K12_DIR.exists() else (Path(__file__).parent / "k12_sessions.json")
+SESSION_OUT = os.environ.get("K12_SESSION_OUT", str(_default_sessions))
 
 
 # ─────────────────────────────────────────────────── session capture
@@ -98,7 +103,8 @@ def save_session(sess: dict, email: str) -> None:
         print("[session] no accessToken captured — skipping save", flush=True)
         return
     sess["email"] = sess.get("userEmail") or email
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), SESSION_OUT)
+    path = SESSION_OUT if os.path.isabs(SESSION_OUT) else os.path.join(os.path.dirname(os.path.abspath(__file__)), SESSION_OUT)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
         data = json.loads(open(path, encoding="utf-8").read()) if os.path.exists(path) else []
         if not isinstance(data, list):
