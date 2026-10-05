@@ -1,4 +1,22 @@
-# Getting Started with KancaHub
+# KancaHub — Start Here (plain English)
+
+**If you don't know what any of this means, just run one command:**
+
+```bash
+kancahub
+```
+
+That opens a friendly menu that asks *what you want to do* and walks you through
+it step by step. No flags, no jargon. You can always press Enter to accept the
+suggested answer.
+
+- **New?** pick **`2` Check if everything is ready** first.
+- **Want free AI access?** pick **`1` Get free AI access**.
+- **Confused by a word?** pick **`9` What is this? / Help**.
+- **Advanced user?** run `kancahub menu` for the classic command list.
+
+---
+
 
 A beginner's guide to **KancaHub** — the single CLI that ties the FreeCF toolkit
 together behind one `kancahub` command.

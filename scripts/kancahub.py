@@ -1345,6 +1345,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="group")
     sub.add_parser("doctor", help="health + dependency check across all tools, services & proxies")
+    sub.add_parser("beginner", help="guided, plain-English mode — start here if you're new")
+    sub.add_parser("menu", help="classic numbered command menu (advanced users)")
 
     # ---- warp ----
     wp = sub.add_parser("warp", help="Cloudflare WARP: manage clean egress IPs to prevent signup blocks")
@@ -1717,6 +1719,10 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     if g == "doctor":
         return cmd_doctor(args)
+    if g == "beginner":
+        return beginner_entry(p)
+    if g == "menu":
+        return interactive_mode(p)
     if g == "warp":
         return cmd_warp(args)
     if g == "region":
@@ -1840,9 +1846,35 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
 def main() -> int:
     p = build_parser()
     if len(sys.argv) <= 1:
-        return interactive_mode(p)
+        # Default to the friendly beginner guide; power users can pick 'p'
+        # (or use `kancahub menu`) for the classic command list.
+        return beginner_entry(p)
     args = p.parse_args()
     return dispatch(p, args)
+
+
+def beginner_entry(p: argparse.ArgumentParser) -> int:
+    """Show the beginner wizard; offer an escape to the advanced menu."""
+    sys.path.insert(0, str(AUTO_FREECF / "scripts"))
+    try:
+        from beginner import beginner_menu
+    except Exception:
+        return interactive_mode(p)  # fall back to the classic menu
+
+    # offer advanced escape on first screen
+    print(get_ascii_banner())
+    print(col("bold", "  New here? Just answer the questions.\n"))
+    print(col("dim", "  (advanced users: run `kancahub menu` for the full command list)\n"))
+    try:
+        return beginner_menu()
+    except KeyboardInterrupt:
+        print(col("dim", "\n  Bye!"))
+        return 0
+
+
+def menu_entry(p: argparse.ArgumentParser) -> int:
+    """The classic numbered command menu (for advanced users)."""
+    return interactive_mode(p)
 
 
 if __name__ == "__main__":
