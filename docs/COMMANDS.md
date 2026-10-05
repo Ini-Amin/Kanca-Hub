@@ -87,6 +87,14 @@ Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy
 | `kancahub proxy stats` | Live gateway stats | `kancahub proxy stats` |
 | `kancahub proxy api` | Call a gateway REST endpoint | `kancahub proxy api /api/all` |
 | `kancahub proxy res-gateway` | Bridge gateway for residential/authenticated proxies (`--pool` required) | `kancahub proxy res-gateway --pool res.txt --port 8899` |
+| `kancahub proxy nharvest` | **[native]** harvest + validate public proxies (no PetaniProxy) | `kancahub proxy nharvest --target 20 --out-txt live.txt` |
+| `kancahub proxy nhealth` | **[native]** check a pool file | `kancahub proxy nhealth --pool live.txt` |
+| `kancahub proxy ngateway` | **[native]** rotating gateway for a pool | `kancahub proxy ngateway --pool live.txt --port 8899` |
+
+> `proxy` has two backends: the historical PetaniProxy passthrough (`harvest`,
+> `fast`, `serve`, `daemon`, `residential`, `pipeline`, …) and the self-contained
+> native toolkit in `scripts/proxy_lib.py` (`nharvest`, `nhealth`, `ngateway`).
+> `kancahub doctor` reports which backend is active.
 
 ## `grok` — Grok/xAI farm (grok-register)
 
@@ -103,9 +111,19 @@ Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy
 
 9Router's built-in `xai` provider is OAuth-only, so grok.com **SSO cookie**
 tokens need a "grok2api" OpenAI-compatible endpoint. `scripts/grok2api_bridge.py`
-provides one locally: it loads tokens from grok-register's `token.json`
-(`ssoBasic[].token`) or `accounts_*.txt` and forwards `/v1/chat/completions` +
-`/v1/models` to xAI/Grok with the `sso=` cookie.
+provides one locally. The upstream is **grounded** (probed 2026-10-05):
+
+- SSO cookie auth → `POST https://grok.com/rest/app-chat/conversations/new` with
+  cookies `sso=<t>; sso-rw=<t>` (what `registration_browser.py` / `sso_risk.py`
+  use). This is the bridge's **default** (`--auth-mode cookie`). It translates the
+  OpenAI body to Grok's `{message, modelName}` and folds the reply back into an
+  OpenAI `chat.completion`; `--raw` skips translation.
+- OAuth Bearer auth → `https://cli-chat-proxy.grok.com/v1` (what the CPA export
+  mints). Anonymous probe answers `401 no auth context`; use
+  `--upstream-base https://cli-chat-proxy.grok.com --upstream-path /v1/chat/completions --auth-mode bearer`.
+
+grok.com is behind Cloudflare, so the bridge uses curl_cffi Chrome TLS
+impersonation by default (`--no-impersonate` forces httpx).
 
 ```bash
 # start the bridge (managed venv)
@@ -117,9 +135,11 @@ export GROK2API_BASE=http://127.0.0.1:8787
 ```
 
 Flags: `--host` `--port` (default `127.0.0.1:8787`), `--tokens FILE`,
-`--auth-mode cookie|bearer`, `--upstream-base`, `--upstream-path`,
-`--model-map find=replace`. The exact SSO-authenticated upstream wire shape is
-uncertain — adjust with `--upstream-base` / `--auth-mode` (see module docstring).
+`--upstream-base`, `--upstream-path`, `--auth-mode cookie|bearer`,
+`--cf-clearance`, `--no-impersonate`, `--raw`, `--model-map find=replace`.
+Live-probed: `/healthz` and `/v1/models` return 200; a dummy/unauthenticated
+`/v1/chat/completions` returns grok.com's real `401 Bad credentials` (proving the
+route + cookie auth, awaiting a valid SSO).
 
 ## `github` — GitHub Education signup helper
 
