@@ -50,6 +50,12 @@ import sys
 import urllib.request
 from pathlib import Path
 
+try:
+    import colorama
+    colorama.init()
+except Exception:
+    pass
+
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
 PETANI = HOME / "petani-proxy"
@@ -80,6 +86,35 @@ def banner(title: str) -> None:
     print(col("cyan", "═" * 68))
     print(col("bold", f"  {title}"))
     print(col("cyan", "═" * 68))
+
+
+def get_ascii_banner() -> str:
+    cyan = C["cyan"]
+    bold = C["bold"]
+    reset = C["reset"]
+
+    art = f"""{cyan}
+ ██╗  ██╗ █████╗ ███╗   ██╗ ██████╗ █████╗ ██╗  ██╗██╗   ██╗██████╗ 
+ ██║ ██╔╝██╔══██╗████╗  ██║██╔════╝██╔══██╗██║  ██║██║   ██║██╔══██╗
+ █████╔╝ ███████║██╔██╗ ██║██║     ███████║███████║██║   ██║██████╔╝
+ ██╔═██╗ ██╔══██║██║╚██╗██║██║     ██╔══██║██╔══██║██║   ██║██╔══██╗
+ ██║  ██╗██║  ██║██║ ╚████║╚██████╗██║  ██║██║  ██║╚██████╔╝██████╔╝
+ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝{reset}"""
+    box_top = f"{cyan} ╔══════════════════════════════════════════════════════════════════════╗{reset}"
+    tagline = "one CLI for the whole account-farming toolkit"
+    box_mid = f"{cyan} ║ {bold}{tagline.center(68)}{reset}{cyan} ║{reset}"
+    box_bot = f"{cyan} ╚══════════════════════════════════════════════════════════════════════╝{reset}"
+    return f"{art}\n{box_top}\n{box_mid}\n{box_bot}"
+
+
+class KancaHubParser(argparse.ArgumentParser):
+    """Custom parser displaying the big ASCII banner at the top of root --help."""
+
+    def format_help(self) -> str:
+        text = super().format_help()
+        if self.prog == "kancahub":
+            return get_ascii_banner() + "\n\n" + text
+        return text
 
 
 def pick_python() -> str:
@@ -865,17 +900,17 @@ for f in res['files']: print('   ', f)
 # ═══════════════════════════════════════════════════════════════ parser
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = KancaHubParser(
         prog="kancahub",
         description="KancaHub — unified CLI: Cloudflare farming, proxies, K-12 verification & docs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     sub = p.add_subparsers(dest="group")
-    sub.add_parser("doctor", help="health + dependency check")
+    sub.add_parser("doctor", help="health + dependency check across all tools, services & proxies")
 
     # ---- warp ----
-    wp = sub.add_parser("warp", help="Cloudflare WARP tunnel (clean egress IPs)")
+    wp = sub.add_parser("warp", help="Cloudflare WARP: manage clean egress IPs to prevent signup blocks")
     ws = wp.add_subparsers(dest="warp_cmd")
     ws.add_parser("up", help="bring the WARP tunnel up")
     ws.add_parser("down", help="bring the WARP tunnel down")
@@ -883,7 +918,7 @@ def build_parser() -> argparse.ArgumentParser:
     ws.add_parser("status", help="show tunnel state + egress IP (default)")
 
     # ---- region ----
-    rp = sub.add_parser("region", help="signup region profile (promo/bonus targeting)")
+    rp = sub.add_parser("region", help="region profiles: target geo-specific signup promos & bonuses (US/UK/SG/ID)")
     rs = rp.add_subparsers(dest="region_cmd")
     rs.add_parser("list", help="list available regions")
     rs.add_parser("current", help="show the active region (default)")
@@ -894,7 +929,7 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_parser("clear", help="reset to auto (nearest)")
 
     # ---- thk (TokenHarbor via harbor) ----
-    tp = sub.add_parser("thk", help="TokenHarbor (harbor): create keys + inject to 9Router")
+    tp = sub.add_parser("thk", help="TokenHarbor: generate free API keys and inject/sync with 9Router")
     ts = tp.add_subparsers(dest="thk_cmd")
     ts.add_parser("setup", help="full setup on TokenHarbor (interactive)")
     tb = ts.add_parser("batch", help="create N TokenHarbor accounts")
@@ -915,7 +950,7 @@ def build_parser() -> argparse.ArgumentParser:
     tsy.add_argument("--prune", action="store_true")
 
     # ---- grok (xAI) ----
-    gp = sub.add_parser("grok", help="Grok xAI account farm (grok-register)")
+    gp = sub.add_parser("grok", help="Grok xAI farm: automated account creation with multi-provider mail")
     gs = gp.add_subparsers(dest="grok_cmd")
     gr = gs.add_parser("run", help="run the registration flow")
     gr.add_argument("-n", "--accounts", type=int, default=1)
@@ -929,7 +964,7 @@ def build_parser() -> argparse.ArgumentParser:
     gs.add_parser("pool", help="show the grok2api token pool")
 
     # ---- proxy ----
-    pp = sub.add_parser("proxy", help="PetaniProxy: harvest/gateway/warp/farm/...")
+    pp = sub.add_parser("proxy", help="PetaniProxy: harvest proxies, rotating gateway & background daemon")
     ps = pp.add_subparsers(dest="proxy_cmd")
 
     h = ps.add_parser("harvest", help="harvest + validate public proxies")
@@ -990,7 +1025,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--gateway", default=GATEWAY_DEFAULT)
 
     # ---- stack ----
-    sp = sub.add_parser("stack", help="Auto-FreeCF: signup/login/validate/manage")
+    sp = sub.add_parser("stack", help="Auto-FreeCF: create Cloudflare accounts, generate tokens & manage pool")
     ss = sp.add_subparsers(dest="stack_cmd")
 
     sg = ss.add_parser("signup", help="create new Cloudflare accounts + tokens")
@@ -1046,7 +1081,7 @@ def build_parser() -> argparse.ArgumentParser:
     sw.add_argument("--open", action="store_true")
 
     # ---- k12 ----
-    kp = sub.add_parser("k12", help="ChatGPT K-12 teacher verification")
+    kp = sub.add_parser("k12", help="ChatGPT K-12: automate teacher verification & SheerID approval")
     ks = kp.add_subparsers(dest="k12_cmd")
     kv = ks.add_parser("verify", help="verify a SheerID URL")
     kv.add_argument("url", nargs="?")
@@ -1065,7 +1100,7 @@ def build_parser() -> argparse.ArgumentParser:
     ks.add_parser("modes", help="show the 12 connection modes")
 
     # ---- yowes ----
-    yp = sub.add_parser("yowes", help="teacher document generator (13 countries)")
+    yp = sub.add_parser("yowes", help="teacher document generator: create ID cards & letters (13 countries)")
     ys = yp.add_subparsers(dest="yowes_cmd")
     ys.add_parser("list", help="list countries + document types")
     ysch = ys.add_parser("schools", help="list schools for a country")
@@ -1091,9 +1126,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main() -> int:
-    p = build_parser()
-    args = p.parse_args()
+def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     g = args.group
 
     if g == "doctor":
@@ -1131,6 +1164,58 @@ def main() -> int:
 
     p.print_help()
     return 0
+
+
+def interactive_mode(p: argparse.ArgumentParser) -> int:
+    """Beginner-friendly interactive menu when run without arguments."""
+    print(get_ascii_banner())
+    print(f" {C['bold']}Quick Tasks Menu:{C['reset']}\n")
+    menu = [
+        ("1", "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"]),
+        ("2", "Check everything is healthy", "doctor", ["doctor"]),
+        ("3", "Start the proxy gateway", "proxy daemon", ["proxy", "daemon"]),
+        ("4", "Create TokenHarbor keys", "thk batch", ["thk", "batch"]),
+        ("5", "Grok farm", "grok run", ["grok", "run"]),
+        ("6", "K-12 teacher verification", "k12 auto", ["k12", "auto"]),
+        ("7", "Manage WARP tunnel", "warp", ["warp"]),
+        ("8", "Help & command reference", "--help", ["--help"]),
+        ("0", "Exit", "", []),
+    ]
+    for key, desc, cmd_str, _ in menu:
+        cmd_part = f" {C['cyan']}({cmd_str}){C['reset']}" if cmd_str else ""
+        print(f"  [{col('bold', key)}] {desc:<42}{cmd_part}")
+    print()
+
+    while True:
+        try:
+            choice = input(f" {C['bold']}Select an option [0-8]: {C['reset']}").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting.")
+            return 0
+
+        if not choice or choice == "0":
+            return 0
+
+        match = next((item for item in menu if item[0] == choice), None)
+        if not match:
+            print(col("yellow", "  Please enter a valid option between 0 and 8."))
+            continue
+
+        key, desc, cmd_str, cmd_args = match
+        if key == "8":
+            p.print_help()
+            return 0
+
+        print(col("cyan", f"\n▶ Running: kancahub {cmd_str}\n"))
+        return dispatch(p, p.parse_args(cmd_args))
+
+
+def main() -> int:
+    p = build_parser()
+    if len(sys.argv) <= 1:
+        return interactive_mode(p)
+    args = p.parse_args()
+    return dispatch(p, args)
 
 
 if __name__ == "__main__":
