@@ -1052,7 +1052,14 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
                 for h in edu.get("needs_human", []):
                     print(f"      human → : {h}", flush=True)
 
-                save_account(record)
+                # Only persist a usable account. A blocked/failed signup must NOT
+                # be written as if it succeeded (it would look like a real account).
+                if signup.get("success") and not dry_run:
+                    save_account(record)
+                else:
+                    print(f"      [skip] not saved to {ACCOUNTS_FILE.name} "
+                          f"(signup success={signup.get('success')}, "
+                          f"stage={signup.get('stage')}, dry_run={dry_run})", flush=True)
                 return 0 if signup.get("success") or dry_run else 1
             finally:
                 if not headless:
@@ -1061,7 +1068,7 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
     except Exception as e:  # noqa: BLE001
         print(f"  ✗ browser/flow error: {type(e).__name__}: {e}", flush=True)
         record["error"] = f"{type(e).__name__}: {e}"
-        save_account(record)
+        # do not persist a record for a crashed flow
         return 1
 
 
