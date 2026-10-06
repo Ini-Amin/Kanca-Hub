@@ -2502,72 +2502,207 @@ def cmd_autofarm(a) -> int:
     return run(cmd, cwd=AUTO_FREECF)
 
 
+UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
+    # Top option: guided pipeline
+    ("0", "Run end-to-end setup (guided pipeline)", "end-to-end", None),
+
+    # Group 1-2: Egress & Diagnostics
+    ("1", "Check everything is healthy", "doctor", ["doctor"]),
+    ("2", "Start the proxy gateway", "proxy start", ["proxy", "start"]),
+    ("3", "Manage WARP tunnel", "warp", ["warp"]),
+    ("4", "Harvest proxies", "proxy harvest", ["proxy", "harvest"]),
+
+    # Group 3: Accounts (github/thk/gmail/k12/grok/stack)
+    ("5", "GitHub Education account farm", "github farm", ["github", "farm"]),
+    ("6", "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"]),
+    ("7", "Login to existing Cloudflare accounts", "stack login", ["stack", "login"]),
+    ("8", "Create TokenHarbor keys", "thk batch", ["thk", "batch"]),
+    ("9", "Grok farm", "grok run", ["grok", "run"]),
+    ("10", "K-12 teacher verification", "k12 auto", ["k12", "auto"]),
+    ("11", "Gmail account farm", "gmail farm", ["gmail", "farm"]),
+
+    # Group 4: 9Router (inject/sync)
+    ("12", "Inject Grok tokens into 9Router", "grok inject", ["grok", "inject"]),
+    ("13", "Prune dead 9Router connections", "stack sync --prune", ["stack", "sync", "--prune"]),
+    ("14", "Wire TokenHarbor env (harbor)", "thk setup-env", ["thk", "setup-env"]),
+
+    # Group 5: Mail & Docs
+    ("15", "School mailbox: test login", "mail test", ["mail", "test"]),
+    ("16", "School mailbox: wait for OTP", "mail otp", ["mail", "otp"]),
+    ("17", "Find SheerID links", "k12 link-finder", ["k12", "link-finder"]),
+    ("18", "List teacher-doc countries", "yowes list", ["yowes", "list"]),
+]
+
+MENU_STAGE_HEADERS: dict[str, str] = {
+    "0": "[0] Guided Pipeline Setup",
+    "1": "[1-2] Egress & Diagnostics (proxy · WARP · doctor)",
+    "5": "[3] Account Farms (GitHub · Cloudflare · TokenHarbor · Grok · K-12 · Gmail)",
+    "12": "[4] 9Router Integration (inject · sync · prune)",
+    "15": "[5] Mailbox & Verification Docs (mail · SheerID · docs)",
+}
+
+
+def render_menu() -> str:
+    """Render the unified menu as text (non-interactive, testable)."""
+    lines = []
+    lines.append(f" {C['bold']}Unified Command Menu:{C['reset']}")
+    for key, desc, cmd_str, _ in UNIFIED_MENU:
+        if key in MENU_STAGE_HEADERS:
+            lines.append(f"\n {C['bold']}{C['cyan']}── {MENU_STAGE_HEADERS[key]} ──{C['reset']}")
+        cmd_part = f" {C['cyan']}({cmd_str}){C['reset']}" if cmd_str else ""
+        lines.append(f"  [{col('bold', key)}] {desc:<42}{cmd_part}")
+    lines.append("")
+    lines.append(f"  [{col('bold', 'h')}] Help & command reference")
+    lines.append(f"  [{col('bold', 'q')}] Exit")
+    return "\n".join(lines)
+
+
+def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = None) -> int:
+    """
+    Execute the safe end-to-end pipeline in order:
+      (a) Proxy verify / start (egress)
+      (b) Chosen account farm
+      (c) Inject to 9Router
+      (d) Sync / health check
+
+    Stops and reports honest error if any step fails.
+    """
+    print(col("bold", "\n════════════════════════════════════════════════════════════════"))
+    print(col("bold", "               KancaHub End-to-End Setup Pipeline                "))
+    print(col("bold", "════════════════════════════════════════════════════════════════"))
+    print(col("dim",  "  Safe sequential flow: Egress -> Farm -> 9Router Inject -> Sync\n"))
+
+    farms = [
+        ("1", "GitHub Education", ["github", "farm"], None, ["stack", "sync"]),
+        ("2", "Cloudflare Workers AI", ["stack", "signup"], ["stack", "inject"], ["stack", "sync"]),
+        ("3", "TokenHarbor AI", ["thk", "batch"], ["thk", "inject"], ["thk", "sync"]),
+        ("4", "Grok / xAI", ["grok", "run"], ["grok", "inject"], ["stack", "sync"]),
+        ("5", "K-12 Teacher Verification", ["k12", "auto"], ["k12", "inject"], ["k12", "sync"]),
+        ("6", "Gmail Farm", ["gmail", "farm"], None, ["stack", "sync"]),
+    ]
+
+    if farm_choice is None:
+        print(col("bold", "  Choose target farm for this pipeline run:"))
+        for f_key, f_name, f_cmd, _, _ in farms:
+            print(f"    [{col('bold', f_key)}] {f_name:<28} {col('cyan', f'({chr(32).join(f_cmd)})')}")
+        print(f"    [{col('bold', 'c')}] Cancel / Back to menu\n")
+
+        try:
+            f_choice = input(f"  {col('bold', 'Select farm [1-6, c]')}: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nPipeline cancelled.")
+            return 0
+    else:
+        f_choice = str(farm_choice).strip().lower()
+
+    if f_choice in ("c", "cancel", "q", "quit", ""):
+        print("\nPipeline cancelled.")
+        return 0
+
+    selected_farm = next((f for f in farms if f[0] == f_choice), None)
+    if not selected_farm:
+        print(col("yellow", f"✗ Invalid selection '{f_choice}'. Pipeline aborted."))
+        return 1
+
+    _, farm_label, farm_args, inject_args, sync_args = selected_farm
+    print(col("cyan", f"\n▶ Selected pipeline target: {farm_label}\n"))
+
+    # ── Step (a): Proxy Egress Verification / Start ──
+    print(col("bold", "[Step 1/4] Egress check / proxy verification…"))
+    rc_egress = dispatch(p, p.parse_args(["proxy", "verify"]))
+    if rc_egress != 0:
+        print(col("yellow", "\n• No active proxy masking detected."))
+        try:
+            start_ans = input(f" {col('bold', 'Start rotating proxy gateway on 127.0.0.1:8888 now? [Y/n]')}: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            start_ans = "n"
+        if start_ans in ("", "y", "yes"):
+            rc_start = dispatch(p, p.parse_args(["proxy", "start"]))
+            if rc_start != 0:
+                print(col("red", "\n✗ Step 1 failed: Proxy gateway did not start. Stopping pipeline to avoid IP block."))
+                return rc_start
+        else:
+            print(col("red", "\n✗ Step 1 stopped: Clean proxy egress is required for farm operations."))
+            return 1
+    print(col("green", "✓ Step 1 complete: Egress proxy verified.\n"))
+
+    # ── Step (b): Account Farm ──
+    print(col("bold", f"[Step 2/4] Running {farm_label} ({' '.join(farm_args)})…"))
+    rc_farm = dispatch(p, p.parse_args(farm_args))
+    if rc_farm != 0:
+        print(col("red", f"\n✗ Step 2 failed: {farm_label} returned exit code {rc_farm}."))
+        print(col("yellow", "  Stopping pipeline. Resolve issues before injecting to 9Router."))
+        return rc_farm
+    print(col("green", f"✓ Step 2 complete: {farm_label} completed successfully.\n"))
+
+    # ── Step (c): Inject to 9Router ──
+    if inject_args:
+        print(col("bold", f"[Step 3/4] Injecting credentials into 9Router ({' '.join(inject_args)})…"))
+        rc_inject = dispatch(p, p.parse_args(inject_args))
+        if rc_inject != 0:
+            print(col("red", f"\n✗ Step 3 failed: 9Router injection returned exit code {rc_inject}."))
+            print(col("yellow", "  Stopping pipeline. Credentials were not registered."))
+            return rc_inject
+        print(col("green", "✓ Step 3 complete: Injected credentials into 9Router.\n"))
+    else:
+        print(col("dim", f"[Step 3/4] 9Router injection not required for {farm_label}. Skipping.\n"))
+
+    # ── Step (d): Sync ──
+    if sync_args:
+        print(col("bold", f"[Step 4/4] Syncing 9Router status ({' '.join(sync_args)})…"))
+        rc_sync = dispatch(p, p.parse_args(sync_args))
+        if rc_sync != 0:
+            print(col("red", f"\n✗ Step 4 failed: Sync returned exit code {rc_sync}."))
+            return rc_sync
+        print(col("green", "✓ Step 4 complete: Synced with 9Router.\n"))
+
+    print(col("green", "════════════════════════════════════════════════════════════════"))
+    print(col("green", f"✓ End-to-end setup for {farm_label} completed successfully!"))
+    print(col("green", "════════════════════════════════════════════════════════════════\n"))
+    return 0
+
+
 def interactive_mode(p: argparse.ArgumentParser) -> int:
-    """Beginner-friendly interactive menu when run without arguments."""
+    """Beginner-friendly unified interactive menu when run without arguments."""
     print(get_ascii_banner())
 
-    page1 = [
-        ("1", "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"]),
-        ("2", "Check everything is healthy", "doctor", ["doctor"]),
-        ("3", "Start the proxy gateway", "proxy start", ["proxy", "start"]),
-        ("4", "Create TokenHarbor keys", "thk batch", ["thk", "batch"]),
-        ("5", "Grok farm", "grok run", ["grok", "run"]),
-        ("6", "K-12 teacher verification", "k12 auto", ["k12", "auto"]),
-        ("7", "Manage WARP tunnel", "warp", ["warp"]),
-        ("8", "GitHub Education account farm", "github farm", ["github", "farm"]),
-        ("9", "Inject Grok tokens into 9Router", "grok inject", ["grok", "inject"]),
-    ]
-    page2 = [
-        ("1", "School mailbox: test login", "mail test", ["mail", "test"]),
-        ("2", "School mailbox: wait for OTP", "mail otp", ["mail", "otp"]),
-        ("3", "Gmail account farm", "gmail farm", ["gmail", "farm"]),
-        ("4", "Wire TokenHarbor env (harbor)", "thk setup-env", ["thk", "setup-env"]),
-        ("5", "Login to existing Cloudflare accounts", "stack login", ["stack", "login"]),
-        ("6", "Prune dead 9Router connections", "stack sync --prune", ["stack", "sync", "--prune"]),
-        ("7", "Harvest proxies", "proxy harvest", ["proxy", "harvest"]),
-        ("8", "Find SheerID links", "k12 link-finder", ["k12", "link-finder"]),
-        ("9", "List teacher-doc countries", "yowes list", ["yowes", "list"]),
-    ]
-
-    page = 1
-    pages = {1: page1, 2: page2}
-    page_titles = {1: "Quick Tasks", 2: "More Tasks (mail · gmail · harbor)"}
-
     while True:
-        menu = pages[page]
-        max_key = len(menu)
-        print(f" {C['bold']}{page_titles[page]} — page {page}/2:{C['reset']}\n")
-        for key, desc, cmd_str, _ in menu:
-            cmd_part = f" {C['cyan']}({cmd_str}){C['reset']}" if cmd_str else ""
-            print(f"  [{col('bold', key)}] {desc:<42}{cmd_part}")
-        other = "2" if page == 1 else "1"
-        print(f"  [{col('bold', 'p')}] Switch to page {other}")
-        print(f"  [{col('bold', 'h')}] Help & command reference")
-        print(f"  [{col('bold', '0')}] Exit")
+        print(render_menu())
         print()
 
         try:
-            choice = input(f" {C['bold']}Select an option [0-{max_key}, p, h]: {C['reset']}").strip().lower()
+            choice = input(f" {C['bold']}Select an option [0-{len(UNIFIED_MENU)-1}, h, q]: {C['reset']}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
             return 0
 
-        if not choice or choice == "0":
+        if not choice or choice in ("q", "quit", "exit"):
             return 0
-        if choice == "p":
-            page = 2 if page == 1 else 1
-            print()
-            continue
         if choice == "h":
             p.print_help()
             return 0
+        if choice == "0":
+            try:
+                run_end_to_end_flow(p)
+            except Exception as e:
+                print(col("red", f"Error in end-to-end setup: {e}"))
+            print()
+            try:
+                input(f" {C['bold']}Press Enter to return to menu...{C['reset']}")
+            except (EOFError, KeyboardInterrupt):
+                return 0
+            print()
+            continue
 
-        match = next((item for item in menu if item[0] == choice), None)
+        match = next((item for item in UNIFIED_MENU if item[0] == choice), None)
         if not match:
-            print(col("yellow", f"  Please enter a valid option between 0 and {max_key}."))
+            print(col("yellow", f"  Please enter a valid option between 0 and {len(UNIFIED_MENU)-1}, h, or q."))
             continue
 
         _key, _desc, cmd_str, cmd_args = match
+        if not cmd_args:
+            continue
+
         print(col("cyan", f"\n▶ Running: kancahub {cmd_str}\n"))
         try:
             dispatch(p, p.parse_args(cmd_args))
