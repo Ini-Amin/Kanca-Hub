@@ -18,8 +18,8 @@ features (not just pass-throughs):
   thk     TokenHarbor (harbor): create keys + inject/sync with 9Router
   grok    Grok xAI farm (grok-register: SSO risk gate, 5 mail providers, pool)
             run · web · gui · retry · pool · inject (SSO tokens -> 9Router via grok2api)
-  github  GitHub Education account farm (signup + Education form helper)
-            farm (--index N) · check   (CAPTCHA / ID-photo steps stay manual)
+  github  GitHub account farm (our domain / BINUS) + SheerID verification
+            farm · verify · check   (SheerID link extraction & verifier handoff)
   mail    School mailbox (BINUS M365) via browser — read signup OTPs
             test (selftest) · otp (--timeout) · login
   gmail   Gmail account farm (gmail-account-creator, nodriver)
@@ -45,7 +45,7 @@ Examples
   kancahub thk batch 3 && kancahub thk inject # TokenHarbor keys -> 9Router
   kancahub grok run                           # grok-register farm (CLI)
   kancahub grok inject --base-url http://127.0.0.1:8000 --dry-run
-  kancahub github farm --index 1 --dry-run    # GitHub signup + Education helper
+  kancahub github farm --domain bizid --dry-run # GitHub signup via mail relay
   kancahub k12 auto                           # ChatGPT signup + SheerID verify
   kancahub k12 link-finder                    # find SheerID verification links
   kancahub yowes make --country us --first John --last Doe \
@@ -1137,30 +1137,301 @@ def cmd_grok(a) -> int:
 
 # ═══════════════════════════════════════════════════════════════ github
 
+def map_github_farm_args(a) -> list[str]:
+    """Map kancahub github farm CLI arguments to scripts/github_farm.py flags."""
+    cmd: list[str] = []
+    if getattr(a, "index", None) is not None:
+        cmd += ["--index", str(a.index)]
+    # Translate --domain to github_farm.py's --email-domain
+    domain = getattr(a, "domain", None)
+    if domain:
+        cmd += ["--email-domain", domain]
+    inbox = getattr(a, "inbox", None)
+    if inbox:
+        cmd += ["--inbox", inbox]
+    max_acc = getattr(a, "max_accounts", None)
+    if max_acc is not None:
+        cmd += ["--max-accounts", str(max_acc)]
+    delay_min = getattr(a, "delay_min", None)
+    if delay_min is not None:
+        cmd += ["--delay-min", str(delay_min)]
+    delay_max = getattr(a, "delay_max", None)
+    if delay_max is not None:
+        cmd += ["--delay-max", str(delay_max)]
+    retries = getattr(a, "retries", None)
+    if retries:
+        cmd += ["--retries", str(retries)]
+    proxy = getattr(a, "proxy", None)
+    if proxy:
+        cmd += ["--proxy", proxy]
+    pool = getattr(a, "pool", None)
+    if pool:
+        cmd += ["--pool", pool]
+    if getattr(a, "headless", False):
+        cmd.append("--headless")
+    if getattr(a, "dry_run", False):
+        cmd.append("--dry-run")
+    if getattr(a, "no_proxy", False):
+        cmd.append("--no-proxy")
+    return cmd
+
+
+def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
+    """Build the argument parser for 'kancahub github' and its subcommands."""
+    if sub is None:
+        ghp = argparse.ArgumentParser(
+            prog="kancahub github",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            description="GitHub account farm (our domain / BINUS) + Student Pack SheerID verification",
+        )
+    elif hasattr(sub, "add_parser"):
+        ghp = sub.add_parser(
+            "github",
+            help="GitHub account farm (our domain / BINUS) + Student Pack SheerID verification",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            description=(
+                "GitHub account farm & Student Pack verification:\n"
+                "\n"
+                "  1. farm      Create GitHub account(s) using our domain (kancalabs.biz.id / kancalabs.my.id)\n"
+                "               via KancaHub mail relay OR the BINUS school mailbox.\n"
+                "  2. verify    Automate SheerID / GitHub Student Pack verification from a direct URL or\n"
+                "               by extracting the verification link from the school M365 inbox.\n"
+                "  3. check     Verify environment dependencies, Camoufox, and mailbox/relay credentials.\n"
+                "\n"
+                "Examples:\n"
+                "  kancahub github farm --domain bizid --max-accounts 3\n"
+                "  kancahub github farm --domain binus --index 1 --headless\n"
+                "  kancahub github verify --from-mail\n"
+                "  kancahub github verify --url 'https://services.sheerid.com/verify/<id>/'\n"
+                "  kancahub github check"
+            ),
+        )
+    else:
+        ghp = sub
+
+    ghs = ghp.add_subparsers(dest="github_cmd")
+
+    # ---- farm ----
+    gf = ghs.add_parser(
+        "farm",
+        help="sign up GitHub account(s) using our domain or BINUS mailbox",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Create GitHub account(s) with automated form fill & OTP handling.\n"
+            "\n"
+            "Domain choices:\n"
+            "  --domain bizid   gh<rand>@kancalabs.biz.id (via KancaHub mail relay, default relay)\n"
+            "  --domain myid    gh<rand>@kancalabs.my.id  (via KancaHub mail relay)\n"
+            "  --domain binus   raymondi+gh<N>@binus.ac.id (school mailbox, default)\n"
+            "\n"
+            "Rate limiting policy: 20-45s random delay, concurrency 1, max 5 accounts/run by default.\n"
+            "Arkose / CAPTCHA puzzles remain manual if triggered by anti-bot.\n"
+            "\n"
+            "Examples:\n"
+            "  kancahub github farm --domain bizid --max-accounts 3 --headless\n"
+            "  kancahub github farm --domain binus --index 2 --dry-run\n"
+            "  kancahub github farm --domain myid --proxy http://127.0.0.1:8888"
+        ),
+    )
+    gf.add_argument("--index", type=int, default=1, help="starting N for account address (default: 1)")
+    gf.add_argument(
+        "--domain",
+        choices=["binus", "bizid", "myid"],
+        default="binus",
+        help="email domain choice: binus (default, school mailbox), bizid (kancalabs.biz.id), myid (kancalabs.my.id)",
+    )
+    gf.add_argument(
+        "--inbox",
+        choices=["binus", "relay"],
+        default="binus",
+        help="inbox source: binus (default, Outlook school mailbox) or relay (KancaHub mail relay)",
+    )
+    gf.add_argument("--headless", action="store_true", help="run browser headless (virtual display / Xvfb)")
+    gf.add_argument("--dry-run", action="store_true", help="walk the signup flow, screenshot, do not submit/create")
+    gf.add_argument("--proxy", default=None, help="proxy URL (e.g. http://127.0.0.1:8888)")
+    gf.add_argument("--pool", default=None, help="proxy list file for rotation")
+    gf.add_argument("--retries", type=int, default=0, metavar="N", help="retries on access_restricted block (default: 0)")
+    gf.add_argument("--no-proxy", action="store_true", help="force direct connection (bypass auto clean egress gateway)")
+    gf.add_argument("--delay-min", type=float, default=20.0, metavar="SEC", help="min delay between accounts (default: 20s)")
+    gf.add_argument("--delay-max", type=float, default=45.0, metavar="SEC", help="max delay between accounts (default: 45s)")
+    gf.add_argument("--max-accounts", type=int, default=5, metavar="N", help="max accounts to process in this run (default: 5)")
+
+    # ---- verify ----
+    gv = ghs.add_parser(
+        "verify",
+        help="automate SheerID / GitHub Student Pack verification (direct URL or from mailbox)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Automate SheerID / GitHub Student Pack verification.\n"
+            "\n"
+            "Verification sources:\n"
+            "  --from-mail     Read newest SheerID verification link from the school M365 mailbox\n"
+            "                  using Camoufox (unwraps SafeLinks and extracts the verify URL).\n"
+            "  --url <URL>     Direct SheerID verification link (https://services.sheerid.com/verify/...).\n"
+            "\n"
+            "HONEST DISCLOSURE:\n"
+            "  GitHub Student Developer Pack uses SheerID for select academic partner verifications.\n"
+            "  The underlying automated verifier was originally developed for K-12 teacher verification.\n"
+            "  If GitHub requests a student program or requires student ID upload / camera capture,\n"
+            "  the solver may report a program mismatch and require manual document upload.\n"
+            "\n"
+            "Examples:\n"
+            "  kancahub github verify --from-mail\n"
+            "  kancahub github verify --url 'https://services.sheerid.com/verify/<id>/'\n"
+            "  kancahub github verify --from-mail --gateway --headless"
+        ),
+    )
+    gv.add_argument("--url", default=None, help="direct SheerID verification URL")
+    gv.add_argument("--from-mail", action="store_true", help="find and extract SheerID link from school M365 mailbox")
+    gv.add_argument("--timeout", type=int, default=180, help="mailbox polling timeout in seconds (default: 180)")
+    gv.add_argument("--proxy", default=None, help="proxy URL (e.g. http://127.0.0.1:8888)")
+    gv.add_argument("--gateway", action="store_true", help="use local gateway 127.0.0.1:8888")
+    gv.add_argument("--headless", action="store_true", help="run browser headless when inspecting mailbox")
+    gv.add_argument("--open", action="store_true", help="open verification link in browser and inspect resulting page")
+    gv.add_argument("--debug", action="store_true", help="enable debug mode for SheerID verifier")
+    gv.add_argument("--email", default=None, help="manual email to supply to SheerID verifier")
+
+    # ---- check ----
+    gc = ghs.add_parser(
+        "check",
+        help="check dependencies, browser setup, and mailbox/relay credentials",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Check dependencies and configuration for GitHub farming and verification.\n"
+            "\n"
+            "Examples:\n"
+            "  kancahub github check"
+        ),
+    )
+    gc.add_argument(
+        "--domain",
+        choices=["binus", "bizid", "myid"],
+        default="binus",
+        help="domain to check: binus (school mailbox) or bizid/myid (mail relay)",
+    )
+    gc.add_argument(
+        "--inbox",
+        choices=["binus", "relay"],
+        default="binus",
+        help="inbox to check: binus (Outlook) or relay (KancaHub mail relay)",
+    )
+
+    return ghp
+
+
 def cmd_github(a) -> int:
-    """GitHub Education / account farm — wraps scripts/github_farm.py."""
-    py = pick_python(camoufox=True)
-    farm = AUTO_FREECF / "scripts" / "github_farm.py"
-    if not farm.exists():
-        print(col("red", f"✗ github_farm.py not found at {farm}"))
+    """GitHub account farm & Student Pack verification."""
+    py = pick_python()
+    py_camo = pick_python(camoufox=True)
+    sub = getattr(a, "github_cmd", None)
+    if not sub:
+        print(col("yellow", "• no github subcommand specified — run 'kancahub github --help' for usage"))
         return 1
-    sub = a.github_cmd
+
+    farm = AUTO_FREECF / "scripts" / "github_farm.py"
 
     if sub == "check":
-        return run([py, str(farm), "--check"], cwd=AUTO_FREECF)
-
-    if sub == "farm":
-        cmd = [py, str(farm), "--index", str(a.index)]
-        if a.headless:
-            cmd.append("--headless")
-        if a.proxy:
-            cmd += ["--proxy", a.proxy]
-        if a.dry_run:
-            cmd.append("--dry-run")
-        print(col("yellow", "Note: CAPTCHA and the Education ID/photo attestation remain manual steps."))
+        if not farm.exists():
+            print(col("red", f"✗ github_farm.py not found at {farm}"))
+            return 1
+        cmd = [py_camo, str(farm), "--check"]
+        if getattr(a, "domain", None):
+            cmd += ["--email-domain", a.domain]
+        if getattr(a, "inbox", None):
+            cmd += ["--inbox", a.inbox]
         return run(cmd, cwd=AUTO_FREECF)
 
-    print(col("red", "✗ unknown github command"))
+    if sub == "farm":
+        if not farm.exists():
+            print(col("red", f"✗ github_farm.py not found at {farm}"))
+            return 1
+        cmd = [py_camo, str(farm)] + map_github_farm_args(a)
+        print(col("yellow", "Note: Anti-bot CAPTCHA puzzles and Education attestation remain manual steps if encountered."))
+        return run(cmd, cwd=AUTO_FREECF)
+
+    if sub == "verify":
+        finder = AUTO_FREECF / "scripts" / "sheerid_link_finder.py"
+        script = K12_DIR / "script.py"
+
+        url = getattr(a, "url", None)
+        if getattr(a, "from_mail", False):
+            if not finder.exists():
+                print(col("red", f"✗ sheerid_link_finder.py not found at {finder}"))
+                return 1
+            print(col("cyan", "Searching school mailbox for SheerID verification link via Camoufox…"))
+            finder_cmd = [
+                py_camo,
+                str(finder),
+                "--json",
+                "--timeout",
+                str(getattr(a, "timeout", 180)),
+            ]
+            if getattr(a, "headless", False):
+                finder_cmd.append("--headless")
+            proxy = a.proxy or ("127.0.0.1:8888" if getattr(a, "gateway", False) else None)
+            if proxy:
+                finder_cmd += ["--proxy", proxy]
+            if getattr(a, "open", False):
+                finder_cmd.append("--open")
+
+            try:
+                proc = subprocess.run(
+                    finder_cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(AUTO_FREECF),
+                )
+            except Exception as e:
+                print(col("red", f"✗ Failed to execute sheerid_link_finder.py: {e}"))
+                return 1
+
+            try:
+                data = json.loads(proc.stdout) if proc.stdout.strip() else {}
+            except Exception:
+                data = {}
+
+            if proc.returncode != 0 or not data.get("success"):
+                err_msg = data.get("error") if isinstance(data, dict) else None
+                if not err_msg:
+                    err_msg = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+                print(col("red", f"✗ SheerID link finder failed: {err_msg}"))
+                return 1
+
+            url = data.get("url")
+            print(col("green", f"✓ Found SheerID verification URL: {url}"))
+            if getattr(a, "open", False):
+                print(col("green", "Verification link inspected in browser."))
+
+        if not url:
+            print(col("red", "✗ SheerID verification URL required."))
+            print(col("yellow", "  Specify --url <sheerid-url> OR use --from-mail to extract it from the school inbox."))
+            print(col("yellow", "  Example: kancahub github verify --from-mail"))
+            print(col("yellow", "  Example: kancahub github verify --url https://services.sheerid.com/verify/..."))
+            return 1
+
+        if not script.exists():
+            print(col("red", f"✗ SheerID verifier not found at {script}"))
+            print(col("yellow", f"  Extracted verification URL is: {url}"))
+            print(col("yellow", "  You can open and verify this URL manually in a browser."))
+            return 1
+
+        print(col("bold", "\n  GitHub SheerID Verification Handoff"))
+        print(col("yellow", "  ⚠️  NOTE: GitHub Student Pack uses SheerID for select academic partner verifications."))
+        print(col("yellow", "     The underlying solver (script.py) was built for K-12 Teacher verification."))
+        print(col("yellow", "     If GitHub requires a student-specific program or student ID document upload,"))
+        print(col("yellow", "     the automated solver may report a program mismatch and require manual upload.\n"))
+
+        vcmd = [py, str(script), url]
+        proxy = a.proxy or ("127.0.0.1:8888" if getattr(a, "gateway", False) else None)
+        if proxy:
+            vcmd += ["--proxy", proxy]
+        if getattr(a, "debug", False):
+            vcmd.append("--debug")
+        if getattr(a, "email", None):
+            vcmd += ["--email", a.email]
+        return run(vcmd, cwd=K12_DIR)
+
+    print(col("red", f"✗ unknown github command: {sub}"))
     return 1
 
 
@@ -1612,39 +1883,8 @@ def build_parser() -> argparse.ArgumentParser:
     gin.add_argument("--dry-run", action="store_true", help="show planned rows, write nothing")
     gin.add_argument("--verify", action="store_true", help="test each key against the bridge first")
 
-    # ---- github (Education / account farm) ----
-    ghp = sub.add_parser(
-        "github", help="GitHub Education: account farm + Student Pack application helper",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=(
-            "GitHub Education / account-farm flow (scripts/github_farm.py, nodriver):\n"
-            "\n"
-            "  1. signup    new GitHub account via github.com/signup using a plus-addressed\n"
-            "               school mailbox (raymondi+gh<N>@binus.ac.id, --index N)\n"
-            "  2. verify    reads GitHub's 8-digit launch code live from the school M365\n"
-            "               mailbox (Outlook Web)\n"
-            "  3. education opens the GitHub Education application form and fills the fields\n"
-            "               it can (school, school email, name)\n"
-            "  4. save      account saved to ~/Auto-FreeCF/github_accounts.json\n"
-            "\n"
-            "NOT automated (finish by hand): Arkose/CAPTCHA puzzles, the student-ID photo /\n"
-            "identity attestation on the Education form, MFA/device checks, GitHub's manual review.\n"
-            "It stops before any attestation or upload. Treat it as a helper, not a turnkey farmer.\n"
-            "\n"
-            "Config: ~/.config/auto-freecf/.env  (SCHOOL_EMAIL, SCHOOL_MAIL_PASSWORD, SCHOOL_MAIL_URL)\n"
-            "\n"
-            "Examples:\n"
-            "  kancahub github check\n"
-            "  kancahub github farm --index 1 --dry-run     # walk the flow, no submit\n"
-            "  kancahub github farm --index 2 --headless"),
-    )
-    ghs = ghp.add_subparsers(dest="github_cmd")
-    gf = ghs.add_parser("farm", help="sign up a GitHub account + start the Education application")
-    gf.add_argument("--index", type=int, default=1, help="N for raymondi+gh<N>@binus.ac.id (default 1)")
-    gf.add_argument("--headless", action="store_true", help="run the browser headless")
-    gf.add_argument("--dry-run", action="store_true", help="walk the flow + screenshot, do not submit")
-    gf.add_argument("--proxy", default=None, help="proxy URL, e.g. http://user:pass@host:port")
-    ghs.add_parser("check", help="check deps + school mailbox config, then exit")
+    # ---- github (account farm + SheerID verification) ----
+    build_github_parser(sub)
 
     # ---- mail (school mailbox / BINUS M365) ----
     mp = sub.add_parser(
