@@ -554,6 +554,7 @@ def _is_block_signal(text: str) -> bool:
 
 
 BACKGROUND_DIR = HOME / ".config" / "auto-freecf" / "background"
+SESSION_GUARD_STATE = HOME / ".config" / "auto-freecf" / "session_guard.json"
 
 
 class SessionGateway:
@@ -1093,6 +1094,23 @@ def _ledger_record(farm: str, *, target: str = "", egress: str = "", exit_ip: st
                            stage=stage, ok=ok, count=count, note=note)
     except Exception:  # noqa: BLE001
         pass
+
+
+def cmd_ip_reuse(a) -> int:
+    """Show the CGNAT-aware session guard: exit-IP reuse per IP + mid-session changes."""
+    py = pick_python()
+    tool = AUTO_FREECF / "scripts" / "session_guard.py"
+    if not tool.exists():
+        print(col("red", "✗ session_guard.py not found"))
+        return 1
+    if getattr(a, "clear", False):
+        try:
+            Path(SESSION_GUARD_STATE).unlink()
+            print(col("green", f"✓ cleared {SESSION_GUARD_STATE}"))
+        except FileNotFoundError:
+            print(col("dim", "nothing to clear"))
+        return 0
+    return run([py, str(tool), "report"], cwd=AUTO_FREECF)
 
 
 def cmd_egress_node(a) -> int:
@@ -3055,6 +3073,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="group")
     sub.add_parser("doctor", help="health + dependency check across all tools, services & proxies")
+    ipr = sub.add_parser("ip-reuse", help="CGNAT session guard: exit-IP reuse per IP + mid-session IP changes")
+    ipr.add_argument("--clear", action="store_true", help="clear the recorded session history")
     en = sub.add_parser("egress-node", help="use a device's OWN connection as an egress node (phone/PC on the same network)")
     ens = en.add_subparsers(dest="en_cmd")
     ens.add_parser("list", help="list registered device nodes + probe them (default)")
@@ -3510,6 +3530,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_doctor(args)
     if g == "report":
         return cmd_report(args)
+    if g == "ip-reuse":
+        return cmd_ip_reuse(args)
     if g == "egress-node":
         return cmd_egress_node(args)
     if g == "session":
