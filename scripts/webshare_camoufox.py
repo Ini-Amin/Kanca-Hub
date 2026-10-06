@@ -172,6 +172,28 @@ def should_keep_polling(elapsed: float, timeout: float, found_count: int) -> boo
     return True
 
 
+def pick_signup_button(labels: list[str]) -> str | None:
+    """
+    Select the email registration button label from candidate button labels.
+    Explicitly rejects Google/social signup buttons.
+    Requires exact or normalized case-insensitive match for 'Sign Up With Email'.
+    """
+    if not labels:
+        return None
+    for label in labels:
+        if not label or not isinstance(label, str):
+            continue
+        clean = label.strip()
+        lower = clean.lower()
+        if "google" in lower:
+            continue
+        if lower == "sign up with email":
+            return clean
+        if " ".join(lower.split()) == "sign up with email":
+            return clean
+    return None
+
+
 def append_proxies_to_file(proxies: list[str], filepath: str | Path) -> int:
     """Append harvested proxies to target file without duplicating or overwriting existing entries."""
     if not proxies:
@@ -393,46 +415,50 @@ async def try_solve_audio_challenge(page: Any) -> bool:
             print(f"  [+] reCAPTCHA transcribed ({duration_sec:.1f}s): '{text}'", flush=True)
 
             # Wait natural listening time
-            listen_wait = max(3.0, duration_sec + 1.2)
+            listen_wait = max(2.5, min(duration_sec + 0.8, 6.0))
             await asyncio.sleep(listen_wait)
 
-            # Clear and focus input
-            await target_frame.evaluate("""() => {
-                const inp = document.getElementById('audio-response');
-                if (inp) { inp.focus(); inp.value = ''; }
-            }""")
-            await asyncio.sleep(0.3)
+            # Fill audio response field safely
+            try:
+                audio_inp = target_frame.locator("#audio-response")
+                if await audio_inp.count() > 0:
+                    await audio_inp.click()
+                    await audio_inp.fill(text)
+                else:
+                    await target_frame.evaluate("""(val) => {
+                        const inp = document.getElementById('audio-response');
+                        if (inp) {
+                            inp.focus();
+                            inp.value = val;
+                            inp.dispatchEvent(new Event('input', { bubbles: true }));
+                            inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }""", text)
+            except Exception as e_type:
+                print(f"  [Debug Audio Type] {e_type}", flush=True)
 
-            # Type transcription with natural character pauses
-            for char in text:
-                escaped_char = char.replace('\\', '\\\\').replace('"', '\\"')
-                await target_frame.evaluate(f"""() => {{
-                    const inp = document.getElementById('audio-response');
-                    if (inp) {{
-                        inp.value += "{escaped_char}";
-                        inp.dispatchEvent(new KeyboardEvent('keydown', {{ key: "{escaped_char}", bubbles: true }}));
-                        inp.dispatchEvent(new KeyboardEvent('keypress', {{ key: "{escaped_char}", bubbles: true }}));
-                        inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        inp.dispatchEvent(new KeyboardEvent('keyup', {{ key: "{escaped_char}", bubbles: true }}));
-                    }}
-                }}""")
-                await asyncio.sleep(random.uniform(0.06, 0.16))
-
-            await asyncio.sleep(random.uniform(1.2, 2.2))
+            await asyncio.sleep(random.uniform(1.0, 1.8))
 
             # Click verify button
-            verified = await target_frame.evaluate("""() => {
-                const vbtn = document.getElementById('recaptcha-verify-button');
-                if (vbtn) {
-                    vbtn.click();
-                    return true;
-                }
-                return false;
-            }""")
-            if verified:
-                print("  [+] reCAPTCHA 'Verify' button clicked!", flush=True)
-                await asyncio.sleep(5.0)
-                return True
+            try:
+                vbtn = target_frame.locator("#recaptcha-verify-button")
+                if await vbtn.count() > 0:
+                    await vbtn.click()
+                    print("  [+] reCAPTCHA 'Verify' button clicked!", flush=True)
+                    await asyncio.sleep(4.0)
+                    return True
+                else:
+                    verified = await target_frame.evaluate("""() => {
+                        const btn = document.getElementById('recaptcha-verify-button');
+                        if (btn) { btn.click(); return true; }
+                        return false;
+                    }""")
+                    if verified:
+                        print("  [+] reCAPTCHA 'Verify' button clicked (JS)!", flush=True)
+                        await asyncio.sleep(4.0)
+                        return True
+            except Exception as e_v:
+                print(f"  [Debug Audio Verify] {e_v}", flush=True)
 
     except Exception as e:
         print(f"  [Debug Audio] {e}", flush=True)
@@ -577,33 +603,39 @@ async def hunt_single_account(
 
         print("  [1/4] Navigating to https://proxy.webshare.io/register…", flush=True)
         try:
-            await page.goto(REGISTER_URL, timeout=45000)
+            await page.goto(REGISTER_URL, timeout=45000, wait_until="domcontentloaded")
             await asyncio.sleep(random.uniform(2.0, 3.5))
         except Exception as e:
             print(f"  ✗ Failed to load registration page: {e}", file=sys.stderr)
             return []
 
-        # Fill Email
-        email_inp = page.locator("input[name='email'], input[type='email']").first
+        # Fill Email (#email-input, input[name='email'], input[type='email'])
+        email_inp = page.locator("#email-input, input[type='email'], input[name='email']").first
         if await email_inp.count() > 0:
             await email_inp.click()
             await email_inp.fill(email)
             await asyncio.sleep(random.uniform(0.3, 0.6))
+            val_e = await email_inp.input_value()
+            if val_e != email:
+                await email_inp.fill(email)
         else:
             print("  ✗ Email input field not found.", file=sys.stderr)
             return []
 
-        # Fill Password
-        pass_inp = page.locator("input[name='password'], input[type='password']").first
+        # Fill Password (input[type='password'], input[name='password'])
+        pass_inp = page.locator("input[type='password'], input[name='password']").first
         if await pass_inp.count() > 0:
             await pass_inp.click()
             await pass_inp.fill(password)
             await asyncio.sleep(random.uniform(0.3, 0.6))
+            val_p = await pass_inp.input_value()
+            if val_p != password:
+                await pass_inp.fill(password)
         else:
             print("  ✗ Password input field not found.", file=sys.stderr)
             return []
 
-        # Check Terms of Service
+        # Check Terms of Service (input[type='checkbox'], .PrivateSwitchBase-input)
         chk = page.locator("input[type='checkbox'], .PrivateSwitchBase-input").first
         if await chk.count() > 0:
             try:
@@ -611,19 +643,84 @@ async def hunt_single_account(
                 if not is_checked:
                     await chk.click()
             except Exception:
+                pass
+            checked_ok = False
+            try:
+                checked_ok = await chk.is_checked()
+            except Exception:
+                pass
+            if not checked_ok:
                 await page.evaluate("""() => {
                     const c = document.querySelector("input[type='checkbox'], input.PrivateSwitchBase-input");
-                    if (c && !c.checked) c.click();
+                    if (c && !c.checked) {
+                        c.click();
+                        c.checked = true;
+                        c.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
                 }""")
         await asyncio.sleep(random.uniform(0.4, 0.8))
 
-        # Click Sign Up With Email
-        signup_btn = page.locator("button:has-text('Sign Up With Email'), button:has-text('Sign Up')").first
-        if await signup_btn.count() > 0:
-            print("  [2/4] Clicking 'Sign Up With Email'…", flush=True)
-            await signup_btn.click()
-        else:
-            print("  ✗ Sign up button not found.", file=sys.stderr)
+        # Re-verify all field values stuck before clicking submit
+        val_email_final = await email_inp.input_value()
+        val_pass_final = await pass_inp.input_value()
+        if not val_email_final:
+            print("  [!] Email empty before submit, refilling…", flush=True)
+            await email_inp.fill(email)
+        if not val_pass_final:
+            print("  [!] Password empty before submit, refilling…", flush=True)
+            await pass_inp.fill(password)
+
+        # Inspect candidate button labels for diagnostics
+        btn_labels = await page.evaluate("""() => {
+            return Array.from(document.querySelectorAll('button')).map(b => (b.innerText || b.textContent || '').trim()).filter(Boolean);
+        }""")
+        chosen_label = pick_signup_button(btn_labels)
+        if chosen_label:
+            print(f"  [2/4] Found exact signup button '{chosen_label}' (ignoring Google social button)", flush=True)
+
+        # Click Sign Up With Email (EXACT, never Google)
+        clicked_btn = False
+
+        # Strategy 1: page.get_by_role("button", name="Sign Up With Email", exact=True)
+        try:
+            role_btn = page.get_by_role("button", name="Sign Up With Email", exact=True)
+            if await role_btn.count() > 0:
+                print("  [2/4] Clicking 'Sign Up With Email' (role=button)…", flush=True)
+                await role_btn.first.click()
+                clicked_btn = True
+        except Exception:
+            pass
+
+        # Strategy 2: page.locator("button:has-text('Sign Up With Email')")
+        if not clicked_btn:
+            try:
+                loc_btn = page.locator("button:has-text('Sign Up With Email')")
+                if await loc_btn.count() > 0:
+                    print("  [2/4] Clicking 'Sign Up With Email' (locator)…", flush=True)
+                    await loc_btn.first.click()
+                    clicked_btn = True
+            except Exception:
+                pass
+
+        # Strategy 3: JS fallback (exact text match, excludes Google)
+        if not clicked_btn:
+            clicked_btn = await page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('button'));
+                for (const b of btns) {
+                    const txt = (b.innerText || b.textContent || '').trim();
+                    if (txt.toLowerCase().includes('google')) continue;
+                    if (txt.toLowerCase() === 'sign up with email') {
+                        b.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if clicked_btn:
+                print("  [2/4] Clicked 'Sign Up With Email' (JS fallback)…", flush=True)
+
+        if not clicked_btn:
+            print(f"  ✗ Exact 'Sign Up With Email' button not found. Detected buttons: {btn_labels}", file=sys.stderr)
             return []
 
         # Monitor reCAPTCHA and await Dashboard
@@ -631,37 +728,70 @@ async def hunt_single_account(
         logged_in = False
         start_time = time.time()
         last_attempt_time = 0.0
+        badge_passed = False
 
         capsolver_key = os.environ.get("CAPSOLVER_API_KEY", "").strip()
 
         while time.time() - start_time < 180:
-            cur_url = page.url or ""
-            if is_dashboard_url(cur_url):
-                logged_in = True
-                print(f"\n  [+] Confirmed: Reached Dashboard at {cur_url}!", flush=True)
-                break
-
-            # Check for "Too many attempts" rate limiting
-            has_rate_limit = await page.evaluate("""() => {
-                const alert = Array.from(document.querySelectorAll('div, p, span')).find(
-                    el => el.innerText && el.innerText.includes('Too many attempts')
-                );
-                return !!alert;
-            }""")
-            if has_rate_limit:
-                print("  [!] Webshare rate limit detected: 'Too many attempts'. Stopping honestly.", file=sys.stderr)
+            if page.is_closed():
+                print("  [!] Browser page was closed.", file=sys.stderr)
                 return []
 
-            # Try solving challenge every ~12s if challenge appeared
-            if time.time() - last_attempt_time > 12:
-                last_attempt_time = time.time()
-                solved = False
-                if capsolver_key and not capsolver_key.startswith("CAP-dead") and len(capsolver_key) > 10:
-                    solved = await try_solve_capsolver(page, capsolver_key)
-                if not solved:
-                    await try_solve_audio_challenge(page)
+            try:
+                cur_url = page.url or ""
+                if is_dashboard_url(cur_url):
+                    logged_in = True
+                    print(f"\n  [+] Confirmed: Reached Dashboard at {cur_url}!", flush=True)
+                    break
 
-            await asyncio.sleep(2.5)
+                # Check for "Too many attempts" rate limiting
+                has_rate_limit = await page.evaluate("""() => {
+                    const alert = Array.from(document.querySelectorAll('div, p, span')).find(
+                        el => el.innerText && el.innerText.includes('Too many attempts')
+                    );
+                    return !!alert;
+                }""")
+                if has_rate_limit:
+                    print("  [!] Webshare rate limit detected: 'Too many attempts'. Stopping honestly.", file=sys.stderr)
+                    return []
+
+                # Check for generic error alert
+                form_error = await page.evaluate("""() => {
+                    const alert = document.querySelector('.MuiAlert-message, [role="alert"]');
+                    return alert ? (alert.innerText || alert.textContent || '').trim() : '';
+                }""")
+                if form_error and "too many attempts" not in form_error.lower():
+                    print(f"  [!] Webshare registration alert: '{form_error}'", file=sys.stderr)
+
+                # Path A: Check invisible reCAPTCHA auto-solve / badge pass (grecaptcha.getResponse())
+                recaptcha_resp = await page.evaluate("""() => {
+                    try {
+                        if (window.grecaptcha && typeof window.grecaptcha.getResponse === 'function') {
+                            return window.grecaptcha.getResponse() || '';
+                        }
+                    } catch (e) {}
+                    return '';
+                }""")
+                if recaptcha_resp and not badge_passed:
+                    print(f"  [+] reCAPTCHA auto-pass confirmed (token len={len(recaptcha_resp)}). Awaiting Dashboard redirect…", flush=True)
+                    badge_passed = True
+
+                # Path B: Audio solver challenge (if interactive bframe challenge is present)
+                if time.time() - last_attempt_time > 10:
+                    last_attempt_time = time.time()
+                    solved = False
+                    if capsolver_key and not capsolver_key.startswith("CAP-dead") and len(capsolver_key) > 10:
+                        solved = await try_solve_capsolver(page, capsolver_key)
+                    if not solved:
+                        await try_solve_audio_challenge(page)
+
+            except Exception as e_mon:
+                if "closed" in str(e_mon).lower():
+                    print(f"  [!] Page or target closed during monitoring: {e_mon}", file=sys.stderr)
+                    return []
+                print(f"  [Debug Monitor] {e_mon}", flush=True)
+
+            await asyncio.sleep(2.0)
 
         if not logged_in:
             print(f"  ✗ Account [{index}/{total}] registration timed out or did not enter dashboard.", file=sys.stderr)
