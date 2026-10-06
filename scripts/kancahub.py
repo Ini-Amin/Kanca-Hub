@@ -219,6 +219,159 @@ def _count_lines(p: Path) -> int:
     except OSError:
         return 0
 
+# ══════════════════════════════════════════════════ egress auto-wire
+
+SCRIPTS_DIR = Path(__file__).resolve().parent
+PROXY_AUTO = "auto"
+PROXY_NONE = "none"
+
+# Probe target per farm group; only used by --proxy auto, resolved lazily at run
+# time (never at import/parse time).
+EGRESS_TARGETS = {
+    "github": "https://github.com/signup",
+    "grok": "https://accounts.x.ai/sign-up",
+    "thk": "https://tokenharbor.ai/",
+    "k12": "https://chatgpt.com/",
+}
+
+_AUTO_GATEWAYS: list = []          # gateways spawned by auto_egress (kept alive)
+_egress_module = None              # scripts/egress.py once imported
+_egress_unavailable = False        # import failed -> keep legacy behavior
+
+PROXY_HELP = (
+    "egress mode (default: auto). auto = smart auto-wire (local gateway -> pool "
+    "gateway -> WARP -> residential -> direct, verified per target); none = force "
+    "direct; WARP = force the Cloudflare WARP tunnel; or an explicit proxy URL "
+    "such as http://127.0.0.1:8888 (an explicit URL always wins over auto)"
+)
+
+def _looks_like_proxy(mode: str) -> bool:
+    """True for an explicit proxy URL or host:port (never 'auto'/'none')."""
+    m = (mode or "").strip()
+    if "://" in m:
+        return True
+    host, _, port = m.rpartition(":")
+    return bool(host) and port.isdigit()
+
+def _load_egress():
+    """Lazily import scripts/egress.py; returns the module or None on failure.
+
+    Import is deliberately deferred: `--help` and parsing must never touch the
+    network or import optional proxy machinery.
+    """
+    global _egress_module, _egress_unavailable
+    if _egress_module is not None or _egress_unavailable:
+        return _egress_module
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import egress as _egress  # noqa: PLC0415 - deferred on purpose
+        _egress_module = _egress
+    except Exception as exc:  # noqa: BLE001 - defensive: never break farming
+        _egress_unavailable = True
+        print(col("yellow", f"⚠ egress auto-wire unavailable ({exc}); "
+                            "farm commands keep their built-in proxy behavior"))
+    return _egress_module
+
+def _stop_auto_gateways() -> None:
+    """Stop auto-wire gateways we spawned, so the CLI leaves nothing running."""
+    mod = _load_egress()
+    stop = getattr(mod, "stop_gateway", None) if mod is not None else None
+    while _AUTO_GATEWAYS:
+        proc = _AUTO_GATEWAYS.pop()
+        if stop is not None:
+            try:
+                stop(proc)
+            except Exception:  # noqa: BLE001 - best-effort teardown
+                pass
+
+class EgressChoice:
+    """Outcome of resolving a --proxy mode for one farm command."""
+
+    __slots__ = ("proxy", "source", "direct", "warp", "unavailable")
+
+    def __init__(self, proxy, source, *, direct=False, warp=False, unavailable=False):
+        self.proxy = proxy
+        self.source = source
+        self.direct = direct
+        self.warp = warp
+        self.unavailable = unavailable
+
+def _choose_egress(mode: str, target_url: str) -> EgressChoice:
+    """Resolve a --proxy mode into a concrete egress decision.
+
+    auto        -> smart ladder (local gateway -> pool gateway -> WARP ->
+                   residential -> direct) via scripts/egress.py
+    none/direct -> force a direct connection
+    URL/WARP    -> use it explicitly (user choice always wins over auto)
+
+    Import failure is NOT fatal: it yields `unavailable`, and the caller leaves
+    the child's built-in behavior untouched (with the warning already printed).
+    """
+    raw = (mode or PROXY_AUTO).strip()
+    low = raw.lower()
+
+    if low in (PROXY_NONE, "direct", "off", "no"):
+        return EgressChoice(None, "none", direct=True)
+
+    # Scheme-less proxies (127.0.0.1:8888, user:pass@host:port) are explicit
+    # hops: give them a scheme so auto_egress's matcher sees them as such.
+    if low not in (PROXY_AUTO, "warp") and "://" not in raw and _looks_like_proxy(raw):
+        raw = f"http://{raw}"
+        low = raw.lower()
+
+    mod = _load_egress()
+    if mod is None:
+        if _looks_like_proxy(raw):        # explicit URL still honoured
+            return EgressChoice(raw, "explicit")
+        return EgressChoice(None, "unavailable", unavailable=True)
+
+    try:
+        proxy, proc, source = mod.auto_egress(
+            target_url=target_url, mode=raw, verbose=True
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive: fall back to legacy
+        print(col("yellow", f"⚠ egress auto-wire failed ({exc}); "
+                            "farm commands keep their built-in proxy behavior"))
+        return EgressChoice(None, "unavailable", unavailable=True)
+
+    if proc is not None:
+        _AUTO_GATEWAYS.append(proc)
+
+    if proxy:
+        label = f"auto:{source}" if low == PROXY_AUTO else source
+        print(col("green", f"  [proxy] {label} -> {proxy}"))
+        return EgressChoice(proxy, label)
+
+    if source == "warp":
+        print(col("green", "  [proxy] WARP tunnel active (system-wide, no --proxy needed)"))
+        return EgressChoice(None, "warp", warp=True)
+
+    print(col("yellow", "  [proxy] auto: no usable proxy — using a direct connection"))
+    return EgressChoice(None, "direct", direct=True)
+
+def _resolve_proxy(mode: str, target_url: str) -> str | None:
+    """Return the proxy URL for `mode`, or None when the connection is direct."""
+    return _choose_egress(mode, target_url).proxy
+
+def _proxy_env(choice: EgressChoice) -> dict | None:
+    """Environment overrides for children that take no --proxy flag."""
+    if not choice.proxy:
+        return None
+    return {
+        "HTTP_PROXY": choice.proxy, "HTTPS_PROXY": choice.proxy,
+        "http_proxy": choice.proxy, "https_proxy": choice.proxy,
+    }
+
+def _proxy_flags(choice: EgressChoice, *, supports_no_proxy: bool) -> list[str]:
+    """CLI flags for children that accept --proxy / --no-proxy."""
+    if choice.proxy:
+        return ["--proxy", choice.proxy]
+    if supports_no_proxy and not choice.unavailable:
+        # none, auto->direct, or an active WARP tunnel: do not acquire a gateway.
+        return ["--no-proxy"]
+    return []
+
 
 # ═══════════════════════════════════════════════════════════════ doctor
 
@@ -964,7 +1117,22 @@ def cmd_thk(a) -> int:
             cmd = [py, "-m", "tools.tokenharbor.cli", "batch", str(a.count)]
         if sub == "test-key" and getattr(a, "key", None):
             cmd = [py, "-m", "tools.tokenharbor.cli", "test-key", a.key]
-        return run(cmd, cwd=HARBOR)
+        # Farm commands (setup/batch/create-key): auto-wire a verified egress.
+        # Harbor picks its own proxy from tools/tokenharbor/proxy_list.txt, so an
+        # explicit/auto hop is only inherited through the environment.
+        env = None
+        if sub in ("setup", "batch", "create-key"):
+            mode = getattr(a, "proxy", None) or PROXY_AUTO
+            if getattr(a, "no_proxy", False):
+                mode = PROXY_NONE
+            choice = _choose_egress(mode, EGRESS_TARGETS["thk"])
+            if choice.direct:
+                print(col("dim", "  [proxy] direct connection (no egress gateway acquired)"))
+            env = _proxy_env(choice)
+        try:
+            return run(cmd, cwd=HARBOR, env=env)
+        finally:
+            _stop_auto_gateways()
 
     if sub == "inject":
         inj = AUTO_FREECF / "scripts" / "inject_thk_9router.py"
@@ -1061,29 +1229,44 @@ def cmd_grok(a) -> int:
 
     if sub == "run":
         driver = AUTO_FREECF / "scripts" / "grok_driver.py"
+        mode = getattr(a, "proxy", None) or PROXY_AUTO
+        if getattr(a, "no_proxy", False):
+            mode = PROXY_NONE
+        choice = _choose_egress(mode, EGRESS_TARGETS["grok"])
         if driver.exists() and not a.petani:
             cmd = [py, str(driver), "-n", str(getattr(a, "accounts", 1))]
             if getattr(a, "headless", False):
                 cmd += ["--headless"]
             if getattr(a, "proxy_pool", None):
                 cmd += ["--proxy-pool", a.proxy_pool]
-            if getattr(a, "proxy", None):
-                cmd += ["--proxy", a.proxy]
+            # An explicit hop must win over the child's auto/pool mode.
+            if choice.proxy:
+                cmd += ["--proxy", choice.proxy]
             if getattr(a, "workers", None):
                 cmd += ["--workers", str(a.workers)]
             print(col("cyan", "Using grok non-interactive driver (SSO risk gate, relay mail, pool export)"))
-            return run(cmd, cwd=AUTO_FREECF)
+            try:
+                return run(cmd, cwd=AUTO_FREECF)
+            finally:
+                _stop_auto_gateways()
         if (GROK_REG / "grok_register_ttk.py").exists() and not a.petani:
             cmd = [py, "grok_register_ttk.py", "cli"]
             print(col("cyan", "Using grok-register backend (SSO risk gate, 5 mail providers, pool export)"))
-            return run(cmd, cwd=GROK_REG)
+            print(col("dim", "  (backend takes no --proxy; egress is inherited from the environment)"))
+            try:
+                return run(cmd, cwd=GROK_REG, env=_proxy_env(choice))
+            finally:
+                _stop_auto_gateways()
         # fallback to PetaniProxy
         petani = PETANI / "main.py"
         cmd = [py, str(petani), "--grok-farm", str(getattr(a, "accounts", 1))]
         if getattr(a, "headless", False):
             cmd += ["--headless"]
         print(col("yellow", "Using PetaniProxy grok farm fallback"))
-        return run(cmd, cwd=PETANI)
+        try:
+            return run(cmd, cwd=PETANI, env=_proxy_env(choice))
+        finally:
+            _stop_auto_gateways()
 
     if sub == "web":
         if not (GROK_REG / "web").exists():
@@ -1120,6 +1303,8 @@ def cmd_grok(a) -> int:
         if not inj.exists():
             print(col("red", f"✗ grok_9router.py not found at {inj}"))
             return 1
+        choice = _choose_egress(getattr(a, "proxy", None) or PROXY_AUTO,
+                                EGRESS_TARGETS["grok"])
         cmd = [py, str(inj)]
         if a.input:
             cmd += ["-i", str(Path(a.input).expanduser())]
@@ -1129,7 +1314,11 @@ def cmd_grok(a) -> int:
             cmd.append("--verify")
         if a.dry_run:
             cmd.append("--dry-run")
-        return run(cmd, cwd=AUTO_FREECF)
+        # grok_9router.py has no --proxy flag; inherit the hop via the environment.
+        try:
+            return run(cmd, cwd=AUTO_FREECF, env=_proxy_env(choice))
+        finally:
+            _stop_auto_gateways()
 
     print(col("red", "✗ unknown grok command"))
     return 1
@@ -1137,8 +1326,14 @@ def cmd_grok(a) -> int:
 
 # ═══════════════════════════════════════════════════════════════ github
 
-def map_github_farm_args(a) -> list[str]:
-    """Map kancahub github farm CLI arguments to scripts/github_farm.py flags."""
+def map_github_farm_args(a, choice: "EgressChoice | None" = None) -> list[str]:
+    """Map kancahub github farm CLI arguments to scripts/github_farm.py flags.
+
+    Pure string work, no network: the caller resolves the egress once via
+    `_choose_egress(...)` and passes it in as `choice`. Legacy default values
+    (proxy=None/auto) mean "leave the child's built-in egress alone", which is
+    what keeps offline callers (tests, other tools) side-effect free.
+    """
     cmd: list[str] = []
     if getattr(a, "index", None) is not None:
         cmd += ["--index", str(a.index)]
@@ -1161,18 +1356,28 @@ def map_github_farm_args(a) -> list[str]:
     retries = getattr(a, "retries", None)
     if retries:
         cmd += ["--retries", str(retries)]
-    proxy = getattr(a, "proxy", None)
-    if proxy:
-        cmd += ["--proxy", proxy]
-    pool = getattr(a, "pool", None)
-    if pool:
-        cmd += ["--pool", pool]
+    if choice is None:
+        mode = getattr(a, "proxy", None)
+        if getattr(a, "no_proxy", False):
+            choice = EgressChoice(None, "none", direct=True)
+        elif mode and mode.lower() not in (PROXY_AUTO, PROXY_NONE, "direct"):
+            # An explicit proxy URL is pure data — forward it without probing.
+            choice = EgressChoice(mode, "explicit")
+        elif mode and mode.lower() == PROXY_NONE:
+            choice = EgressChoice(None, "none", direct=True)
+        # else: legacy call (no resolved choice) -> do not touch the child's egress
+    # An explicit hop must win over the child's pool, or github_farm.py would
+    # silently pick a different (pool) egress than the one we just verified.
+    if choice is not None and choice.proxy and getattr(a, "pool", None):
+        print(col("yellow", "• --pool ignored: an explicit/auto proxy already selects the egress"))
+    elif getattr(a, "pool", None):
+        cmd += ["--pool", a.pool]
+    if choice is not None:
+        cmd += _proxy_flags(choice, supports_no_proxy=True)
     if getattr(a, "headless", False):
         cmd.append("--headless")
     if getattr(a, "dry_run", False):
         cmd.append("--dry-run")
-    if getattr(a, "no_proxy", False):
-        cmd.append("--no-proxy")
     return cmd
 
 
@@ -1248,10 +1453,10 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
     )
     gf.add_argument("--headless", action="store_true", help="run browser headless (virtual display / Xvfb)")
     gf.add_argument("--dry-run", action="store_true", help="walk the signup flow, screenshot, do not submit/create")
-    gf.add_argument("--proxy", default=None, help="proxy URL (e.g. http://127.0.0.1:8888)")
+    gf.add_argument("--proxy", default="auto", metavar="PROXY", help=PROXY_HELP)
     gf.add_argument("--pool", default=None, help="proxy list file for rotation")
     gf.add_argument("--retries", type=int, default=0, metavar="N", help="retries on access_restricted block (default: 0)")
-    gf.add_argument("--no-proxy", action="store_true", help="force direct connection (bypass auto clean egress gateway)")
+    gf.add_argument("--no-proxy", action="store_true", help="alias for --proxy none: force direct connection")
     gf.add_argument("--delay-min", type=float, default=20.0, metavar="SEC", help="min delay between accounts (default: 20s)")
     gf.add_argument("--delay-max", type=float, default=45.0, metavar="SEC", help="max delay between accounts (default: 45s)")
     gf.add_argument("--max-accounts", type=int, default=5, metavar="N", help="max accounts to process in this run (default: 5)")
@@ -1345,9 +1550,17 @@ def cmd_github(a) -> int:
         if not farm.exists():
             print(col("red", f"✗ github_farm.py not found at {farm}"))
             return 1
-        cmd = [py_camo, str(farm)] + map_github_farm_args(a)
+        # Resolve the egress once, at run time (never at parse/import time).
+        mode = getattr(a, "proxy", None) or PROXY_AUTO
+        if getattr(a, "no_proxy", False):
+            mode = PROXY_NONE
+        choice = _choose_egress(mode, EGRESS_TARGETS["github"])
+        cmd = [py_camo, str(farm)] + map_github_farm_args(a, choice)
         print(col("yellow", "Note: Anti-bot CAPTCHA puzzles and Education attestation remain manual steps if encountered."))
-        return run(cmd, cwd=AUTO_FREECF)
+        try:
+            return run(cmd, cwd=AUTO_FREECF)
+        finally:
+            _stop_auto_gateways()
 
     if sub == "verify":
         finder = AUTO_FREECF / "scripts" / "sheerid_link_finder.py"
@@ -1602,12 +1815,14 @@ def cmd_k12(a) -> int:
         if not a.url:
             print(col("red", "✗ url required: kancahub k12 verify <sheerid-url>"))
             return 1
+        mode = getattr(a, "proxy", None) or PROXY_AUTO
+        choice = _choose_egress("127.0.0.1:8888" if getattr(a, "gateway", False) else mode,
+                                EGRESS_TARGETS["k12"])
         cmd = [py, str(script), a.url]
-        proxy = a.proxy
-        if not proxy and a.gateway:
-            proxy = "127.0.0.1:8888"
-        if proxy:
-            cmd += ["--proxy", proxy]
+        if choice.proxy:
+            cmd += ["--proxy", choice.proxy]
+        elif choice.unavailable and mode not in (PROXY_AUTO, PROXY_NONE):
+            cmd += ["--proxy", mode]  # explicit URL, egress helper unavailable
         if a.debug:
             cmd += ["--debug"]
         if a.email:
@@ -1616,7 +1831,10 @@ def cmd_k12(a) -> int:
             cmd += ["--no-temp-email"]
         if a.ask_email:
             cmd += ["--ask-email"]
-        return run(cmd, cwd=K12_DIR)
+        try:
+            return run(cmd, cwd=K12_DIR)
+        finally:
+            _stop_auto_gateways()
 
     if sub == "auto":
         # Prefer the tool's ORIGINAL proven flow (DrissionPage + temp.tf), which
@@ -1624,13 +1842,25 @@ def cmd_k12(a) -> int:
         # (auto-pass). Our experimental relay/nodriver flow is only a fallback.
         original = K12_DIR / "auto_k12_flow.py"
         experimental = AUTO_FREECF / "scripts" / "auto_k12_flow_kancahub.py"
+        # Neither auto flow takes --proxy; inherit the verified hop via the env.
+        mode = getattr(a, "proxy", None) or PROXY_AUTO
+        if getattr(a, "no_proxy", False):
+            mode = PROXY_NONE
+        choice = _choose_egress(mode, EGRESS_TARGETS["k12"])
+        env = _proxy_env(choice)
         if original.exists():
             print(col("cyan", "Full auto flow (original tool): ChatGPT signup -> SheerID -> K12Verifier"))
             print(col("dim", "  uses DrissionPage + temp.tf edu mailbox (proven auto-pass path)"))
-            return run([py, str(original)], cwd=K12_DIR)
+            try:
+                return run([py, str(original)], cwd=K12_DIR, env=env)
+            finally:
+                _stop_auto_gateways()
         if experimental.exists():
             print(col("yellow", "Original auto flow missing; using experimental relay flow"))
-            return run([py, str(experimental)], cwd=K12_DIR)
+            try:
+                return run([py, str(experimental)], cwd=K12_DIR, env=env)
+            finally:
+                _stop_auto_gateways()
         print(col("red", "✗ no auto_k12_flow found"))
         return 1
 
@@ -1831,10 +2061,17 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- thk (TokenHarbor via harbor) ----
     tp = sub.add_parser("thk", help="TokenHarbor: generate free API keys and inject/sync with 9Router")
     ts = tp.add_subparsers(dest="thk_cmd")
-    ts.add_parser("setup", help="full setup on TokenHarbor (interactive)")
     tb = ts.add_parser("batch", help="create N TokenHarbor accounts")
     tb.add_argument("count", nargs="?", type=int, default=1)
-    ts.add_parser("create-key", help="create an API key for an existing account")
+    tsetup = ts.add_parser("setup", help="full setup on TokenHarbor (interactive)")
+    tck = ts.add_parser("create-key", help="create an API key for an existing account")
+    # Farm commands: wire kancahub's smart egress in by default (fallback: harbor's
+    # own proxy_list.txt, untouched).
+    for _farm_parser in (tb, tsetup, tck):
+        _farm_parser.add_argument(
+            "--proxy", default="auto", metavar="PROXY",
+            help=PROXY_HELP + "\n  (inherited by harbor via the environment)")
+        _farm_parser.add_argument("--no-proxy", action="store_true", help="alias for --proxy none")
     tk = ts.add_parser("test-key", help="test a thk_ key")
     tk.add_argument("key")
     ts.add_parser("enable-free", help="enable free models for an account")
@@ -1864,7 +2101,8 @@ def build_parser() -> argparse.ArgumentParser:
     gr.add_argument("-n", "--accounts", type=int, default=1)
     gr.add_argument("--headless", action="store_true")
     gr.add_argument("--proxy-pool", default=None, help="path to proxy pool file")
-    gr.add_argument("--proxy", default=None, help="single proxy URL (e.g. http://127.0.0.1:8888)")
+    gr.add_argument("--proxy", default="auto", metavar="PROXY", help=PROXY_HELP)
+    gr.add_argument("--no-proxy", action="store_true", help="alias for --proxy none")
     gr.add_argument("--workers", type=int, default=1, help="concurrent worker threads")
     gr.add_argument("--petani", action="store_true", help="use PetaniProxy farm instead")
     gs.add_parser("web", help="launch the WebUI (127.0.0.1:8092)")
@@ -1882,6 +2120,9 @@ def build_parser() -> argparse.ArgumentParser:
     gin.add_argument("--base-url", default=None, help="grok2api base URL (default: env GROK2API_BASE)")
     gin.add_argument("--dry-run", action="store_true", help="show planned rows, write nothing")
     gin.add_argument("--verify", action="store_true", help="test each key against the bridge first")
+    gin.add_argument("--proxy", default="auto", metavar="PROXY",
+                     help="egress mode for the bridge call: auto (default), none/direct, "
+                          "warp, or an explicit proxy URL (inherited via the environment)")
 
     # ---- github (account farm + SheerID verification) ----
     build_github_parser(sub)
@@ -2118,14 +2359,18 @@ def build_parser() -> argparse.ArgumentParser:
     ks = kp.add_subparsers(dest="k12_cmd")
     kv = ks.add_parser("verify", help="verify a SheerID URL")
     kv.add_argument("url", nargs="?")
-    kv.add_argument("--proxy", default=None, help="IP:port or user:pass@ip:port")
+    kv.add_argument("--proxy", default="auto", metavar="PROXY",
+                    help=PROXY_HELP + "\n  URL may be IP:port or user:pass@ip:port")
     kv.add_argument("--gateway", action="store_true", help="use 127.0.0.1:8888")
     kv.add_argument("--debug", action="store_true")
     kv.add_argument("--email", default=None)
     kv.add_argument("--no-temp-email", action="store_true")
     kv.add_argument("--ask-email", action="store_true")
     ks.add_parser("run", help="guided: paste URL + pick mode (mirrors the original [1]-[13] menu)")
-    ks.add_parser("auto", help="full auto: ChatGPT signup + OTP + session capture + SheerID verify")
+    ka = ks.add_parser("auto", help="full auto: ChatGPT signup + OTP + session capture + SheerID verify")
+    ka.add_argument("--proxy", default="auto", metavar="PROXY",
+                    help=PROXY_HELP + "\n  (inherited by the flow via the environment)")
+    ka.add_argument("--no-proxy", action="store_true", help="alias for --proxy none")
     ki = ks.add_parser("inject", help="inject captured ChatGPT sessions into 9Router (codex)")
     ki.add_argument("--session", default=None, help="session json (default: auto-detect k12_sessions.json)")
     ki.add_argument("--dry-run", action="store_true")
