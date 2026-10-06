@@ -22,6 +22,9 @@ from scripts.github_to_anything import (
     detect_social_target,
     extract_otp_code,
     extract_verification_link,
+    is_login_path,
+    is_post_login_signal,
+    is_target_domain,
     load_github_accounts,
     main,
     resolve_domain,
@@ -263,6 +266,136 @@ class TestExtractLinksAndOTP(unittest.TestCase):
 
         text2 = "GitHub launch code: 12345678"
         self.assertEqual(extract_otp_code(text2), "12345678")
+
+
+class TestPostLoginSignal(unittest.TestCase):
+    """Test strict, target-host-scoped post-login signal verification."""
+
+    def test_rejects_login_page_with_only_github_cookies(self) -> None:
+        """Live incident regression: bouncing back to login page with only github.com cookies."""
+        target_url = "https://console.tiarina.cloud/login"
+        final_url = "https://console.tiarina.cloud/login"
+        session = {
+            "host": "console.tiarina.cloud",
+            "url": final_url,
+            "cookies": [
+                {"name": "_octo", "value": "GH1.1", "domain": ".github.com"},
+                {"name": "logged_in", "value": "no", "domain": ".github.com"},
+                {"name": "_gh_sess", "value": "secret", "domain": "github.com"},
+            ],
+            "storage": {},
+        }
+        self.assertFalse(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_rejects_when_still_on_login_page_even_with_target_session_cookie(self) -> None:
+        """Negative guard: remaining on login/signin/auth URL must NEVER claim success."""
+        target_url = "https://console.tiarina.cloud/login"
+        final_url = "https://console.tiarina.cloud/login"
+        session = {
+            "cookies": [
+                {"name": "session_token", "value": "val123", "domain": "console.tiarina.cloud"},
+            ],
+        }
+        self.assertFalse(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_rejects_when_page_is_on_third_party_domain(self) -> None:
+        """Target login got stuck on github.com login."""
+        target_url = "https://console.tiarina.cloud/login"
+        final_url = "https://github.com/login"
+        session = {
+            "cookies": [
+                {"name": "user_session", "value": "valid_session", "domain": "github.com"},
+            ],
+        }
+        self.assertFalse(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_accepts_dashboard_navigation(self) -> None:
+        """Condition (a): Navigated away from /login to /dashboard on target host."""
+        target_url = "https://console.tiarina.cloud/login"
+        final_url = "https://console.tiarina.cloud/dashboard"
+        session = {"cookies": [], "storage": {}}
+        self.assertTrue(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_accepts_root_navigation_from_login(self) -> None:
+        """Condition (a): Navigated away from /login to root / on target host."""
+        target_url = "https://console.tiarina.cloud/login"
+        final_url = "https://console.tiarina.cloud/"
+        session = {"cookies": [], "storage": {}}
+        self.assertTrue(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_accepts_target_apex_cookie_when_path_unchanged(self) -> None:
+        """Condition (b): Path remained same root / but target session cookie was set."""
+        target_url = "https://console.tiarina.cloud/"
+        final_url = "https://console.tiarina.cloud/"
+        session = {
+            "cookies": [
+                {"name": "tiarina_jwt", "value": "ey...", "domain": ".tiarina.cloud"},
+            ],
+        }
+        self.assertTrue(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_rejects_csrf_only_cookie_on_target_host(self) -> None:
+        """CSRF cookies do not represent an authenticated user session."""
+        target_url = "https://console.tiarina.cloud/"
+        final_url = "https://console.tiarina.cloud/"
+        session = {
+            "cookies": [
+                {"name": "csrf_token", "value": "some_token", "domain": ".tiarina.cloud"},
+            ],
+        }
+        self.assertFalse(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_rejects_third_party_cookie_when_on_target_root(self) -> None:
+        """Cookies from github.com or google.com must never satisfy target auth."""
+        target_url = "https://console.tiarina.cloud/"
+        final_url = "https://console.tiarina.cloud/"
+        session = {
+            "cookies": [
+                {"name": "user_session", "value": "sess123", "domain": ".github.com"},
+                {"name": "SID", "value": "sid123", "domain": ".google.com"},
+            ],
+        }
+        self.assertFalse(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_accepts_localstorage_auth_token_on_target(self) -> None:
+        """Condition (c): LocalStorage contains auth token on target origin."""
+        target_url = "https://console.tiarina.cloud/"
+        final_url = "https://console.tiarina.cloud/"
+        session = {
+            "cookies": [],
+            "storage": {"auth_token": "bearer_jwt_xyz"},
+        }
+        self.assertTrue(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_rejects_when_no_signal_and_path_unchanged(self) -> None:
+        """Initial root / stayed root / with empty cookies and empty storage."""
+        target_url = "https://console.tiarina.cloud/"
+        final_url = "https://console.tiarina.cloud/"
+        session = {"cookies": [], "storage": {}}
+        self.assertFalse(is_post_login_signal(final_url, session, target_url, host="console.tiarina.cloud"))
+
+    def test_is_target_domain_matching(self) -> None:
+        self.assertTrue(is_target_domain("console.tiarina.cloud", "console.tiarina.cloud"))
+        self.assertTrue(is_target_domain(".tiarina.cloud", "console.tiarina.cloud"))
+        self.assertTrue(is_target_domain("api.tiarina.cloud", "tiarina.cloud"))
+        self.assertFalse(is_target_domain(".github.com", "console.tiarina.cloud"))
+        self.assertFalse(is_target_domain("accounts.google.com", "console.tiarina.cloud"))
+
+    def test_is_login_path(self) -> None:
+        self.assertTrue(is_login_path("/login"))
+        self.assertTrue(is_login_path("/login/"))
+        self.assertTrue(is_login_path("/signin"))
+        self.assertTrue(is_login_path("/sign-in"))
+        self.assertTrue(is_login_path("/auth/login"))
+        self.assertTrue(is_login_path("/register"))
+        self.assertTrue(is_login_path("/console/login"))
+        self.assertTrue(is_login_path("/login.php"))
+        self.assertFalse(is_login_path(""))
+        self.assertFalse(is_login_path("/"))
+        self.assertFalse(is_login_path("/dashboard"))
+        self.assertFalse(is_login_path("/console"))
+        self.assertFalse(is_login_path("/overview"))
+        self.assertFalse(is_login_path("/ai"))
 
 
 if __name__ == "__main__":
