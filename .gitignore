@@ -120,3 +120,4 @@ scripts/gmail_accounts.json
 grok-farm/
 results/
 background/
+egress_nodes.json
