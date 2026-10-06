@@ -51,11 +51,15 @@ class TestUnifiedMenuStructure(unittest.TestCase):
         self.assertIn("end-to-end", top_item[1].lower())
 
     def test_parity_against_old_pages_union(self) -> None:
-        # Old Page 1 command strings
+        # Old Page 1 command strings.
+        # NOTE: 'proxy start' was intentionally changed to 'proxy gateway' so the
+        # menu item is NON-INTERACTIVE and can run as a background job (the guided
+        # 'proxy start' prompts for a mode, which would block a background job).
+        # The feature (start a proxy gateway) is preserved under the new command.
         old_page1_commands = {
             "stack signup",
             "doctor",
-            "proxy start",
+            "proxy gateway",
             "thk batch",
             "grok run",
             "k12 auto",
