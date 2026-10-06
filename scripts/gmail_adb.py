@@ -307,6 +307,12 @@ def state(cdp: CDP) -> str:
       const url=location.href, txt=(document.body&&document.body.innerText||'').toLowerCase();
       if(/myaccount\\.google\\.com|mail\\.google\\.com/.test(url)) return 'success';
       if(/couldn.t create|can.t create|too many|verify it.s you/.test(txt)) return 'blocked';
+      // Device/phone cross-flow verification screen (may appear AFTER password).
+      // It has a 'Continue' button but no form fields; clicking Continue advances
+      // (it can lead to a native GMS prompt, then the recovery-email screen).
+      if(/crossflowverification|verify some info before creating an account|do a device check|verify it.s you/.test(url + ' ' + txt)) return 'devicecheck';
+      // Post-signup onboarding screens (recovery email, review, terms).
+      if(/add recovery email|recovery email address|review your account info|privacy and terms|welcome to google|i agree/.test(txt)) return 'post';
       if(vis('input[name=firstName]')) return 'name';
       // Username step has two shapes: a plain visible text field, OR a list of
       // suggested addresses (radio buttons) with the text field hidden.
@@ -487,33 +493,99 @@ def run_one(cdp: CDP, args) -> dict:
     cdp.js(click_text_js("next"))
     time.sleep(4)
 
-    # Try to skip any phone prompt; else finish post screens.
-    for _ in range(4):
+    # Drive the post-password screens to completion. The order varies:
+    #   device check ('Continue') -> [native GMS prompt on the phone] ->
+    #   add recovery email ('Skip') -> review/terms ('I agree'/'Next') -> success.
+    # We click the appropriate control each pass until myaccount.google.com.
+    for _ in range(12):
         s = state(cdp)
+        if s == "success":
+            break
         if s == "phone":
             cdp.js(click_text_js("not now"))
             cdp.js(click_text_js("skip"))
             time.sleep(2)
-        elif s in ("success", "post"):
+            if state(cdp) != "phone":
+                continue
+            break
+        if s == "devicecheck":
+            # 'Continue' triggers the verification; on a real phone the native GMS
+            # dialog may appear — the human can tap 'Yes, continue'. If not, the
+            # web flow itself advances (observed live).
+            click_text_js_click(cdp, "Continue")
+            time.sleep(4)
+            continue
+        if s == "post":
+            # Recovery email -> Skip; review/terms -> Next/I agree.
             cdp.js(click_text_js("skip"))
+            cdp.js(click_text_js("next"))
             cdp.js(click_text_js("i agree"))
             cdp.js(click_text_js("agree"))
-            time.sleep(2)
-            if state(cdp) == "success":
-                break
-        else:
+            time.sleep(3)
+            continue
+        # unknown screen: try a generic Continue/Next once, then give up.
+        if not _click_any(cdp, ["Continue", "Next", "Got it", "Done"]):
             break
+        time.sleep(3)
 
     s = state(cdp)
-    if s == "phone":
+    if s == "success":
+        rec["status"] = "created"
+    elif s == "phone":
         rec["status"] = "phone_required"
         rec["note"] = "Google still wants a number. Complete it on the phone, then re-run."
-    elif s in ("success", "post"):
-        rec["status"] = "created"
-    else:
+    elif s == "devicecheck":
+        rec["status"] = "device_check"
+        rec["note"] = "Google's device check needs a tap on the phone (native prompt). Finish it, then re-run."
+    etc = detect_blocked(cdp)
+    if etc and rec["status"] == "created":
+        rec["status"] = "created"  # keep success even if a stray marker appears
+    if rec["status"] not in ("created", "phone_required", "device_check"):
         rec["status"] = f"failed:{s}"
-        rec["error"] = detect_blocked(cdp) or s
+        rec["error"] = etc or s
     return rec
+
+
+def _click_any(cdp: "CDP", labels: list[str]) -> bool:
+    """Click the first element whose exact text matches any label. Returns True if clicked."""
+    import json as _json
+    res = cdp.js(f"""
+    (()=>{{
+      const labels={_json.dumps(labels)};
+      const els=[...document.querySelectorAll('button,div[jsname=LgbsSe],div[role=button],a')];
+      for(const t of labels){{
+        const b=els.find(x=>(x.innerText||'').trim()===t);
+        if(b){{ b.click(); return t; }}
+      }}
+      return '';
+    }})()""")
+    return bool(res)
+
+
+def click_text_js_click(cdp: "CDP", label: str) -> bool:
+    """Click an element by exact text using a real CDP mouse click at its centre.
+
+    Some Google Material buttons ignore JS .click(); a real mouse event works.
+    """
+    import json as _json
+    r = cdp.js(f"""
+    (()=>{{
+      const t={_json.dumps(label)};
+      const b=[...document.querySelectorAll('button,div[jsname=LgbsSe],div[role=button]')]
+        .find(x=>(x.innerText||'').trim()===t);
+      if(!b) return '';
+      b.scrollIntoView({{block:'center'}});
+      const x=b.getBoundingClientRect();
+      return JSON.stringify({{x:Math.round(x.x+x.width/2),y:Math.round(x.y+x.height/2)}});
+    }})()""")
+    if not r:
+        return False
+    try:
+        p = _json.loads(r)
+        cdp.click_at(p["x"], p["y"])
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def main() -> int:
@@ -544,7 +616,10 @@ def main() -> int:
         rec = run_one(cdp, args)
         results.append(rec)
         print(f"  status: {rec.get('status')}")
-        if rec.get("status") in ("created", "phone_required") and not args.dry_run:
+        # Always surface the password so a created account is never lost.
+        if rec.get("email") and rec.get("password"):
+            print(f"  LOGIN: {rec['email']} / {rec['password']}")
+        if rec.get("status") in ("created", "phone_required", "device_check") and not args.dry_run:
             save(rec)
         if i < args.count:
             time.sleep(args.delay)
