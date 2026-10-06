@@ -17,6 +17,7 @@ import random
 import re
 import sqlite3
 import string
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -33,6 +34,22 @@ FARMS_DIR = SCRIPTS / "custom_farms"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+# Reuse the proven, strictly-gated helpers from github_to_anything (pure
+# functions + loader). Import is defensive so autofarm still runs if that
+# module is unavailable — the fallbacks below keep the honesty contract.
+try:
+    from github_to_anything import (  # type: ignore
+        capture_page_session as _gta_capture_session,
+        is_post_login_signal as _gta_post_login_signal,
+        load_github_accounts as _gta_load_github_accounts,
+    )
+except Exception:  # pragma: no cover - exercised only on a broken install
+    _gta_capture_session = None
+    _gta_post_login_signal = None
+    _gta_load_github_accounts = None
+
+DEFAULT_GITHUB_ACCOUNTS_FILE = ROOT / "github_accounts.json"
+
 try:
     from proxy_sync import sync_now, prioritize_fresh
 except ImportError:
@@ -40,6 +57,87 @@ except ImportError:
     def prioritize_fresh(l, **kw): return l
 
 TEMPIK_BASE = "https://tempik.kancalabs.workers.dev"
+
+# ── auth inspection (pure, unit-testable) ───────────────────────────────
+GITHUB_TEXT_HINTS = (
+    "continue with github", "sign in with github", "sign up with github",
+    "login with github", "log in with github", "github",
+)
+GOOGLE_TEXT_HINTS = (
+    "continue with google", "sign in with google", "sign up with google",
+    "login with google", "log in with google", "with google",
+)
+GITHUB_HREF_HINTS = ("github.com/login/oauth", "github.com/login", "github.com/signup")
+GOOGLE_HREF_HINTS = ("accounts.google.com/o/oauth2", "accounts.google.com")
+
+def classify_auth(
+    labels: list[str],
+    hrefs: list[str],
+    has_email: bool,
+    has_pass: bool,
+) -> dict:
+    """Classify available auth methods from DOM evidence. Pure — no I/O.
+
+    Args:
+        labels: visible text of buttons/links/controls on the page.
+        hrefs: href/action URLs of links and oauth anchors.
+        has_email: an email input exists.
+        has_pass: a password input exists.
+
+    Returns:
+        {"methods": [...], "has_email_form": bool, "preferred": str|None}
+
+    `methods` is ordered by routing preference: github, google, email.
+    A real email form requires BOTH an email and a password input.
+    """
+    text = " ".join(str(x or "").lower() for x in labels)
+    links = " ".join(str(x or "").lower() for x in hrefs)
+
+    has_github = any(h in text for h in GITHUB_TEXT_HINTS) or \
+        any(h in links for h in GITHUB_HREF_HINTS)
+    has_google = any(h in text for h in GOOGLE_TEXT_HINTS) or \
+        any(h in links for h in GOOGLE_HREF_HINTS)
+
+    has_email_form = bool(has_email and has_pass)
+
+    methods: list[str] = []
+    if has_github:
+        methods.append("github")
+    if has_google:
+        methods.append("google")
+    if has_email_form:
+        methods.append("email")
+
+    return {
+        "methods": methods,
+        "has_email_form": has_email_form,
+        "preferred": methods[0] if methods else None,
+    }
+
+def load_github_accounts(path: Path | str | None = None) -> list[dict]:
+    """Load usable GitHub accounts (github_accounts.json). Empty list if none."""
+    target = Path(path) if path else DEFAULT_GITHUB_ACCOUNTS_FILE
+    if _gta_load_github_accounts is not None:
+        try:
+            return _gta_load_github_accounts(target)
+        except Exception:
+            return []
+    # Fallback loader (kept minimal; mirrors github_to_anything's contract).
+    if not target.exists():
+        return []
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    accounts = data.get("accounts", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+    out = []
+    for acc in accounts:
+        if not isinstance(acc, dict):
+            continue
+        login = acc.get("username") or acc.get("login") or acc.get("email") or ""
+        if login.strip() and str(acc.get("password") or "").strip():
+            out.append(acc)
+    return out
 
 
 def random_string(n: int = 10) -> str:
@@ -136,6 +234,7 @@ async def run_autofarm(
     mail_domain: str = "kancalabs.biz.id",
     inject_9r: bool = False,
     out_json: Path | str | None = None,
+    inspect_only: bool = False,
 ) -> dict:
     domain = normalize_domain(mail_domain)
     # 1. Resolve egress (only harvest the pool when a pool proxy is actually wanted)
@@ -147,8 +246,10 @@ async def run_autofarm(
     print(f"\n  ▶ Target   : {url}")
     print(f"  • Domain   : {domain}")
     print(f"  • Proxy    : {chosen_proxy or 'Direct (no proxy)'}")
+    if inspect_only:
+        print("  • Mode     : INSPECT ONLY (no filling, no submit, nothing written)")
 
-    # 2. Prepare identity
+    # 2. Prepare identity (only needed for the email path, but harmless to print)
     username = f"usr_{random_string(8)}"
     email = f"{username}@{domain}"
     password = generate_password()
@@ -156,12 +257,9 @@ async def run_autofarm(
     print(f"  • Email    : {email}")
     print(f"  • Password : {password}")
 
-    # 3. Launch Camoufox
-    try:
-        from camoufox.async_api import AsyncCamoufox
-    except ImportError:
-        from playwright.async_api import async_playwright
-        AsyncCamoufox = None
+    # 3. Launch Camoufox (delegated to _run_browser_flow)
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.split(":")[0] or "target"
 
     result = {
         "url": url,
@@ -171,26 +269,34 @@ async def run_autofarm(
         "proxy": chosen_proxy,
         "success": False,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "auth_methods": [],
+        "auth_preferred": None,
+        "stopped_at": None,
+        "final_url": None,
     }
 
     from camoufox_helpers import to_camoufox_proxy
     proxy_cfg = to_camoufox_proxy(chosen_proxy) if chosen_proxy else None
 
-    browser_cm = AsyncCamoufox(headless=headless, proxy=proxy_cfg, geoip=True, humanize=True) if AsyncCamoufox else None
+    result = await _run_browser_flow(
+        url, headless, proxy_cfg, email, password, username, host, result,
+        inspect_only=inspect_only,
+    )
 
-    if browser_cm:
-        async with browser_cm as browser:
-            page = await browser.new_page()
-            result = await _drive_page(page, url, email, password, username, result)
-    else:
-        from playwright.async_api import async_playwright
-        async with async_playwright() as p:
-            browser = await p.firefox.launch(headless=headless, proxy=proxy_cfg)
-            page = await browser.new_page()
-            result = await _drive_page(page, url, email, password, username, result)
-            await browser.close()
+    # 4. Inspect-only: print the finding and write NOTHING.
+    if inspect_only:
+        print("\n  ── Inspect result (no account was created) ──")
+        print(json.dumps({
+            "url": url,
+            "methods": result.get("auth_methods", []),
+            "preferred": result.get("auth_preferred"),
+            "has_email_form": result.get("has_email_form", False),
+            "stopped_at": result.get("stopped_at"),
+        }, indent=2))
+        return result
 
-    # 4. Save results to JSON
+    # 5. Save results to JSON — ALWAYS persisted (success true or false), so the
+    #    operator sees exactly what happened. Scaffolding is gated below.
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_file = Path(out_json) if out_json else OUTPUT_DIR / "autofarm_accounts.json"
     existing = []
@@ -201,76 +307,354 @@ async def run_autofarm(
             existing = []
     existing.append(result)
     out_file.write_text(json.dumps(existing, indent=2))
-    print(f"  ✅ Saved account credentials to {out_file}")
+    if result.get("success"):
+        print(f"  ✅ Saved VERIFIED account to {out_file}")
+    else:
+        print(f"  ⚠ Saved FAILED record to {out_file} (success=false — nothing was created)")
 
-    # 5. Inject into 9Router if requested
-    if inject_9r:
+    # 6. Inject into 9Router only on a real success
+    if inject_9r and result.get("success"):
         inject_to_9router(result)
 
-    # 6. Scaffold reusable pipeline script
-    _scaffold_pipeline(url, email, password, result, domain)
+    # 7. Scaffold a reusable pipeline ONLY after a real success
+    if result.get("success"):
+        _scaffold_pipeline(url, email, password, result, domain)
+    else:
+        print("  • No scaffold written (nothing was created).")
 
     return result
 
 
-async def _drive_page(page, url: str, email: str, password: str, username: str, result: dict) -> dict:
+async def _drive_page(
+    page,
+    url: str,
+    email: str,
+    password: str,
+    username: str,
+    result: dict,
+    host: str,
+    *,
+    inspect_only: bool = False,
+) -> dict:
     print(f"  • Navigating to {url}…")
-    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    await page.wait_for_timeout(3000)
+    try:
+        resp = await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        if resp is not None and getattr(resp, "status", None) in (403, 429):
+            result["stopped_at"] = f"http_{resp.status}"
+            result["error"] = f"target returned HTTP {resp.status} (egress blocked)"
+            print(f"  ✗ Target returned HTTP {resp.status}; stopping (no fill attempted).")
+            return result
+    except Exception as exc:
+        result["stopped_at"] = "page_load_error"
+        result["error"] = str(exc)
+        print(f"  ✗ Navigation failed: {exc}")
+        return result
 
-    # Detect form inputs
+    await page.wait_for_timeout(3000)
+    result["final_url"] = page.url
+
+    # ── PHASE 1: INSPECT (always, before any filling) ──────────────────
+    print("  [inspect] Detecting available auth methods…")
+    classification = await inspect_auth_methods(page, url)
+    methods = classification.get("methods", [])
+    result["auth_methods"] = methods
+    result["auth_preferred"] = classification.get("preferred")
+    result["has_email_form"] = classification.get("has_email_form", False)
+    print(f"  [inspect] methods={methods or ['none']} "
+          f"has_email_form={result['has_email_form']} "
+          f"preferred={result['auth_preferred']}")
+
+    if not methods:
+        result["stopped_at"] = "no_supported_auth_method"
+        result["error"] = "no supported auth method found"
+        print("  ✗ No supported auth method found — refusing to fill or write a success file.")
+        return result
+
+    if inspect_only:
+        result["stopped_at"] = "inspect_only"
+        print("  ✓ Inspect-only: stopping before any fill/submit.")
+        return result
+
+    # ── PHASE 2: ROUTE ─────────────────────────────────────────────────
+    if "github" in methods:
+        accounts = load_github_accounts()
+        if accounts:
+            print(f"  [route] GitHub OAuth selected ({len(accounts)} account(s) available).")
+            return await _route_github(page, url, host, accounts[0], result)
+        print("  [route] GitHub method present but no GitHub account available "
+              "(github_accounts.json empty) — not attempting GitHub.")
+
+    if "google" in methods:
+        result["stopped_at"] = "google_requires_account"
+        result["error"] = "Google login available but no Google account configured"
+        print("  [route] Google login detected, but no Google credentials are configured — "
+              "honest failure (no fake success).")
+        return result
+
+    if result.get("has_email_form"):
+        print("  [route] Email/password form selected.")
+        return await _route_email(page, url, email, password, username, host, result)
+
+    # Methods existed but none is routable (e.g. github present with no account
+    # and no email form) — honest stop.
+    result["stopped_at"] = result.get("stopped_at") or "no_routable_method"
+    result.setdefault("error", "no routable auth method (no GitHub account, no email form)")
+    print(f"  ✗ Nothing routable — stopping. ({result.get('error')})")
+    return result
+
+async def _run_browser_flow(
+    url: str,
+    headless: bool,
+    proxy_cfg: dict | None,
+    email: str,
+    password: str,
+    username: str,
+    host: str,
+    result: dict,
+    *,
+    inspect_only: bool = False,
+) -> dict:
+    """Launch the browser and drive one target page (Camoufox, else Playwright)."""
+    try:
+        from camoufox.async_api import AsyncCamoufox
+    except ImportError:
+        AsyncCamoufox = None
+
+    if AsyncCamoufox is not None:
+        async with AsyncCamoufox(headless=headless, proxy=proxy_cfg, geoip=True, humanize=True) as browser:
+            page = await browser.new_page()
+            return await _drive_page(
+                page, url, email, password, username, result, host,
+                inspect_only=inspect_only,
+            )
+
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.firefox.launch(headless=headless, proxy=proxy_cfg)
+        try:
+            page = await browser.new_page()
+            return await _drive_page(
+                page, url, email, password, username, result, host,
+                inspect_only=inspect_only,
+            )
+        finally:
+            await browser.close()
+
+async def _route_email(page, url, email, password, username, host, result) -> dict:
+    """Fill the email/password signup form and verify honestly."""
     email_sel = "input[type='email'], input[name*='email' i], input[id*='email' i]"
     pass_sel = "input[type='password'], input[name*='pass' i], input[id*='pass' i]"
     user_sel = "input[name*='user' i], input[name*='name' i], input[id*='user' i]"
-    submit_sel = "button[type='submit'], input[type='submit'], button:has-text('Sign'), button:has-text('Register'), button:has-text('Daftar'), button:has-text('Submit')"
+    submit_sel = ("button[type='submit'], input[type='submit'], button:has-text('Sign'), "
+                  "button:has-text('Register'), button:has-text('Daftar'), button:has-text('Submit')")
 
-    has_email = await page.query_selector(email_sel)
-    has_pass = await page.query_selector(pass_sel)
+    try:
+        if await page.query_selector(email_sel):
+            print("  • Found email input, filling…")
+            await page.fill(email_sel, email)
+            await page.wait_for_timeout(500)
 
-    if has_email:
-        print("  • Found email input, filling…")
-        await page.fill(email_sel, email)
-        await page.wait_for_timeout(500)
+        if await page.query_selector(user_sel) and not await page.query_selector(email_sel):
+            await page.fill(user_sel, username)
+            await page.wait_for_timeout(500)
 
-    if await page.query_selector(user_sel) and not has_email:
-        await page.fill(user_sel, username)
-        await page.wait_for_timeout(500)
+        if await page.query_selector(pass_sel):
+            print("  • Found password input, filling…")
+            await page.fill(pass_sel, password)
+            await page.wait_for_timeout(500)
+            confirm_sel = "input[name*='confirm' i], input[id*='confirm' i]"
+            if await page.query_selector(confirm_sel):
+                await page.fill(confirm_sel, password)
 
-    if has_pass:
-        print("  • Found password input, filling…")
-        await page.fill(pass_sel, password)
-        await page.wait_for_timeout(500)
-        # Check confirm password
-        confirm_sel = "input[name*='confirm' i], input[id*='confirm' i]"
-        if await page.query_selector(confirm_sel):
-            await page.fill(confirm_sel, password)
+        chk = await page.query_selector("input[type='checkbox']")
+        if chk and not await chk.is_checked():
+            await chk.check()
+            await page.wait_for_timeout(500)
 
-    # Check terms checkbox
-    chk_sel = "input[type='checkbox']"
-    chk = await page.query_selector(chk_sel)
-    if chk and not await chk.is_checked():
-        await chk.check()
-        await page.wait_for_timeout(500)
+        if await page.query_selector(".cf-turnstile, iframe[src*='challenges.cloudflare.com']"):
+            print("  • Cloudflare Turnstile detected! Waiting for challenge…")
+            await page.wait_for_timeout(5000)
+    except Exception as exc:
+        result["stopped_at"] = "fill_failed"
+        result["error"] = f"form fill failed: {exc}"
+        print(f"  ✗ Form fill failed: {exc}")
+        return result
 
-    # Check for Turnstile
-    cf_turnstile = await page.query_selector(".cf-turnstile, iframe[src*='challenges.cloudflare.com']")
-    if cf_turnstile:
-        print("  • Cloudflare Turnstile detected! Waiting for challenge…")
-        await page.wait_for_timeout(5000)
-
-    # Click submit
     submit_btn = await page.query_selector(submit_sel)
-    if submit_btn:
-        print("  • Clicking submit button…")
-        await submit_btn.click()
-        await page.wait_for_timeout(5000)
-        result["success"] = True
-        print("  ✓ Form submitted successfully.")
-    else:
-        print("  ⚠ Could not find automatic submit button.")
+    if not submit_btn:
+        result["stopped_at"] = "no_submit_button"
+        result["error"] = "no submit button found"
+        print("  ⚠ No submit button found — not claiming success.")
+        return result
 
+    print("  • Clicking submit button…")
+    try:
+        await submit_btn.click()
+    except Exception as exc:
+        result["stopped_at"] = "submit_failed"
+        result["error"] = str(exc)
+        print(f"  ✗ Submit click failed: {exc}")
+        return result
+    await page.wait_for_timeout(5000)
+
+    # HONESTY GATE: a submit click is not success. Require a real post-login signal.
+    session = await _capture_session(page, host)
+    result["final_url"] = page.url
+    result["session"] = session
+    if _post_login_signal(page.url, session, url, host):
+        result["success"] = True
+        result["stopped_at"] = "post_login_verified"
+        print(f"  ✓ Verified post-login signal at {page.url}")
+    else:
+        result["stopped_at"] = "no_post_login_signal"
+        result["error"] = f"submitted but no post-login signal — still on {page.url}"
+        print(f"  ✗ Submitted, but no post-login signal (still on {page.url}); success=false.")
     return result
 
+async def _route_github(page, url, host, account: dict, result: dict) -> dict:
+    """Delegate the GitHub OAuth flow to the proven github_to_anything driver."""
+    tool = SCRIPTS / "github_to_anything.py"
+    if not tool.exists():
+        result["stopped_at"] = "github_driver_missing"
+        result["error"] = f"github_to_anything.py not found at {tool}"
+        print(f"  ✗ {result['error']}")
+        return result
+
+    login = account.get("username") or account.get("login") or account.get("email") or ""
+    proxy_arg = result.get("proxy") or "none"
+    cmd = [
+        sys.executable, str(tool), url,
+        "--account", str(login),
+        "--proxy", str(proxy_arg),
+    ]
+    print(f"  [route] Delegating to github_to_anything.py (account={login}, proxy={proxy_arg})…")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except Exception as exc:
+        result["stopped_at"] = "github_delegate_failed"
+        result["error"] = str(exc)
+        print(f"  ✗ GitHub delegate failed to run: {exc}")
+        return result
+
+    tail = (proc.stdout or "").strip().splitlines()[-6:]
+    for line in tail:
+        print(f"      │ {line}")
+    if proc.stderr.strip():
+        for line in proc.stderr.strip().splitlines()[-3:]:
+            print(f"      ⚠ {line}")
+
+    result["stopped_at"] = "github_delegate_exit"
+    result["github_exit_code"] = proc.returncode
+    if proc.returncode == 0:
+        result["success"] = True
+        result["error"] = None
+        print("  ✓ GitHub OAuth path reported success (verified by its own strict gate).")
+    else:
+        result["success"] = False
+        result["error"] = f"github OAuth path failed (exit {proc.returncode})"
+        print(f"  ✗ GitHub OAuth path did not complete (exit {proc.returncode}); success=false.")
+    return result
+
+async def _capture_session(page, host: str) -> dict:
+    if _gta_capture_session is not None:
+        try:
+            return await _gta_capture_session(page, host)
+        except Exception:
+            pass
+    cookies = []
+    try:
+        cookies = await page.context.cookies()
+    except Exception:
+        pass
+    storage: dict = {}
+    try:
+        storage = await page.evaluate("""() => { const o = {};
+            try { for (let i=0;i<localStorage.length;i++){const k=localStorage.key(i);o[k]=localStorage.getItem(k);} } catch(e){}
+            return o; }""")
+    except Exception:
+        pass
+    return {"host": host, "url": page.url, "cookies": cookies, "storage": storage}
+
+
+async def inspect_auth_methods(page, target_url: str) -> dict:
+    """Read the DOM and classify available auth methods (no filling, no clicks)."""
+    labels: list[str] = []
+    hrefs: list[str] = []
+
+    try:
+        elements = await page.locator(
+            "button, a, input[type='submit'], [role='button']"
+        ).all()
+        for el in elements[:60]:
+            try:
+                txt = (await el.inner_text()).strip()
+                aria = (await el.get_attribute("aria-label") or "").strip()
+                title = (await el.get_attribute("title") or "").strip()
+                combined = " ".join(x for x in (txt, aria, title) if x)
+                if combined:
+                    labels.append(combined)
+                href = (await el.get_attribute("href") or "").strip()
+                if href:
+                    hrefs.append(href)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # OAuth anchors are often plain <a href="https://github.com/login/oauth/...">
+    for sel in ("a[href*='github.com']", "a[href*='accounts.google.com']"):
+        try:
+            for el in (await page.locator(sel).all())[:10]:
+                href = (await el.get_attribute("href") or "").strip()
+                if href:
+                    hrefs.append(href)
+        except Exception:
+            continue
+
+    has_email = False
+    has_pass = False
+    try:
+        has_email = await page.query_selector(
+            "input[type='email'], input[name*='email' i], input[id*='email' i]"
+        ) is not None
+    except Exception:
+        pass
+    try:
+        has_pass = await page.query_selector(
+            "input[type='password'], input[name*='pass' i], input[id*='pass' i]"
+        ) is not None
+    except Exception:
+        pass
+
+    classification = classify_auth(labels, hrefs, has_email, has_pass)
+    classification["target"] = target_url
+    return classification
+
+def _post_login_signal(page_url: str, session: dict, target_url: str, host: str) -> bool:
+    """Strict post-login check — delegated to the proven github_to_anything gate."""
+    if _gta_post_login_signal is not None:
+        try:
+            return bool(_gta_post_login_signal(page_url, session, target_url, host=host))
+        except Exception:
+            return False
+    # Conservative fallback: target host, off the login path, not a provider.
+    try:
+        pu = urllib.parse.urlparse(page_url)
+        tu = urllib.parse.urlparse(target_url)
+        page_host = pu.netloc.split(":")[0].lower()
+        target_host = (host or tu.netloc.split(":")[0]).lower()
+        if not page_host or not target_host:
+            return False
+        if any(bad in page_host for bad in ("github.com", "google.com", "accounts.google")):
+            return False
+        if not (page_host == target_host or page_host.endswith("." + target_host)):
+            return False
+        login_words = ("login", "signin", "sign-in", "signup", "sign-up", "auth", "register")
+        if any(w in pu.path.lower() for w in login_words):
+            return False
+        return pu.path.rstrip("/") != tu.path.rstrip("/")
+    except Exception:
+        return False
 
 def _scaffold_pipeline(url: str, email: str, password: str, result: dict, domain: str) -> None:
     d_clean = urllib.parse.urlparse(url).netloc.replace(".", "_").replace(":", "_")
@@ -294,7 +678,7 @@ if __name__ == "__main__":
     print(f"  • Created reusable pipeline script: {target_py}")
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="KancaHub AutoFarm — adapt website to existing pipelines")
     ap.add_argument("url", nargs="?", default=None, help="Target website signup/login URL")
     ap.add_argument("--domain", choices=["kancalabs.biz.id", "kancalabs.my.id", "biz.id", "my.id"], default="kancalabs.biz.id",
@@ -305,6 +689,13 @@ def main() -> int:
     ap.add_argument("--proxy", default=None,
                     help="proxy URL, or 'none'/'auto' (default: auto from pool)")
     ap.add_argument("--no-proxy", action="store_true", help="force a direct connection (no proxy)")
+    ap.add_argument("--inspect-only", action="store_true",
+                    help="detect available auth methods (GitHub/Google/email) and exit — "
+                         "no filling, no submit, nothing written")
+    return ap
+
+def main() -> int:
+    ap = build_parser()
     args = ap.parse_args()
 
     url = args.url
@@ -329,15 +720,18 @@ def main() -> int:
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
 
-    asyncio.run(run_autofarm(
+    result = asyncio.run(run_autofarm(
         url,
         headless=args.headless,
         proxy=("none" if getattr(args, "no_proxy", False) else args.proxy),
         mail_domain=domain,
         inject_9r=inject,
         out_json=args.out,
+        inspect_only=args.inspect_only,
     ))
-    return 0
+    if args.inspect_only:
+        return 0
+    return 0 if result.get("success") else 2
 
 
 if __name__ == "__main__":
