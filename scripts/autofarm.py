@@ -87,8 +87,11 @@ def classify_auth(
     Returns:
         {"methods": [...], "has_email_form": bool, "preferred": str|None}
 
-    `methods` is ordered by routing preference: github, google, email.
-    A real email form requires BOTH an email and a password input.
+    `methods` is ordered by routing preference: **email first**, then github,
+    then google. Rationale (user directive): if the site offers an email+password
+    signup, use it first (it's self-service); fall back to GitHub/Google social
+    only when no email form exists. A real email form requires BOTH an email and
+    a password input.
     """
     text = " ".join(str(x or "").lower() for x in labels)
     links = " ".join(str(x or "").lower() for x in hrefs)
@@ -101,12 +104,12 @@ def classify_auth(
     has_email_form = bool(has_email and has_pass)
 
     methods: list[str] = []
-    if has_github:
-        methods.append("github")
-    if has_google:
-        methods.append("google")
-    if has_email_form:
+    if has_email_form:          # email/password FIRST (self-service signup)
         methods.append("email")
+    if has_github:              # GitHub as fallback
+        methods.append("github")
+    if has_google:              # Google last
+        methods.append("google")
 
     return {
         "methods": methods,
@@ -375,7 +378,11 @@ async def _drive_page(
         print("  ✓ Inspect-only: stopping before any fill/submit.")
         return result
 
-    # ── PHASE 2: ROUTE ─────────────────────────────────────────────────
+    # ── PHASE 2: ROUTE (email FIRST per user directive, then github, then google)
+    if result.get("has_email_form") or "email" in methods:
+        print("  [route] Email/password form selected (preferred).")
+        return await _route_email(page, url, email, password, username, host, result)
+
     if "github" in methods:
         accounts = load_github_accounts()
         if accounts:
@@ -390,10 +397,6 @@ async def _drive_page(
         print("  [route] Google login detected, but no Google credentials are configured — "
               "honest failure (no fake success).")
         return result
-
-    if result.get("has_email_form"):
-        print("  [route] Email/password form selected.")
-        return await _route_email(page, url, email, password, username, host, result)
 
     # Methods existed but none is routable (e.g. github present with no account
     # and no email form) — honest stop.

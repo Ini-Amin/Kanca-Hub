@@ -55,16 +55,17 @@ class TestClassifyAuthTruthTable(unittest.TestCase):
         self.assertEqual(autofarm.classify_auth([], [], False, True)["methods"], [])
         self.assertFalse(autofarm.classify_auth([], [], True, False)["has_email_form"])
 
-    def test_github_plus_email_prefers_github(self):
+    def test_github_plus_email_prefers_email(self):
+        # User directive: prefer email/password signup; GitHub is the fallback.
         got = autofarm.classify_auth(["Continue with GitHub"], [], True, True)
-        self.assertEqual(got["methods"], ["github", "email"])
-        self.assertEqual(got["preferred"], "github")
+        self.assertEqual(got["methods"], ["email", "github"])
+        self.assertEqual(got["preferred"], "email")
         self.assertTrue(got["has_email_form"])
 
-    def test_all_three_ordered_github_google_email(self):
+    def test_all_three_ordered_email_github_google(self):
         got = autofarm.classify_auth(
             ["Continue with GitHub", "Continue with Google"], [], True, True)
-        self.assertEqual(got["methods"], ["github", "google", "email"])
+        self.assertEqual(got["methods"], ["email", "github", "google"])
 
     def test_nothing_detected(self):
         got = autofarm.classify_auth([], [], False, False)
