@@ -556,6 +556,16 @@ def _is_block_signal(text: str) -> bool:
 BACKGROUND_DIR = HOME / ".config" / "auto-freecf" / "background"
 SESSION_GUARD_STATE = HOME / ".config" / "auto-freecf" / "session_guard.json"
 
+# Per-account pacing presets (seconds between account creations):
+#   fast   - 20-45s  (accept more throttle risk)
+#   normal - 60-90s  (~1-1.5 min/account: dodges TokenHarbor's soft throttle)
+#   safe   - 120-180s (slow-roll; best for account longevity / warming)
+PACE_PRESETS: dict[str, tuple[float, float]] = {
+    "fast": (20.0, 45.0),
+    "normal": (60.0, 90.0),
+    "safe": (120.0, 180.0),
+}
+
 
 class SessionGateway:
     """A proxy gateway OWNED and tracked by the current kancahub process.
@@ -837,6 +847,35 @@ def _run_capture(cmd: list[str], cwd: Path | None = None, env: dict | None = Non
         return 127, str(ex)
 
 
+def _session_guard_start(account: str) -> None:
+    """Record the egress IP at the start of a farm account session (best-effort)."""
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import session_guard
+        ip = session_guard.get_ip()
+        rec = session_guard.guard_start(account, ip=ip)
+        print(col("dim", f"  [session] {account} start ip={ip} (reuse so far: {rec.get('reuse', 0)})"))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _session_guard_end(account: str) -> None:
+    """Check the egress IP stayed stable for the account session (best-effort)."""
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import session_guard
+        r = session_guard.guard_end(account)
+        if r.get("verdict") == "changed":
+            print(col("yellow", f"  [session] ⚠ {account} exit IP changed {r.get('start_ip')} -> "
+                                f"{r.get('end_ip')} — sites may flag inconsistency"))
+        elif r.get("verdict") == "stable":
+            print(col("dim", f"  [session] {account} ip stable ({r.get('end_ip')})"))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_with_mobile_retry(
     cmd: list[str],
     cwd: Path | None = None,
@@ -844,34 +883,44 @@ def run_with_mobile_retry(
     *,
     mobile_rotate: bool = False,
     wait: float = 25.0,
+    account: str | None = None,
 ) -> int:
-    """Run a farm command. If mobile_rotate is enabled:
-      1. Rotate carrier IP once before the run.
-      2. If execution fails with a block signal (403, access_restricted, not supported, take a breath),
-         sleep 20-45s, rotate carrier IP again (cap: 2 rotations), and retry once.
+    """Run a farm command.
+
+    - If mobile_rotate: rotate the carrier IP before the run, and retry once with a
+      fresh IP on a block signal.
+    - If account is given: record the egress IP at start/end via session_guard so a
+      mid-session IP change (a CGNAT anti-pattern) is surfaced.
     """
-    if not mobile_rotate:
-        return run(cmd, cwd=cwd, env=env)
+    if account:
+        _session_guard_start(account)
 
-    # Rotation 1: before the run
-    print(col("cyan", "  [mobile] Rotating carrier IP before run (--mobile-rotate enabled)…"))
-    _mobile_rotate_once(wait=wait)
+    try:
+        if not mobile_rotate:
+            return run(cmd, cwd=cwd, env=env)
 
-    code, out = _run_capture(cmd, cwd=cwd, env=env)
-    if code == 0:
-        return 0
-
-    if _is_block_signal(out):
-        print(col("yellow", "\n  ⚠ Block signal detected during farm run."))
-        delay = random.uniform(20.0, 30.0)
-        print(col("cyan", f"  [mobile] Cooling down ({delay:.1f}s) and rotating carrier IP for retry…"))
-        time.sleep(delay)
-        # Rotation 2: retry rotation (cap: 2 per account/run)
+        # Rotation 1: before the run
+        print(col("cyan", "  [mobile] Rotating carrier IP before run (--mobile-rotate enabled)…"))
         _mobile_rotate_once(wait=wait)
-        print(col("cyan", "  [mobile] Retrying farm command with fresh mobile egress…"))
-        code, _ = _run_capture(cmd, cwd=cwd, env=env)
 
-    return code
+        code, out = _run_capture(cmd, cwd=cwd, env=env)
+        if code == 0:
+            return 0
+
+        if _is_block_signal(out):
+            print(col("yellow", "\n  ⚠ Block signal detected during farm run."))
+            delay = random.uniform(20.0, 30.0)
+            print(col("cyan", f"  [mobile] Cooling down ({delay:.1f}s) and rotating carrier IP for retry…"))
+            time.sleep(delay)
+            # Rotation 2: retry rotation (cap: 2 per account/run)
+            _mobile_rotate_once(wait=wait)
+            print(col("cyan", "  [mobile] Retrying farm command with fresh mobile egress…"))
+            code, _ = _run_capture(cmd, cwd=cwd, env=env)
+
+        return code
+    finally:
+        if account:
+            _session_guard_end(account)
 
 
 def cmd_doctor(_a) -> int:
@@ -1895,7 +1944,8 @@ def cmd_thk(a) -> int:
                 env["TOKENHARBOR_NO_PROXY"] = "1"
         try:
             rc = run_with_mobile_retry(cmd, cwd=HARBOR, env=env,
-                                       mobile_rotate=getattr(a, "mobile_rotate", False))
+                                       mobile_rotate=getattr(a, "mobile_rotate", False),
+                                       account=f"thk:{getattr(a, 'count', 1)}x")
             # Record every thk batch attempt so 'kancahub report' can show what worked.
             _ledger_record(
                 "thk",
@@ -2020,7 +2070,9 @@ def cmd_grok(a) -> int:
                 cmd += ["--workers", str(a.workers)]
             print(col("cyan", "Using grok non-interactive driver (SSO risk gate, relay mail, pool export)"))
             try:
-                return run(cmd, cwd=AUTO_FREECF)
+                return run_with_mobile_retry(cmd, cwd=AUTO_FREECF,
+                                             mobile_rotate=getattr(a, "mobile_rotate", False),
+                                             account=f"grok:{getattr(a, 'accounts', 1)}x")
             finally:
                 _stop_auto_gateways()
         if (GROK_REG / "grok_register_ttk.py").exists() and not a.petani:
@@ -2146,10 +2198,15 @@ def map_github_farm_args(a, choice: "EgressChoice | None" = None) -> list[str]:
     max_acc = getattr(a, "max_accounts", None)
     if max_acc is not None:
         cmd += ["--max-accounts", str(max_acc)]
+    # Pacing: explicit --delay-min/--delay-max ALWAYS win; otherwise apply the
+    # --pace preset (default 'normal' = 60-90s, ~1-1.5 min/account).
+    pace = getattr(a, "pace", None)
     delay_min = getattr(a, "delay_min", None)
+    delay_max = getattr(a, "delay_max", None)
+    if delay_min is None and delay_max is None and pace in PACE_PRESETS:
+        delay_min, delay_max = PACE_PRESETS[pace]
     if delay_min is not None:
         cmd += ["--delay-min", str(delay_min)]
-    delay_max = getattr(a, "delay_max", None)
     if delay_max is not None:
         cmd += ["--delay-max", str(delay_max)]
     retries = getattr(a, "retries", None)
@@ -2258,8 +2315,11 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
     gf.add_argument("--pool", default=None, help="proxy list file for rotation")
     gf.add_argument("--retries", type=int, default=0, metavar="N", help="retries on access_restricted block (default: 0)")
     gf.add_argument("--no-proxy", action="store_true", help="alias for --proxy none: force direct connection")
-    gf.add_argument("--delay-min", type=float, default=20.0, metavar="SEC", help="min delay between accounts (default: 20s)")
-    gf.add_argument("--delay-max", type=float, default=45.0, metavar="SEC", help="max delay between accounts (default: 45s)")
+    gf.add_argument("--delay-min", type=float, default=None, metavar="SEC", help="min delay between accounts (overrides --pace)")
+    gf.add_argument("--delay-max", type=float, default=None, metavar="SEC", help="max delay between accounts (overrides --pace)")
+    gf.add_argument("--pace", choices=sorted(PACE_PRESETS), default="normal",
+                    help="per-account pacing: fast=20-45s, normal=60-90s (~1-1.5 min/account; avoids the "
+                         "'take a breath' throttle), safe=120-180s (default: normal)")
     gf.add_argument("--max-accounts", type=int, default=5, metavar="N", help="max accounts to process in this run (default: 5)")
     gf.add_argument("--mobile-rotate", action="store_true", help="rotate tethered phone carrier IP before run & retry on block")
 
@@ -2562,7 +2622,9 @@ def cmd_github(a) -> int:
         cmd = [py_camo, str(farm)] + map_github_farm_args(a, choice)
         print(col("yellow", "Note: Anti-bot CAPTCHA puzzles and Education attestation remain manual steps if encountered."))
         try:
-            return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, mobile_rotate=getattr(a, "mobile_rotate", False))
+            return run_with_mobile_retry(cmd, cwd=AUTO_FREECF,
+                                         mobile_rotate=getattr(a, "mobile_rotate", False),
+                                         account=f"github:{getattr(a, 'index', 1)}")
         finally:
             _stop_auto_gateways()
 
@@ -2765,7 +2827,9 @@ def cmd_gmail(a) -> int:
             cmd.append("--dry-run")
         if getattr(a, "random_password", False):
             cmd.append("--random-password")
-        return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, mobile_rotate=getattr(a, "mobile_rotate", False))
+        return run_with_mobile_retry(cmd, cwd=AUTO_FREECF,
+                                     mobile_rotate=getattr(a, "mobile_rotate", False),
+                                     account=f"gmail:{getattr(a, 'count', 1)}x")
 
     if sub == "dry-run":
         cmd = [py, str(gc), "--count", str(getattr(a, "count", 1) or 1), "--dry-run"]
@@ -3622,13 +3686,16 @@ def cmd_autofarm(a) -> int:
     mode = PROXY_NONE if force_none else (getattr(a, "proxy", None) or PROXY_AUTO)
     target = getattr(a, "url", None) or "https://example.com"
     choice = _choose_egress(mode, target)
+    _acct = f"autofarm:{target[:40]}"
     try:
         if force_none or not choice.proxy:
             # Tell autofarm explicitly to stay direct (it otherwise grabs pool[0]).
             cmd.append("--no-proxy")
-            return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, mobile_rotate=getattr(a, "mobile_rotate", False))
+            return run_with_mobile_retry(cmd, cwd=AUTO_FREECF,
+                                         mobile_rotate=getattr(a, "mobile_rotate", False), account=_acct)
         cmd += ["--proxy", choice.proxy]
-        return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, env=_proxy_env(choice), mobile_rotate=getattr(a, "mobile_rotate", False))
+        return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, env=_proxy_env(choice),
+                                     mobile_rotate=getattr(a, "mobile_rotate", False), account=_acct)
     finally:
         _stop_auto_gateways()
 
