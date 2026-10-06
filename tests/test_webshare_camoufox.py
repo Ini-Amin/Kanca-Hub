@@ -31,6 +31,7 @@ from scripts.webshare_camoufox import (
     is_dashboard_url,
     is_login_url,
     parse_proxy_line,
+    pick_signup_button,
     resolve_domain,
     should_keep_polling,
 )
@@ -220,6 +221,38 @@ class TestCLIParser(unittest.TestCase):
         self.assertEqual(args.domain, "kancalabs.my.id")
         self.assertEqual(args.out, "/tmp/custom_proxies.txt")
         self.assertEqual(args.proxy, "http://127.0.0.1:8888")
+
+
+class TestPickSignupButton(unittest.TestCase):
+    """Test suite for picking the exact email registration button and rejecting Google."""
+
+    def test_pick_exact_email_button(self) -> None:
+        labels = ["Sign up with Google", "Sign Up With Email"]
+        self.assertEqual(pick_signup_button(labels), "Sign Up With Email")
+
+    def test_pick_exact_email_button_reversed_order(self) -> None:
+        labels = ["Sign Up With Email", "Sign up with Google"]
+        self.assertEqual(pick_signup_button(labels), "Sign Up With Email")
+
+    def test_reject_google_only(self) -> None:
+        labels = ["Sign up with Google", "Continue with Google"]
+        self.assertIsNone(pick_signup_button(labels))
+
+    def test_reject_ambiguous_sign_up(self) -> None:
+        labels = ["Sign up with Google", "Sign Up"]
+        self.assertIsNone(pick_signup_button(labels))
+
+    def test_normalized_casing_and_whitespace(self) -> None:
+        labels = ["  Sign up with Email  "]
+        self.assertEqual(pick_signup_button(labels), "Sign up with Email")
+        labels = ["Sign\nUp\nWith\nEmail"]
+        self.assertEqual(pick_signup_button(labels), "Sign\nUp\nWith\nEmail")
+
+    def test_empty_and_invalid_inputs(self) -> None:
+        self.assertIsNone(pick_signup_button([]))
+        self.assertIsNone(pick_signup_button([""]))
+        self.assertIsNone(pick_signup_button(None))  # type: ignore
+        self.assertIsNone(pick_signup_button(["Login", "Register", "Submit"]))
 
 
 if __name__ == "__main__":
