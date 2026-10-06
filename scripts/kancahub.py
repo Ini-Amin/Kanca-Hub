@@ -1184,9 +1184,12 @@ def cmd_thk(a) -> int:
                 country=thk_allow if thk_allow else None,
                 exclude_countries=thk_exclude if thk_exclude else None,
             )
+            env = dict(_proxy_env(choice) or {})
             if choice.direct:
                 print(col("dim", "  [proxy] direct connection (no egress gateway acquired)"))
-            env = _proxy_env(choice)
+                # Harbor otherwise picks a random proxy from its own pool — tell it
+                # to stay direct so the user's egress (e.g. mobile tether) is used.
+                env["TOKENHARBOR_NO_PROXY"] = "1"
         try:
             return run(cmd, cwd=HARBOR, env=env)
         finally:
