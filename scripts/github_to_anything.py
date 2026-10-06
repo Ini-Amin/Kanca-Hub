@@ -385,25 +385,151 @@ async def capture_page_session(page: Any, host: str) -> dict[str, Any]:
     }
 
 
-def is_post_login_signal(page_url: str, session: dict[str, Any], initial_url: str) -> bool:
-    """Determine if session demonstrates an honest post-login state."""
-    u_low = page_url.lower()
-    init_low = initial_url.lower()
+THIRD_PARTY_AUTH_DOMAINS = {
+    "github.com",
+    "google.com",
+    "cloudflare.com",
+    "live.com",
+    "microsoft.com",
+    "apple.com",
+    "hcaptcha.com",
+    "recaptcha.net",
+}
 
-    # URL has navigated away from login/signin page to a dashboard/console/home
-    if (page_url != initial_url) and not any(k in u_low for k in ("/login", "/signin", "/signup", "/sign-in", "/sign-up", "/auth/login")):
+
+def is_target_domain(domain: str, target_host: str) -> bool:
+    """Check if domain or cookie domain matches the target host, excluding 3rd party auth domains."""
+    dom = domain.lstrip(".").lower()
+    thost = target_host.lstrip(".").lower()
+    if not dom or not thost:
+        return False
+
+    # Cookies/domains from github.com / google.com (or any third party) must NEVER count
+    for tpd in THIRD_PARTY_AUTH_DOMAINS:
+        if dom == tpd or dom.endswith("." + tpd):
+            return False
+
+    # Exact host match
+    if dom == thost:
         return True
 
-    # Important auth cookies exist
+    # dom is an apex/parent domain of target_host, e.g. dom='tiarina.cloud', target_host='console.tiarina.cloud'
+    # or cookie domain ends with target host, e.g. dom='console.tiarina.cloud', target_host='tiarina.cloud'
+    if thost.endswith("." + dom) or dom.endswith("." + thost):
+        return True
+
+    return False
+
+
+def is_login_path(path: str) -> bool:
+    """Check if a URL path indicates a login/signin/signup/auth page."""
+    p = path.lower().rstrip("/")
+    if not p:
+        return False
+
+    exact_matches = {
+        "/login",
+        "/signin",
+        "/sign-in",
+        "/sign_in",
+        "/signup",
+        "/sign-up",
+        "/sign_up",
+        "/register",
+        "/registration",
+        "/auth",
+        "/auth/login",
+        "/auth/signin",
+        "/auth/signup",
+        "/account/login",
+        "/accounts/login",
+        "/session/new",
+        "/sessions/new",
+        "/oauth/authorize",
+        "/oauth/login",
+    }
+    if p in exact_matches:
+        return True
+
+    segments = [s for s in p.split("/") if s]
+    for seg in segments:
+        seg_base = seg.split(".")[0]
+        if seg_base in (
+            "login",
+            "signin",
+            "sign-in",
+            "sign_in",
+            "signup",
+            "sign-up",
+            "sign_up",
+            "register",
+            "registration",
+        ):
+            return True
+        if seg in ("oauth", "auth") and seg == segments[-1]:
+            return True
+
+    return False
+
+
+def is_post_login_signal(
+    page_url: str,
+    session: dict[str, Any],
+    initial_url: str,
+    host: str | None = None,
+) -> bool:
+    """Determine if session demonstrates an honest post-login state strictly on the target host."""
+    parsed_init = urllib.parse.urlparse(initial_url)
+    target_host = host or parsed_init.netloc.split(":")[0] or session.get("host") or ""
+    target_host = target_host.lower()
+    if not target_host:
+        return False
+
+    parsed_page = urllib.parse.urlparse(page_url)
+    page_host = parsed_page.netloc.split(":")[0].lower()
+
+    # Must be on the target host (never stuck on github.com or third-party auth provider)
+    if not is_target_domain(page_host, target_host):
+        return False
+
+    # Negative guard: If still on a login/signin/auth URL of the target host, it must return False
+    if is_login_path(parsed_page.path):
+        return False
+
+    # (a) URL is on target host AND clearly NOT a login/signin/signup/auth page
+    #     AND has changed from the initial URL path (e.g. /login -> /dashboard, /console, /ai, /overview, or root)
+    init_path = parsed_init.path.rstrip("/")
+    cur_path = parsed_page.path.rstrip("/")
+    if cur_path != init_path and not is_login_path(cur_path):
+        return True
+
+    # (b) At least ONE cookie whose domain ENDS WITH the target host (e.g. tiarina.cloud)
+    #     AND whose name/use indicates a session/token (excluding csrf/xsrf and logged-out flags)
     cookies = session.get("cookies", [])
-    auth_cookies = [c for c in cookies if any(k in c.get("name", "").lower() for k in ("token", "session", "auth", "jwt", "sid", "logged_in"))]
-    if auth_cookies:
-        return True
+    for c in cookies:
+        cdom = c.get("domain", "")
+        if not is_target_domain(cdom, target_host):
+            continue
+        cname = c.get("name", "").lower()
+        if "csrf" in cname or "xsrf" in cname:
+            continue
+        val = str(c.get("value", "")).lower()
+        if not val or val in ("no", "false", "0", "null", "undefined", "deleted"):
+            continue
+        if any(k in cname for k in ("token", "session", "auth", "jwt", "sid", "logged_in", "access_token", "refresh_token", "id_token")):
+            return True
 
-    # LocalStorage contains tokens
+    # (c) LocalStorage contains an auth token clearly not from third-party domains
     storage = session.get("storage", {})
-    if any("token" in k.lower() or "auth" in k.lower() or "jwt" in k.lower() for k in storage.keys()):
-        return True
+    if isinstance(storage, dict):
+        for k, v in storage.items():
+            k_low = k.lower()
+            if "csrf" in k_low or "xsrf" in k_low:
+                continue
+            if not v or str(v).lower() in ("false", "null", "undefined", ""):
+                continue
+            if any(kw in k_low for kw in ("token", "auth", "jwt", "session")):
+                return True
 
     return False
 
@@ -550,7 +676,7 @@ async def run_single_site_flow(
                 await asyncio.sleep(1.0)
 
             session = await capture_page_session(page, host)
-            if is_post_login_signal(page.url, session, target_url):
+            if is_post_login_signal(page.url, session, target_url, host=host):
                 print(f"  ✓ Honest success: Post-login verified at {page.url}!")
                 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
                 out_file = RESULTS_DIR / f"{host}_session.json"
@@ -571,8 +697,40 @@ async def run_single_site_flow(
                     print(f"  [+] 9Router injection target: {inject_9router}")
                 return 0, record
             else:
-                print(f"  ✗ Post-login signal not detected at {page.url}. Stopping honestly.", file=sys.stderr)
-                return 1, {"stage": "github_post_login_unverified", "url": page.url}
+                fail_msg = f"login did not complete — still on {page.url}; no target session cookie"
+                print(f"  ✗ {fail_msg}", file=sys.stderr, flush=True)
+                RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+                failed_file = RESULTS_DIR / f"{host}_failed.json"
+                record = {
+                    "target": target_url,
+                    "host": host,
+                    "auth_method": "github",
+                    "account": login_id,
+                    "final_url": page.url,
+                    "session": session,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "success": False,
+                    "error": "login_incomplete",
+                    "message": fail_msg,
+                }
+                failed_file.write_text(json.dumps(record, indent=2), encoding="utf-8")
+                print(f"  [!] Saved failure record -> {failed_file}", flush=True)
+
+                # Ensure no stale false-success session file remains on disk
+                success_file = RESULTS_DIR / f"{host}_session.json"
+                if success_file.exists():
+                    try:
+                        existing = json.loads(success_file.read_text(encoding="utf-8"))
+                        if not is_post_login_signal(
+                            existing.get("final_url", ""),
+                            existing.get("session", {}),
+                            target_url,
+                            host=host,
+                        ):
+                            success_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return 1, record
 
         # ── 4. Google Social Notice ──
         if auth_method == "google":
@@ -693,7 +851,7 @@ async def run_single_site_flow(
         print()
 
         session = await capture_page_session(page, host)
-        if verified or is_post_login_signal(page.url, session, target_url):
+        if is_post_login_signal(page.url, session, target_url, host=host):
             print(f"  ✓ Honest success: Email signup verified at {page.url}!")
             RESULTS_DIR.mkdir(parents=True, exist_ok=True)
             out_file = RESULTS_DIR / f"{host}_session.json"
@@ -710,9 +868,40 @@ async def run_single_site_flow(
             out_file.write_text(json.dumps(record, indent=2), encoding="utf-8")
             print(f"  [+] Saved session -> {out_file}")
             return 0, record
+        else:
+            fail_msg = f"login did not complete — still on {page.url}; no target session cookie"
+            print(f"  ✗ {fail_msg}", file=sys.stderr, flush=True)
+            RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+            failed_file = RESULTS_DIR / f"{host}_failed.json"
+            record = {
+                "target": target_url,
+                "host": host,
+                "auth_method": "email",
+                "email": temp_email,
+                "final_url": page.url,
+                "session": session,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "success": False,
+                "error": "login_incomplete",
+                "message": fail_msg,
+            }
+            failed_file.write_text(json.dumps(record, indent=2), encoding="utf-8")
+            print(f"  [!] Saved failure record -> {failed_file}", flush=True)
 
-        print(f"  ✗ Verification incomplete or timed out. Stopped at {page.url}", file=sys.stderr)
-        return 1, {"stage": "verification_timeout", "url": page.url}
+            success_file = RESULTS_DIR / f"{host}_session.json"
+            if success_file.exists():
+                try:
+                    existing = json.loads(success_file.read_text(encoding="utf-8"))
+                    if not is_post_login_signal(
+                        existing.get("final_url", ""),
+                        existing.get("session", {}),
+                        target_url,
+                        host=host,
+                    ):
+                        success_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return 1, record
 
 
 # ─────────────────────────────────────────────────────────── CLI & Main Entry
