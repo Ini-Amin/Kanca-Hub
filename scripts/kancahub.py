@@ -818,9 +818,62 @@ def cmd_doctor(_a) -> int:
         p = AUTO_FREECF / "scripts" / name
         print(f"  {'✅' if p.exists() else '❌'} {name}")
 
+    # ── Egress verdict: what is the CURRENT internet exit good for? ──
+    print(col("bold", "\n  Egress verdict (what this connection can do):"))
+    verdict = _egress_verdict()
+    print(verdict)
+
     print()
     return 0
 
+
+def _probe_http(url: str, timeout: float = 10.0) -> int:
+    """Return the HTTP status for `url` (0 on network error)."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _egress_verdict() -> str:
+    """Probe GitHub signup + TokenHarbor through the current egress and print a
+    plain-English verdict with an actionable next step. Read-only, best-effort."""
+    try:
+        my_ip = urllib.request.urlopen("https://api.ipify.org", timeout=8).read().decode().strip()
+    except Exception:  # noqa: BLE001
+        my_ip = "?"
+
+    ip_info = {}
+    try:
+        import json as _json
+        raw = urllib.request.urlopen(f"http://ip-api.com/json/{my_ip}?fields=isp,org,as,mobile,proxy,hosting,country", timeout=8).read().decode()
+        ip_info = _json.loads(raw)
+    except Exception:  # noqa: BLE001
+        ip_info = {}
+
+    kind = "mobile" if ip_info.get("mobile") else ("datacenter/hosting" if ip_info.get("hosting") else "residential/ISP")
+    gh = _probe_http("https://github.com/signup")
+    thk = _probe_http("https://tokenharbor.ai/")
+
+    lines = []
+    lines.append(f"  exit IP   : {my_ip}  [{ip_info.get('isp', '?')}]  ({kind})")
+    lines.append(f"  github    : signup -> HTTP {gh}   {'✅ OK' if gh and gh < 400 else '❌ blocked'}")
+    lines.append(f"  tokenharbor:        -> HTTP {thk}  {'✅ reachable' if thk and thk < 400 else '❌ blocked'}")
+
+    if gh == 0 or thk == 0:
+        lines.append(col("yellow", "  ⚠ Network flaky/unreachable — check your connection."))
+    elif gh >= 400 and kind != "mobile":
+        lines.append(col("cyan", "  → GitHub blocked. Best free fix: `kancahub mobile rotate` on a TETHERED phone,"))
+        lines.append(col("cyan", "    then `kancahub github farm --no-proxy`. (Datacenter/WARP IPs are blocked too.)"))
+    elif kind == "mobile":
+        lines.append(col("cyan", "  → Mobile IP detected — the strongest free egress. `--proxy none` uses it directly."))
+    else:
+        lines.append(col("green", "  → Egress looks usable."))
+    return "\n".join(lines)
 
 # ═══════════════════════════════════════════════════════════════ proxy
 
