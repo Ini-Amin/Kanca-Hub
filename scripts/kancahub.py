@@ -1145,6 +1145,88 @@ def _ledger_record(farm: str, *, target: str = "", egress: str = "", exit_ip: st
         pass
 
 
+def _r9_cli_token() -> str:
+    """9Router x-9r-cli-token = sha256(machineId + '9r-cli-auth' + cliSecret)[:16]."""
+    import hashlib
+    env_token = os.environ.get("R9_TOKEN") or os.environ.get("NINE_ROUTER_CLI_TOKEN")
+    if env_token:
+        return env_token.strip()
+    try:
+        mid = (Path.home() / ".9router" / "machine-id").read_text().strip()
+        sec = (Path.home() / ".9router" / "auth" / "cli-secret").read_text().strip()
+        return hashlib.sha256((mid + "9r-cli-auth" + sec).encode()).hexdigest()[:16]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _r9_api(method: str, path: str, *, body: dict | None = None, base: str = "http://localhost:20128") -> tuple[int, str]:
+    import urllib.request as _u
+    url = base.rstrip("/") + path
+    data = json.dumps(body).encode() if body is not None else None
+    req = _u.Request(url, data=data, method=method)
+    req.add_header("x-9r-cli-token", _r9_cli_token())
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with _u.urlopen(req, timeout=15) as r:
+            return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode(errors="replace")
+    except Exception as e:  # noqa: BLE001
+        return 0, str(e)
+
+
+def cmd_9router(a) -> int:
+    """9Router helpers — including the MITM proxy (route Antigravity/Copilot/Kiro
+    IDE traffic through 9Router). Mirrors the web /dashboard/mitm page in the CLI."""
+    sub = getattr(a, "r9_cmd", None) or "status"
+    base = getattr(a, "base", None) or "http://localhost:20128"
+
+    if sub == "mitm":
+        action = getattr(a, "action", "status")
+        tool = getattr(a, "tool", "antigravity")
+        if action == "status":
+            code, resp = _r9_api("GET", "/api/cli-tools/antigravity-mitm", base=base)
+            if code != 200:
+                print(col("red", f"✗ 9Router mitm status failed (HTTP {code}): {resp[:200]}"))
+                print(col("dim", "  is 9Router running on :20128?  kancahub doctor"))
+                return 1
+            try:
+                d = json.loads(resp)
+            except Exception:  # noqa: BLE001
+                print(resp)
+                return 0
+            print(col("bold", "\n  9Router MITM proxy status:\n"))
+            print(f"   running      : {'✅ yes' if d.get('running') else '➖ no'}")
+            print(f"   cert exists  : {'✅' if d.get('certExists') else '➖'}   trusted: {'✅' if d.get('certTrusted') else '➖'}")
+            dns = d.get("dnsStatus", {})
+            print(f"   dns redirects: " + ", ".join(f"{k}={'on' if v else 'off'}" for k, v in dns.items()))
+            print(f"   needs sudo   : {d.get('needsSudoPassword')}")
+            print(col("dim", f"   router URL   : {d.get('mitmRouterBaseUrl')}"))
+            print(col("dim", "   enable: kancahub 9router mitm enable --tool antigravity --sudo-password <pw>"))
+            return 0
+        if action in ("enable", "disable", "trust-cert"):
+            body = {"tool": tool, "action": action}
+            pw = getattr(a, "sudo_password", None) or os.environ.get("KANCAHUB_SUDO_PASSWORD")
+            if pw:
+                body["sudoPassword"] = pw
+            code, resp = _r9_api("POST", "/api/cli-tools/antigravity-mitm", body=body, base=base)
+            ok = 200 <= code < 300
+            print(col("green" if ok else "red", f"  {'✓' if ok else '✗'} mitm {action} ({tool}) -> HTTP {code}"))
+            if not ok and "sudo" in resp.lower():
+                print(col("yellow", "  needs a sudo password: pass --sudo-password or set KANCAHUB_SUDO_PASSWORD"))
+            if resp and not ok:
+                print(col("dim", f"  {resp[:200]}"))
+            return 0 if ok else 1
+        print(col("yellow", f"unknown mitm action '{action}'"))
+        return 1
+
+    print(col("bold", "\n  9Router CLI\n"))
+    print("   [status] 9Router health")
+    print("   mitm status|enable|disable|trust-cert   (route IDE traffic through 9Router)")
+    return 0
+
+
 def cmd_ip_reuse(a) -> int:
     """Show the CGNAT-aware session guard: exit-IP reuse per IP + mid-session changes."""
     py = pick_python()
@@ -2808,8 +2890,11 @@ def cmd_gmail(a) -> int:
         return run([py, str(gc), "--check"], cwd=AUTO_FREECF)
 
     if sub == "farm":
-        plus_addr = getattr(a, "plus_address", None)
-        plus_pfx = getattr(a, "plus_prefix", "farm") or "farm"
+        # Base Gmail for plus-addressing: --plus-address wins, else read it from
+        # ~/.config/auto-freecf/.env (GMAIL_FARM_ADDRESS). No password needed here —
+        # the farm only needs the base ADDRESS to make you+tag@gmail.com variants.
+        plus_addr = getattr(a, "plus_address", None) or _env_get("GMAIL_FARM_ADDRESS", ENV_FILE) or None
+        plus_pfx = getattr(a, "plus_prefix", None) or _env_get("GMAIL_FARM_PREFIX", ENV_FILE) or "farm"
         count = getattr(a, "count", 1) or 1
         if plus_addr:
             samples = [make_plus_address(plus_addr, plus_pfx, i + 1) for i in range(min(count, 3))]
@@ -3137,6 +3222,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="group")
     sub.add_parser("doctor", help="health + dependency check across all tools, services & proxies")
+    r9 = sub.add_parser("9router", help="9Router helpers incl. the MITM proxy (route Antigravity/Copilot/Kiro IDE traffic through 9Router)")
+    r9s = r9.add_subparsers(dest="r9_cmd")
+    r9m = r9s.add_parser("mitm", help="9Router MITM proxy: status/enable/disable/trust-cert")
+    r9m.add_argument("action", nargs="?", default="status", choices=["status", "enable", "disable", "trust-cert"])
+    r9m.add_argument("--tool", default="antigravity", help="IDE tool: antigravity|copilot|kiro|cursor (default antigravity)")
+    r9m.add_argument("--sudo-password", default=None, help="sudo password (mitm binds :443 + installs a CA)")
+    r9m.add_argument("--base", default="http://localhost:20128", help="9Router base URL (default :20128)")
     ipr = sub.add_parser("ip-reuse", help="CGNAT session guard: exit-IP reuse per IP + mid-session IP changes")
     ipr.add_argument("--clear", action="store_true", help="clear the recorded session history")
     en = sub.add_parser("egress-node", help="use a device's OWN connection as an egress node (phone/PC on the same network)")
@@ -3594,6 +3686,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_doctor(args)
     if g == "report":
         return cmd_report(args)
+    if g == "9router":
+        return cmd_9router(args)
     if g == "ip-reuse":
         return cmd_ip_reuse(args)
     if g == "egress-node":
@@ -3729,6 +3823,9 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
     ("16", "School mailbox: wait for OTP", "mail otp", ["mail", "otp"]),
     ("17", "Find SheerID links", "k12 link-finder", ["k12", "link-finder"]),
     ("18", "List teacher-doc countries", "yowes list", ["yowes", "list"]),
+
+    # Group 6: 9Router IDE interception
+    ("19", "9Router MITM proxy status (route IDE traffic)", "9router mitm status", ["9router", "mitm", "status"]),
 ]
 
 MENU_STAGE_HEADERS: dict[str, str] = {
@@ -3737,6 +3834,7 @@ MENU_STAGE_HEADERS: dict[str, str] = {
     "5": "[3] Account Farms (GitHub · Cloudflare · TokenHarbor · Grok · K-12 · Gmail)",
     "12": "[4] 9Router Integration (inject · sync · prune)",
     "15": "[5] Mailbox & Verification Docs (mail · SheerID · docs)",
+    "19": "[6] IDE Interception (MITM · Antigravity/Copilot/Kiro)",
 }
 
 
