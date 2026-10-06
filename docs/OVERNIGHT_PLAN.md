@@ -51,6 +51,19 @@ Owner: Supervisor (sole). Workers: worker2, worker3, worker5, worker7, worker8 (
 - Commit conventional messages; report hash + test evidence.
 - mailbot relays each completion to reviewer; reviewer audits + merges.
 
+## RESUME STATE (updated when user left for college, 2026-10-06)
+User is at college; work continues between classes. Pick up here.
+- W7 (github farm domain+rate) — DONE. Branch feature/github-farm-domain-inbox, commit 6b48738.
+  32 tests pass. New flags: --email-domain {binus,bizid,myid}, --inbox {binus,relay},
+  --delay-min/--delay-max (20/45), --max-accounts (5). BackoffManager (429/403).
+- W3 (zt-harvester) — DONE (branch feature/zt-harvester-integrate, commit 19188bc).
+  Blocker: Cloudflare bot-check on app.zerotwo.ai; router9 handshake mismatch documented.
+- W2 (provider GitHub matrix) — IN PROGRESS by worker2 (branch feature/provider-github-matrix).
+- W5 (tokenmix-bulk-creator) — TODO (branch feature/tokenmix-integrate).
+- W8 (email-signup requirements for no-GitHub providers) — TODO, after W2.
+- Gmail-infinity (Appium/emulator path) — DEFERRED to when user is back.
+- Reviewer must audit + merge every branch (nothing merged to main yet from this batch).
+
 ## RATE LIMIT / SPEED POLICY (user directive: no spam, no high rate)
 Every farm/harvest/signup MUST be slow and polite by default. Applies to ALL workstreams:
 - **concurrency = 1** everywhere (no parallel accounts).
