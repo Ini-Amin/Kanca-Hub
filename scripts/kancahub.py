@@ -434,6 +434,27 @@ def cmd_adb(a) -> int:
     return run(cmd, cwd=AUTO_FREECF)
 
 
+def cmd_mobile(a) -> int:
+    """Rotate/expose the tethered phone's MOBILE carrier IP (a real mobile IP is
+    accepted by TokenHarbor/GitHub where datacenter/WARP are blocked)."""
+    py = pick_python()
+    tool = AUTO_FREECF / "scripts" / "mobile_rotate.py"
+    if not tool.exists():
+        print(col("red", "✗ mobile_rotate.py not found"))
+        return 1
+    cmd = [py, str(tool)]
+    sub = getattr(a, "mobile_cmd", None) or "status"
+    if sub == "status":
+        cmd.append("--status")
+    elif sub == "rotate":
+        cmd.append("--rotate")
+        if getattr(a, "until", None):
+            cmd += ["--rotate-until", a.until]
+        if getattr(a, "wait", None):
+            cmd += ["--wait", str(a.wait)]
+    return run(cmd, cwd=AUTO_FREECF)
+
+
 def cmd_doctor(_a) -> int:
     banner("KancaHub doctor")
     py = pick_python()
@@ -2363,6 +2384,13 @@ def build_parser() -> argparse.ArgumentParser:
     ads.add_parser("setup", help="enable Wi-Fi (tcpip) mode and show the phone IP")
     adc = ads.add_parser("connect", help="connect over Wi-Fi")
     adc.add_argument("addr", help="phone IP or IP:port")
+    # ---- mobile (rotate the tethered phone's carrier IP = a "free residential" hop) ----
+    mop = sub.add_parser("mobile", help="rotate the tethered phone's MOBILE carrier IP (real mobile IP bypasses datacenter blocks)")
+    mos = mop.add_subparsers(dest="mobile_cmd")
+    mos.add_parser("status", help="show the phone + current egress IP (default)")
+    mor = mos.add_parser("rotate", help="toggle airplane mode to get a fresh carrier IP")
+    mor.add_argument("--until", default=None, help="keep rotating until the new IP starts with this prefix")
+    mor.add_argument("--wait", type=float, default=20.0, help="max seconds to wait for the new IP (default 20)")
     sub.add_parser("menu", help="classic numbered command menu (advanced users)")
 
     # ---- warp ----
@@ -2765,6 +2793,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return beginner_entry(p)
     if g == "adb":
         return cmd_adb(args)
+    if g == "mobile":
+        return cmd_mobile(args)
     if g == "menu":
         return interactive_mode(p)
     if g == "warp":
