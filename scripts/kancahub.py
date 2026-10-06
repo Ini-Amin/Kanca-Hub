@@ -3808,6 +3808,10 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
     _, farm_label, farm_args, inject_args, sync_args = selected_farm
     print(col("cyan", f"\n▶ Selected pipeline target: {farm_label}\n"))
 
+    # Ask for count/pace/egress IN THE CLI so end-to-end is fully guided too.
+    farm_args = _menu_ask_farm_options(f_choice, list(farm_args))
+    print(col("dim", f"  → will run: kancahub {' '.join(farm_args)}\n"))
+
     # ── Step (a): Proxy Egress Verification / Start ──
     print(col("bold", "[Step 1/4] Egress check / proxy verification…"))
     rc_egress = dispatch(p, p.parse_args(["proxy", "verify"]))
@@ -3861,6 +3865,71 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
     print(col("green", f"✓ End-to-end setup for {farm_label} completed successfully!"))
     print(col("green", "════════════════════════════════════════════════════════════════\n"))
     return 0
+
+
+# Menu keys that are account farms -> the menu asks for count/pace/egress in-CLI.
+MENU_FARM_KEYS = {"5", "8", "9", "10", "11", "7"}
+
+
+def _farm_kind(key: str, argv: list[str]) -> str:
+    """Normalize a menu key / argv into a farm kind: github|thk|grok|gmail|other."""
+    joined = " ".join(argv)
+    if "github" in joined:
+        return "github"
+    if "thk" in joined:
+        return "thk"
+    if "grok" in joined:
+        return "grok"
+    if "gmail" in joined:
+        return "gmail"
+    return "other"
+
+
+def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
+    """Prompt IN THE CLI for common farm options and append them to argv.
+
+    Keeps everything inside `kancahub` (no need to remember flags). Every prompt
+    has a default, so just pressing Enter keeps sensible behavior. Works for both
+    the unified-menu keys and the end-to-end pipeline keys.
+    """
+    def _ask(prompt: str, default: str) -> str:
+        try:
+            v = input(f"   {col('bold', prompt)} [{default}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return default
+        return v or default
+
+    kind = _farm_kind(key, argv)
+    if kind == "other":
+        return argv
+
+    print(col("dim", "   (Enter = keep default; these run inside this CLI)"))
+
+    # 1) how many accounts
+    n = _ask("how many accounts", "1")
+    if kind == "thk":
+        argv = ["thk", "batch", n]
+    elif kind == "grok":
+        argv = ["grok", "run", "-n", n]
+    elif kind == "gmail":
+        argv = ["gmail", "farm", "--count", n]
+    elif kind == "github":
+        argv = [a for a in argv if a not in ("--max-accounts",)]  # drop dupes if re-run
+        if n.isdigit() and n != "1":
+            argv += ["--max-accounts", n]
+
+    # 2) pacing (github only supports --pace today)
+    pace = _ask("pace (fast/normal/safe)", "normal")
+    if kind == "github" and pace in ("fast", "normal", "safe"):
+        argv += ["--pace", pace]
+
+    # 3) egress
+    egress = _ask("egress (auto/none/mobile/warp)", "auto")
+    if egress == "mobile":
+        argv += ["--mobile-rotate"]
+    elif egress in ("auto", "none", "warp"):
+        argv += ["--proxy", egress]
+    return argv
 
 
 def _jobs_menu(jobs: "JobRegistry") -> None:
@@ -3961,6 +4030,12 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
             jobs.start(job, [sys.executable, str(SCRIPTS_DIR / "kancahub.py")] + MENU_BACKGROUND_CMD.get(_key, cmd_args))
             print(col("dim", "  the menu stays usable — choose [j] to see/stop jobs.\n"))
             continue
+
+        # Farm items: ask for count/pace/egress IN THE CLI (all inside kancahub).
+        if _key in MENU_FARM_KEYS:
+            print()
+            cmd_args = _menu_ask_farm_options(_key, list(cmd_args))
+            cmd_str = " ".join(cmd_args)
 
         print(col("cyan", f"\n▶ Running: kancahub {cmd_str}\n"))
         try:

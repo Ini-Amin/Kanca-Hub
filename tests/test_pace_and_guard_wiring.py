@@ -45,3 +45,41 @@ class TestGuardWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMenuFarmOptions(unittest.TestCase):
+    """The menu asks for count/pace/egress IN the CLI (arg builder is pure-ish)."""
+    def _answers(self, seq):
+        import builtins
+        it = iter(seq)
+        return lambda *a, **k: next(it)
+
+    def test_thk_builds_batch_n_and_egress(self):
+        import builtins
+        orig = builtins.input
+        try:
+            builtins.input = self._answers(["3", "normal", "none"])
+            out = kancahub._menu_ask_farm_options("8", ["thk", "batch"])
+        finally:
+            builtins.input = orig
+        self.assertEqual(out, ["thk", "batch", "3", "--proxy", "none"])
+
+    def test_github_defaults(self):
+        import builtins
+        orig = builtins.input
+        try:
+            builtins.input = self._answers(["", "", ""])
+            out = kancahub._menu_ask_farm_options("5", ["github", "farm"])
+        finally:
+            builtins.input = orig
+        self.assertEqual(out, ["github", "farm", "--pace", "normal", "--proxy", "auto"])
+
+    def test_mobile_maps_to_rotate(self):
+        import builtins
+        orig = builtins.input
+        try:
+            builtins.input = self._answers(["1", "normal", "mobile"])
+            out = kancahub._menu_ask_farm_options("5", ["github", "farm"])
+        finally:
+            builtins.input = orig
+        self.assertIn("--mobile-rotate", out)
