@@ -3923,8 +3923,8 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
     if kind == "github" and pace in ("fast", "normal", "safe"):
         argv += ["--pace", pace]
 
-    # 3) egress
-    egress = _ask("egress (auto/none/mobile/warp)", "auto")
+    # 3) egress  (auto = best available ladder incl. mobile; none = your raw connection)
+    egress = _ask("egress — auto=best-available(incl. phone) / none=direct / mobile / warp", "auto")
     if egress == "mobile":
         argv += ["--mobile-rotate"]
     elif egress in ("auto", "none", "warp"):
