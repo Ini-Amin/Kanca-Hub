@@ -827,6 +827,51 @@ def cmd_doctor(_a) -> int:
     return 0
 
 
+def _ledger_record(farm: str, *, target: str = "", egress: str = "", exit_ip: str = "",
+                   stage: str = "", ok: bool = False, count: int = 0, note: str = "") -> None:
+    """Best-effort append to the farm run ledger (never raises)."""
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import farm_ledger
+        farm_ledger.record(farm, target=target, egress=egress, exit_ip=exit_ip,
+                           stage=stage, ok=ok, count=count, note=note)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def cmd_report(a) -> int:
+    """Show the farm run ledger (what each farm attempt produced / where it stopped)."""
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    try:
+        import farm_ledger
+    except Exception as e:  # noqa: BLE001
+        print(col("red", f"✗ farm_ledger unavailable: {e}"))
+        return 1
+    if getattr(a, "clear", False):
+        try:
+            Path(farm_ledger.LEDGER_PATH).unlink()
+            print(col("green", f"✓ cleared {farm_ledger.LEDGER_PATH}"))
+        except FileNotFoundError:
+            print(col("dim", "nothing to clear"))
+        except Exception as e:  # noqa: BLE001
+            print(col("red", f"✗ {e}"))
+            return 1
+        return 0
+    print(col("bold", f"\n  Farm run ledger  ({farm_ledger.LEDGER_PATH})\n"))
+    print(farm_ledger.summarize(farm_ledger.read()))
+    n = int(getattr(a, "tail", 0) or 0)
+    if n:
+        print(col("bold", f"\n  Last {n} runs:\n"))
+        for r in farm_ledger.read()[-n:]:
+            flag = "✅" if r.get("ok") else "❌"
+            print(f"  {flag} {r.get('ts','')} {r.get('farm',''):<9} "
+                  f"egress={r.get('egress','') or '-':<12} stage={r.get('stage','') or '-':<16} "
+                  f"n={r.get('count',0)}")
+    print()
+    return 0
+
+
 def _probe_http(url: str, timeout: float = 10.0) -> int:
     """Return the HTTP status for `url` (0 on network error)."""
     try:
@@ -1428,7 +1473,17 @@ def cmd_thk(a) -> int:
                 # to stay direct so the user's egress (e.g. mobile tether) is used.
                 env["TOKENHARBOR_NO_PROXY"] = "1"
         try:
-            return run_with_mobile_retry(cmd, cwd=HARBOR, env=env, mobile_rotate=getattr(a, "mobile_rotate", False))
+            rc = run_with_mobile_retry(cmd, cwd=HARBOR, env=env,
+                                       mobile_rotate=getattr(a, "mobile_rotate", False))
+            # Record every thk batch attempt so 'kancahub report' can show what worked.
+            _ledger_record(
+                "thk",
+                target=EGRESS_TARGETS["thk"],
+                egress=("mobile" if getattr(a, "mobile_rotate", False) else (choice.source if 'choice' in dir() else "")),
+                stage=("created" if rc == 0 else "failed"),
+                ok=(rc == 0),
+            )
+            return rc
         finally:
             _stop_auto_gateways()
 
@@ -2597,6 +2652,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="group")
     sub.add_parser("doctor", help="health + dependency check across all tools, services & proxies")
+    rep = sub.add_parser("report", help="show the farm run ledger (what worked/failed across runs)")
+    rep.add_argument("-n", "--tail", type=int, default=0, help="also show the last N entries")
+    rep.add_argument("--clear", action="store_true", help="clear the ledger")
     sub.add_parser("beginner", help="guided, plain-English mode — start here if you're new")
     # ---- adb (Android device for trusted Google signups) ----
     adp = sub.add_parser("adb", help="Android device (ADB) — connect a phone for trusted Google signups")
@@ -3024,6 +3082,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     if g == "doctor":
         return cmd_doctor(args)
+    if g == "report":
+        return cmd_report(args)
     if g == "beginner":
         return beginner_entry(p)
     if g == "adb":
