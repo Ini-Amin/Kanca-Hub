@@ -22,6 +22,7 @@ import random
 import re
 import socket
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -49,6 +50,84 @@ SOCKS4_FEEDS = [
 _IPPORT = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3}):(\d{2,5})\s*$")
 
 DEFAULT_TEST_URL = "https://api.ipify.org"
+
+# Cache per IP: ip -> (country_code, country_name, resolved)
+_IP_COUNTRY_CACHE: dict[str, tuple[str, str, bool]] = {}
+_IP_CACHE_LOCK = threading.Lock()
+
+
+def lookup_ip_country(ip: str, timeout: float = 2.5) -> tuple[str, str, bool]:
+    """Look up countryCode and country name for an egress IP via ip-api.com.
+
+    Returns (country_code, country_name, resolved: bool).
+    Thread-safe and cached per IP. Degrades gracefully on timeout/network failure.
+    """
+    if not ip or not isinstance(ip, str):
+        return "", "", False
+
+    clean_ip = ip.strip()
+    with _IP_CACHE_LOCK:
+        if clean_ip in _IP_COUNTRY_CACHE:
+            return _IP_COUNTRY_CACHE[clean_ip]
+
+    cc, name, resolved = "", "", False
+    # Rate limit guard: ip-api free tier is 45 req/min. Short timeout, degrade gracefully.
+    try:
+        url = f"https://ip-api.com/json/{clean_ip}?fields=countryCode,country,proxy,hosting"
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/7.88.1"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", "ignore"))
+            if isinstance(data, dict):
+                cc = str(data.get("countryCode") or "").strip().upper()
+                name = str(data.get("country") or "").strip()
+                resolved = bool(cc)
+    except Exception:
+        # Fall back to http if https fails
+        try:
+            url_http = f"http://ip-api.com/json/{clean_ip}?fields=countryCode,country,proxy,hosting"
+            req_http = urllib.request.Request(url_http, headers={"User-Agent": "curl/7.88.1"})
+            with urllib.request.urlopen(req_http, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", "ignore"))
+                if isinstance(data, dict):
+                    cc = str(data.get("countryCode") or "").strip().upper()
+                    name = str(data.get("country") or "").strip()
+                    resolved = bool(cc)
+        except Exception:
+            resolved = False
+
+    res = (cc, name, resolved)
+    with _IP_CACHE_LOCK:
+        _IP_COUNTRY_CACHE[clean_ip] = res
+    return res
+
+
+def country_allowed(
+    cc: str | None,
+    allow: set[str] | Iterable[str] | None = None,
+    exclude: set[str] | Iterable[str] | None = None,
+    resolved: bool = True,
+) -> bool:
+    """Determine if country code `cc` is permitted under allow/exclude rules.
+
+    Semantics:
+      - If resolved is False: keep (True) UNLESS allow is set and non-empty.
+      - If resolved is True:
+        * reject if cc is in exclude
+        * if allow is set, accept only if cc is in allow
+        * otherwise accept (True)
+    """
+    allow_set = {str(c).strip().upper() for c in allow if str(c).strip()} if allow else set()
+    exclude_set = {str(c).strip().upper() for c in exclude if str(c).strip()} if exclude else set()
+
+    if not resolved:
+        return not bool(allow_set)
+
+    code = (cc or "").strip().upper()
+    if code and code in exclude_set:
+        return False
+    if allow_set:
+        return bool(code and code in allow_set)
+    return True
 
 
 # ───────────────────────────────────────────── harvest
@@ -112,10 +191,13 @@ def _check_one(cand: dict, test_url: str, timeout: float) -> dict | None:
         )
         body = (r.stdout or "").strip()
         if body and re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", body):
+            cc, country_name, resolved = lookup_ip_country(body)
             return {
                 "proxy": proxy, "protocol": proto, "scheme": scheme,
                 "latency_ms": int((time.time() - start) * 1000),
                 "egress": body, "anonymity": "elite" if body != "" else "unknown",
+                "country_code": cc, "country": country_name,
+                "country_resolved": resolved,
             }
     except Exception:
         pass
@@ -124,16 +206,23 @@ def _check_one(cand: dict, test_url: str, timeout: float) -> dict | None:
 
 def validate(candidates: list[dict], target: int = 20, timeout: float = 4.0,
              workers: int = 100, test_url: str = DEFAULT_TEST_URL,
-             on_live=None) -> list[dict]:
+             on_live=None,
+             countries: set[str] | Iterable[str] | None = None,
+             exclude_countries: set[str] | Iterable[str] | None = None) -> list[dict]:
     """Concurrently test candidates until `target` live ones are found."""
     live: list[dict] = []
     checked = 0
+    limit = max(target * 50, len(candidates)) if (countries or exclude_countries) else max(target * 25, target)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(_check_one, c, test_url, timeout): c for c in candidates[: max(target * 25, target)]}
+        futs = {ex.submit(_check_one, c, test_url, timeout): c for c in candidates[:limit]}
         for fut in concurrent.futures.as_completed(futs):
             checked += 1
             res = fut.result()
             if res:
+                cc = res.get("country_code", "")
+                resolved = res.get("country_resolved", bool(cc))
+                if not country_allowed(cc, allow=countries, exclude=exclude_countries, resolved=resolved):
+                    continue
                 live.append(res)
                 if on_live:
                     on_live(res)
@@ -143,7 +232,9 @@ def validate(candidates: list[dict], target: int = 20, timeout: float = 4.0,
 
 
 def health(pool_file: str, timeout: float = 6.0, workers: int = 50,
-           test_url: str = DEFAULT_TEST_URL) -> tuple[list[str], list[str]]:
+           test_url: str = DEFAULT_TEST_URL,
+           countries: set[str] | Iterable[str] | None = None,
+           exclude_countries: set[str] | Iterable[str] | None = None) -> tuple[list[str], list[str]]:
     """Check a pool file. Returns (alive_urls, dead_urls)."""
     lines = [l.strip() for l in Path(pool_file).read_text().splitlines() if l.strip() and not l.startswith("#")]
     cands = []
@@ -163,6 +254,11 @@ def health(pool_file: str, timeout: float = 6.0, workers: int = 50,
             c = futs[fut]
             res = fut.result()
             if res:
+                cc = res.get("country_code", "")
+                resolved = res.get("country_resolved", bool(cc))
+                if not country_allowed(cc, allow=countries, exclude=exclude_countries, resolved=resolved):
+                    dead.append(c.get("raw") or f"http://{c['proxy']}")
+                    continue
                 alive.append(c.get("raw") or f"http://{c['proxy']}")
             else:
                 dead.append(c.get("raw") or f"http://{c['proxy']}")
@@ -253,15 +349,17 @@ def ensure_clean_egress(
     prefer_pool: str | Path | None = None,
     target_ip: str | None = None,
     verbose: bool = True,
+    countries: set[str] | Iterable[str] | None = None,
+    exclude_countries: set[str] | Iterable[str] | None = None,
 ) -> tuple[str | None, subprocess.Popen | None]:
     """
     Ensure a local rotating gateway running on verified clean proxies whose exit
     IP differs from the host/blocked IP.
 
-    1. Checks prefer_pool if provided and has alive proxies.
+    1. Checks prefer_pool if provided and has alive proxies matching country rules.
     2. Else harvests and validates fresh public proxies (SOCKS5, HTTP).
     3. Spawns scripts/proxy_gateway.py in the background on a free port.
-    4. Verifies gateway egress through https://api.ipify.org.
+    4. Verifies gateway egress through https://api.ipify.org and country constraints.
     5. Returns (gateway_url, proc) or (None, None).
     """
     import subprocess
@@ -283,7 +381,8 @@ def ensure_clean_egress(
     if prefer_pool and Path(prefer_pool).exists():
         if verbose:
             print(f"  [egress] Checking health of preferred pool {prefer_pool}…", file=sys.stderr)
-        alive, _ = health(str(prefer_pool), timeout=3.0, workers=20)
+        alive, _ = health(str(prefer_pool), timeout=3.0, workers=20,
+                          countries=countries, exclude_countries=exclude_countries)
         if alive:
             tfile = tempfile.NamedTemporaryFile("w+", delete=False, prefix="clean_egress_pool_", suffix=".txt")
             tfile.write("\n".join(alive) + "\n")
@@ -298,10 +397,12 @@ def ensure_clean_egress(
             print("  [egress] Preferred pool has no live proxies; harvesting from public feeds…", file=sys.stderr)
         # Prioritize SOCKS5 for reliable HTTPS TCP tunneling
         cands = harvest(protocols=("socks5", "http"), verbose=False)
-        live = validate(cands, target=5, timeout=3.5, workers=80)
+        live = validate(cands, target=5, timeout=3.5, workers=80,
+                        countries=countries, exclude_countries=exclude_countries)
         if len(live) < 2:
             cands = harvest(protocols=("socks5", "http", "socks4"), verbose=False)
-            live = validate(cands, target=6, timeout=4.0, workers=100)
+            live = validate(cands, target=6, timeout=4.0, workers=100,
+                            countries=countries, exclude_countries=exclude_countries)
         # Avoid proxies that exit on Cloudflare WARP (104.28.*) since GitHub blocks them
         non_warp_live = [p for p in live if not str(p.get("egress", "")).startswith("104.28.")]
         if non_warp_live:
@@ -347,7 +448,7 @@ def ensure_clean_egress(
             print(f"  [egress] ✗ Gateway on port {port} failed to start.", file=sys.stderr)
         return None, None
 
-    # 5. Verify egress differs from real/blocked IP
+    # 5. Verify egress differs from real/blocked IP and matches country rules
     gateway_url = f"http://127.0.0.1:{port}"
     egress_ip = check_gateway_egress(gateway_url, retries=5, timeout=7.0)
     if not egress_ip:
@@ -361,6 +462,16 @@ def ensure_clean_egress(
         if verbose:
             print(f"  [egress] ✗ Gateway exit IP {egress_ip} matches blocked IP.", file=sys.stderr)
         return None, None
+
+    if countries or exclude_countries:
+        gw_cc, gw_name, gw_res = lookup_ip_country(egress_ip)
+        if not country_allowed(gw_cc, allow=countries, exclude=exclude_countries, resolved=gw_res):
+            stop_gateway(proc)
+            if verbose:
+                print(f"  [egress] ✗ Gateway exit IP {egress_ip} ({gw_cc or 'unknown'}) rejected by country filter.", file=sys.stderr)
+            return None, None
+        elif verbose and gw_cc:
+            print(f"  [egress] ✓ Country verified: {gw_cc} ({gw_name})", file=sys.stderr)
 
     if verbose:
         print(f"  [egress] ✓ Clean egress gateway ready: {gateway_url} (exit IP: {egress_ip})", file=sys.stderr)

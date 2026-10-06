@@ -234,6 +234,12 @@ EGRESS_TARGETS = {
     "k12": "https://chatgpt.com/",
 }
 
+# Country routing policy per farm group (allow/exclude sets).
+# thk excludes ID because TokenHarbor rejects Indonesian egress IPs.
+EGRESS_COUNTRY = {
+    "thk": {"exclude": {"ID"}},
+}
+
 _AUTO_GATEWAYS: list = []          # gateways spawned by auto_egress (kept alive)
 _egress_module = None              # scripts/egress.py once imported
 _egress_unavailable = False        # import failed -> keep legacy behavior
@@ -309,7 +315,13 @@ class EgressChoice:
         self.warp = warp
         self.unavailable = unavailable
 
-def _choose_egress(mode: str, target_url: str) -> EgressChoice:
+def _choose_egress(
+    mode: str,
+    target_url: str,
+    *,
+    country: str | set[str] | None = None,
+    exclude_countries: str | set[str] | None = None,
+) -> EgressChoice:
     """Resolve a --proxy mode into a concrete egress decision.
 
     auto        -> smart ladder (local gateway -> pool gateway -> WARP ->
@@ -338,10 +350,22 @@ def _choose_egress(mode: str, target_url: str) -> EgressChoice:
             return EgressChoice(raw, "explicit")
         return EgressChoice(None, "unavailable", unavailable=True)
 
+    kwargs: dict = {"target_url": target_url, "mode": raw, "verbose": True}
+    if country is not None:
+        kwargs["country"] = country
+    if exclude_countries is not None:
+        kwargs["exclude_countries"] = exclude_countries
+
     try:
-        proxy, proc, source = mod.auto_egress(
-            target_url=target_url, mode=raw, verbose=True
-        )
+        try:
+            proxy, proc, source = mod.auto_egress(**kwargs)
+        except TypeError:
+            if "country" in kwargs or "exclude_countries" in kwargs:
+                kwargs.pop("country", None)
+                kwargs.pop("exclude_countries", None)
+                proxy, proc, source = mod.auto_egress(**kwargs)
+            else:
+                raise
     except Exception as exc:  # noqa: BLE001 - defensive: fall back to legacy
         print(col("yellow", f"⚠ egress auto-wire failed ({exc}); "
                             "farm commands keep their built-in proxy behavior"))
@@ -363,9 +387,17 @@ def _choose_egress(mode: str, target_url: str) -> EgressChoice:
     print_egress_hint()
     return EgressChoice(None, "direct", direct=True)
 
-def _resolve_proxy(mode: str, target_url: str) -> str | None:
+def _resolve_proxy(
+    mode: str,
+    target_url: str,
+    *,
+    country: str | set[str] | None = None,
+    exclude_countries: str | set[str] | None = None,
+) -> str | None:
     """Return the proxy URL for `mode`, or None when the connection is direct."""
-    return _choose_egress(mode, target_url).proxy
+    return _choose_egress(
+        mode, target_url, country=country, exclude_countries=exclude_countries
+    ).proxy
 
 def _proxy_env(choice: EgressChoice) -> dict | None:
     """Environment overrides for children that take no --proxy flag."""
@@ -1138,7 +1170,20 @@ def cmd_thk(a) -> int:
             mode = getattr(a, "proxy", None) or PROXY_AUTO
             if getattr(a, "no_proxy", False):
                 mode = PROXY_NONE
-            choice = _choose_egress(mode, EGRESS_TARGETS["thk"])
+            user_country = getattr(a, "country", None)
+            thk_policy = EGRESS_COUNTRY.get("thk", {})
+            thk_exclude = set(thk_policy.get("exclude", set()))
+            thk_allow = set(thk_policy.get("allow", set()))
+            if user_country:
+                thk_allow = {user_country.strip().upper()}
+                thk_exclude = set()
+
+            choice = _choose_egress(
+                mode,
+                EGRESS_TARGETS["thk"],
+                country=thk_allow if thk_allow else None,
+                exclude_countries=thk_exclude if thk_exclude else None,
+            )
             if choice.direct:
                 print(col("dim", "  [proxy] direct connection (no egress gateway acquired)"))
             env = _proxy_env(choice)
@@ -2325,6 +2370,10 @@ def build_parser() -> argparse.ArgumentParser:
             "--proxy", default="auto", metavar="PROXY",
             help=PROXY_HELP + "\n  (inherited by harbor via the environment)")
         _farm_parser.add_argument("--no-proxy", action="store_true", help="alias for --proxy none")
+        _farm_parser.add_argument(
+            "--country", default=None, metavar="CC",
+            help="egress country filter (e.g. US, SG; default: auto other-country, excludes ID for thk)",
+        )
     tk = ts.add_parser("test-key", help="test a thk_ key")
     tk.add_argument("key")
     ts.add_parser("enable-free", help="enable free models for an account")
