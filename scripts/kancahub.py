@@ -1356,6 +1356,31 @@ def cmd_grok(a) -> int:
             print(col("dim", f"no grok2api pool yet ({tk})"))
         return 0
 
+    if sub == "check":
+        # Verify the grok-register backend + mail config without creating anything.
+        print(col("bold", "\n  Grok / xAI farm — environment check\n"))
+        ok = True
+        checks = [
+            ("grok-register dir", GROK_REG.exists()),
+            ("grok_register_ttk.py", (GROK_REG / "grok_register_ttk.py").exists()),
+            ("grok_driver.py", (AUTO_FREECF / "scripts" / "grok_driver.py").exists()),
+            ("grok_9router.py", (AUTO_FREECF / "scripts" / "grok_9router.py").exists()),
+            ("token.json pool", (GROK_REG / "token.json").exists()),
+        ]
+        for label, present in checks:
+            print(f"  {'✅' if present else '➖'} {label}")
+        env = {}
+        env_file = Path.home() / ".config" / "auto-freecf" / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if "=" in line and not line.strip().startswith("#"):
+                    k, _, v = line.partition("=")
+                    env[k.strip()] = v.strip()
+        for key in ("XAI_API_KEY", "K12_MAIL_KEY", "SUPABASE_URL"):
+            print(f"  {'✅' if env.get(key) else '➖'} env {key}")
+        print(col("dim", "\n  run:  kancahub grok run -n 1   (uses --proxy auto egress)"))
+        return 0 if ok else 1
+
     if sub == "inject":
         inj = AUTO_FREECF / "scripts" / "grok_9router.py"
         if not inj.exists():
@@ -2413,6 +2438,7 @@ def build_parser() -> argparse.ArgumentParser:
     grt.add_argument("--pending", default=None)
     grt.add_argument("--out", default=None)
     gs.add_parser("pool", help="show the grok2api token pool")
+    gs.add_parser("check", help="check the grok-register backend + mail env, then exit")
     gin = gs.add_parser("inject", help="inject Grok SSO tokens into 9Router via a grok2api bridge",
                         description="Wraps scripts/grok_9router.py. 9Router's built-in 'xai' provider is OAuth-only, "
                                     "so SSO tokens go through a grok2api openai-compatible node "
