@@ -369,3 +369,44 @@ class TestSideEffectsOnImport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMobileEscalation(unittest.TestCase):
+    """The mobile rung must be opt-out and safe when no phone is present."""
+
+    def test_phone_connected_false_when_no_device(self) -> None:
+        import egress
+        with patch("subprocess.run") as m:
+            m.return_value = type("R", (), {"stdout": "List of devices attached\n", "stderr": ""})()
+            self.assertFalse(egress._phone_connected())
+
+    def test_phone_connected_true_with_device(self) -> None:
+        import egress
+        with patch("subprocess.run") as m:
+            m.return_value = type("R", (), {"stdout": "List of devices attached\nABC123\tdevice\n", "stderr": ""})()
+            self.assertTrue(egress._phone_connected())
+
+    def test_direct_selected_when_mobile_disabled(self) -> None:
+        import egress
+        # custom pool file that does not exist -> no gateway; allow_mobile=False
+        with patch.object(egress, "ensure_clean_egress", return_value=(None, None)), \
+             patch.object(egress, "_check_warp_up", return_value=False), \
+             patch.object(egress, "is_port_open", return_value=False):
+            gw, proc, src = egress.auto_egress(
+                "https://example.test/", mode="auto", verbose=False,
+                prefer_pool="/nonexistent/pool.txt", allow_mobile=False)
+        self.assertIsNone(gw)
+        self.assertEqual(src, "direct")
+
+    def test_mobile_source_reported_when_phone_passes(self) -> None:
+        import egress
+        with patch.object(egress, "ensure_clean_egress", return_value=(None, None)), \
+             patch.object(egress, "_check_warp_up", return_value=False), \
+             patch.object(egress, "is_port_open", return_value=False), \
+             patch.object(egress, "probe_status", return_value=200), \
+             patch.object(egress, "_phone_connected", return_value=True):
+            gw, proc, src = egress.auto_egress(
+                "https://example.test/", mode="auto", verbose=False,
+                prefer_pool="/nonexistent/pool.txt", allow_mobile=True)
+        self.assertIsNone(gw)
+        self.assertEqual(src, "mobile")

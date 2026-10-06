@@ -135,6 +135,7 @@ def auto_egress(
     prefer_pool: str | None = None,
     country: str | Iterable[str] | None = None,
     exclude_countries: str | Iterable[str] | None = None,
+    allow_mobile: bool = True,
 ) -> tuple[str | None, object | None, str]:
     """
     Smart proxy auto-wire with gentle verification probes and graceful fallback.
@@ -145,9 +146,11 @@ def auto_egress(
     Strategy order for mode='auto':
         1. Local gateway (:8888, :8899)
         2. Pool gateway (signup_from_scratch/proxies.txt or prefer_pool)
-        3. Escalation on block (403/429/503):
-           - Cloudflare WARP tunnel (if up)
-           - PetaniProxy residential pool (~/petani-proxy/output/webshare_residential.txt)
+         3. Escalation on block (403/429/503):
+            - Cloudflare WARP tunnel (if up)
+            - PetaniProxy residential pool (~/petani-proxy/output/webshare_residential.txt)
+            - MOBILE phone egress: rotate the tethered phone's carrier IP and use the
+              laptop's (now mobile) connection (allow_mobile=True, default)
         4. Fallback to direct: (None, None, 'direct')
     """
     norm_country = _normalize_countries(country)
@@ -278,10 +281,65 @@ def auto_egress(
                     stop_gateway(res_proc)
                     res_proc = None
 
+    # 3c. Mobile escalation: rotate the tethered phone's carrier IP, then re-probe
+    # the target over the laptop's (now mobile) connection. A real mobile IP is
+    # often accepted where datacenter/WARP are blocked (proved with TokenHarbor),
+    # so this is worth a try before giving up to a plain direct connection.
+    if allow_mobile and not is_blocked(probe_status(target_url, proxy=None, timeout=8.0)):
+        if verbose:
+            print("  [egress] ✓ Direct/mobile connection already passes; using it", file=sys.stderr)
+        return None, None, "mobile" if _phone_connected() else "direct"
+    if allow_mobile and _phone_connected():
+        if verbose:
+            print("  [egress] • Escalating to MOBILE phone egress (rotating carrier IP)…", file=sys.stderr)
+        new_ip = _rotate_phone_ip(verbose=verbose)
+        if new_ip:
+            st = probe_status(target_url, proxy=None, timeout=12.0)
+            if not is_blocked(st):
+                if verbose:
+                    print(f"  [egress] ✓ Mobile egress verified: exit {new_ip} (HTTP {st})", file=sys.stderr)
+                return None, None, "mobile"
+            if verbose:
+                print(f"  [egress] • Mobile egress {new_ip} still blocked (HTTP {st})", file=sys.stderr)
+
     # 4. Fallback to direct
     if verbose:
         print("  [egress] ✗ All proxy candidates failed or blocked; falling back to direct", file=sys.stderr)
     return None, None, "direct"
+
+
+def _phone_connected() -> bool:
+    """True if an Android phone is connected via adb (mobile-egress capable)."""
+    try:
+        import subprocess
+        r = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=8)
+        for line in r.stdout.splitlines()[1:]:
+            if line.strip().endswith("device"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _rotate_phone_ip(verbose: bool = True) -> str | None:
+    """Rotate the tethered phone's carrier IP by shelling scripts/mobile_rotate.py."""
+    try:
+        import subprocess
+        here = Path(__file__).resolve().parent
+        tool = here / "mobile_rotate.py"
+        if not tool.exists():
+            return None
+        r = subprocess.run(
+            [sys.executable, str(tool), "--rotate", "--wait", "25"],
+            capture_output=True, text=True, timeout=90,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        for line in out.splitlines():
+            if "IP after" in line:
+                return line.split(":", 1)[1].strip()
+        return None
+    except Exception:
+        return None
 
 
 def _cli() -> int:
@@ -293,6 +351,7 @@ def _cli() -> int:
     ap.add_argument("--target-ip", default=None, help="blocked/forbidden IP to avoid (legacy option)")
     ap.add_argument("--country", default=None, help="allowed egress country code(s) (e.g. US, SG)")
     ap.add_argument("--exclude-country", default=None, help="excluded egress country code(s) (e.g. ID)")
+    ap.add_argument("--no-mobile", action="store_true", help="do not escalate to the tethered phone's mobile IP")
     args = ap.parse_args()
 
     gw, proc, source = auto_egress(
@@ -302,6 +361,7 @@ def _cli() -> int:
         prefer_pool=args.prefer_pool,
         country=args.country,
         exclude_countries=args.exclude_country,
+        allow_mobile=not args.no_mobile,
     )
 
     if gw:
