@@ -308,7 +308,7 @@ class TestNoProxyAndEnvInheritance(unittest.TestCase):
             ["thk", "batch", "2", "--proxy", "none"],
             EgressChoice(None, "none", direct=True))
         self.assertEqual(mode, "none")
-        self.assertIsNone(env)
+        self.assertEqual(env, {"TOKENHARBOR_NO_PROXY": "1"})
 
     def test_thk_batch_auto_inherits_through_env(self) -> None:
         _, (cmd, env), mode = self._capture(
