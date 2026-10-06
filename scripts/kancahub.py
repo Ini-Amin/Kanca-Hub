@@ -2655,7 +2655,12 @@ def build_parser() -> argparse.ArgumentParser:
     af.add_argument("--inject-9router", action="store_true", help="inject credentials into 9Router SQLite DB")
     af.add_argument("--out", default=None, help="output JSON path (default: results/autofarm_accounts.json)")
     af.add_argument("--headless", action="store_true", help="run without showing browser UI")
-    af.add_argument("--proxy", default=None, help="proxy URL (default: auto from pool)")
+    af.add_argument("--proxy", default=PROXY_AUTO,
+                    help="egress mode (default: auto). auto = smart auto-wire (local gateway -> "
+                         "pool gateway -> WARP -> residential -> direct, verified per target); "
+                         "none = force direct; WARP = force Cloudflare WARP; or an explicit "
+                         "proxy URL such as http://127.0.0.1:8888")
+    af.add_argument("--no-proxy", action="store_true", help="alias for --proxy none: force direct")
 
     return p
 
@@ -2724,7 +2729,9 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
 
 def cmd_autofarm(a) -> int:
-    py = pick_python()
+    # autofarm drives Camoufox (falls back to Playwright) — both live ONLY in the
+    # camoufox venv. The main venv has neither, so it crashed with ModuleNotFoundError.
+    py = pick_python(camoufox=True)
     tool = AUTO_FREECF / "scripts" / "autofarm.py"
     cmd = [py, str(tool)]
     if getattr(a, "url", None):
@@ -2737,9 +2744,20 @@ def cmd_autofarm(a) -> int:
         cmd += ["--out", a.out]
     if getattr(a, "headless", False):
         cmd.append("--headless")
-    if getattr(a, "proxy", None):
-        cmd += ["--proxy", a.proxy]
-    return run(cmd, cwd=AUTO_FREECF)
+    # Smart egress auto-wire: resolve --proxy auto|none|URL against the target.
+    force_none = bool(getattr(a, "no_proxy", False)) or str(getattr(a, "proxy", "") or "").lower() in ("none", "direct", "off", "no")
+    mode = PROXY_NONE if force_none else (getattr(a, "proxy", None) or PROXY_AUTO)
+    target = getattr(a, "url", None) or "https://example.com"
+    choice = _choose_egress(mode, target)
+    try:
+        if force_none or not choice.proxy:
+            # Tell autofarm explicitly to stay direct (it otherwise grabs pool[0]).
+            cmd.append("--no-proxy")
+            return run(cmd, cwd=AUTO_FREECF)
+        cmd += ["--proxy", choice.proxy]
+        return run(cmd, cwd=AUTO_FREECF, env=_proxy_env(choice))
+    finally:
+        _stop_auto_gateways()
 
 
 UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [

@@ -62,9 +62,17 @@ def normalize_domain(d: str | None) -> str:
     return d
 
 
-def get_fresh_proxy(explicit: str | None = None) -> str | None:
-    if explicit:
+def get_fresh_proxy(explicit: str | None = None, mode: str | None = None) -> str | None:
+    """Resolve the proxy.
+
+    - explicit URL            -> use it.
+    - mode 'none'/'direct'    -> return None (truly direct; do NOT grab the pool).
+    - otherwise               -> first live-ish line of the signup pool (legacy default).
+    """
+    if explicit and explicit.lower() not in ("none", "direct", "off", "no"):
         return explicit
+    if (mode or "").lower() in ("none", "direct", "off", "no") or (explicit or "").lower() in ("none", "direct"):
+        return None
     pool_file = ROOT / "signup_from_scratch" / "proxies.txt"
     if pool_file.exists():
         lines = [l.strip() for l in pool_file.read_text().splitlines() if l.strip() and not l.startswith("#")]
@@ -130,9 +138,11 @@ async def run_autofarm(
     out_json: Path | str | None = None,
 ) -> dict:
     domain = normalize_domain(mail_domain)
-    # 1. Sync fresh proxies
-    sync_now(quiet=True)
+    # 1. Resolve egress (only harvest the pool when a pool proxy is actually wanted)
     chosen_proxy = get_fresh_proxy(proxy)
+    if chosen_proxy is None and (proxy or "").lower() not in ("none", "direct", "off", "no"):
+        sync_now(quiet=True)
+        chosen_proxy = get_fresh_proxy(proxy)
 
     print(f"\n  ▶ Target   : {url}")
     print(f"  • Domain   : {domain}")
@@ -292,7 +302,9 @@ def main() -> int:
     ap.add_argument("--inject-9router", action="store_true", help="Inject credentials into 9Router SQLite DB")
     ap.add_argument("--out", default=None, help="Output JSON path (default: results/autofarm_accounts.json)")
     ap.add_argument("--headless", action="store_true", help="run headless without browser UI")
-    ap.add_argument("--proxy", default=None, help="proxy URL (default: auto from pool)")
+    ap.add_argument("--proxy", default=None,
+                    help="proxy URL, or 'none'/'auto' (default: auto from pool)")
+    ap.add_argument("--no-proxy", action="store_true", help="force a direct connection (no proxy)")
     args = ap.parse_args()
 
     url = args.url
@@ -320,7 +332,7 @@ def main() -> int:
     asyncio.run(run_autofarm(
         url,
         headless=args.headless,
-        proxy=args.proxy,
+        proxy=("none" if getattr(args, "no_proxy", False) else args.proxy),
         mail_domain=domain,
         inject_9r=inject,
         out_json=args.out,
