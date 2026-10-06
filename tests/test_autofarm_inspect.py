@@ -81,6 +81,116 @@ class TestClassifyAuthTruthTable(unittest.TestCase):
         got = autofarm.classify_auth([None, ""], [None], False, False)
         self.assertEqual(got["methods"], [])
 
+    def test_email_with_has_next_flag(self):
+        got = autofarm.classify_auth([], [], True, False, has_next=True)
+        self.assertIn("email", got["methods"])
+        self.assertEqual(got["preferred"], "email")
+        self.assertTrue(got["has_email_form"])
+        self.assertEqual(got["step"], "email_only")
+
+    def test_email_without_next_returns_none(self):
+        got = autofarm.classify_auth([], [], True, False, has_next=False)
+        self.assertEqual(got["methods"], [])
+        self.assertIsNone(got["preferred"])
+        self.assertFalse(got["has_email_form"])
+
+    def test_email_with_next_button_in_labels(self):
+        got = autofarm.classify_auth(["Next"], [], True, False)
+        self.assertIn("email", got["methods"])
+        self.assertEqual(got["preferred"], "email")
+        self.assertTrue(got["has_email_form"])
+        self.assertEqual(got["step"], "email_only")
+
+
+class TestNextStepActionTruthTable(unittest.TestCase):
+    """next_step_action is pure: visible_fields + buttons -> step action string."""
+
+    def test_stop_captcha_takes_priority(self):
+        self.assertEqual(
+            autofarm.next_step_action({"captcha"}, {"Next"}),
+            "stop_captcha",
+        )
+        self.assertEqual(
+            autofarm.next_step_action({"password", "arkose"}, {"Next"}),
+            "stop_captcha",
+        )
+        self.assertEqual(
+            autofarm.next_step_action(set(), {"Solve the puzzle"}),
+            "stop_captcha",
+        )
+
+    def test_fill_password(self):
+        self.assertEqual(
+            autofarm.next_step_action({"password"}, {"Next"}),
+            "fill_password",
+        )
+        self.assertEqual(
+            autofarm.next_step_action({"confirm_password"}, {"Continue"}),
+            "fill_password",
+        )
+
+    def test_fill_name(self):
+        self.assertEqual(
+            autofarm.next_step_action({"first_name", "last_name"}, {"Next"}),
+            "fill_name",
+        )
+        self.assertEqual(
+            autofarm.next_step_action({"name"}, {"Next"}),
+            "fill_name",
+        )
+
+    def test_fill_dob(self):
+        self.assertEqual(
+            autofarm.next_step_action({"dob"}, {"Next"}),
+            "fill_dob",
+        )
+        self.assertEqual(
+            autofarm.next_step_action({"birthdate"}, {"Next"}),
+            "fill_dob",
+        )
+        self.assertEqual(
+            autofarm.next_step_action({"month", "year", "day"}, {"Next"}),
+            "fill_dob",
+        )
+
+    def test_click_next(self):
+        self.assertEqual(
+            autofarm.next_step_action(set(), {"Next"}),
+            "click_next",
+        )
+        self.assertEqual(
+            autofarm.next_step_action(set(), {"Continue"}),
+            "click_next",
+        )
+        self.assertEqual(
+            autofarm.next_step_action(set(), {"Create account"}),
+            "click_next",
+        )
+
+    def test_stop_unknown(self):
+        self.assertEqual(
+            autofarm.next_step_action(set(), set()),
+            "stop_unknown",
+        )
+        self.assertEqual(
+            autofarm.next_step_action({"unrecognized_field"}, set()),
+            "stop_unknown",
+        )
+        self.assertEqual(
+            autofarm.next_step_action(set(), {"Cancel"}),
+            "stop_unknown",
+        )
+
+    def test_stop_phone_otp(self):
+        self.assertEqual(
+            autofarm.next_step_action({"phone"}, {"Next"}),
+            "stop_phone_otp",
+        )
+        self.assertEqual(
+            autofarm.next_step_action({"otp"}, {"Next"}),
+            "stop_phone_otp",
+        )
+
 
 class TestParserFlags(unittest.TestCase):
     def test_inspect_only_flag_parses(self):
