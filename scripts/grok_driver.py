@@ -74,7 +74,9 @@ def prepare_config(
         cfg["proxy_mode"] = "pool"
         cfg["proxy_pool_file"] = str(pool_path)
     elif proxy:
-        cfg["proxy_mode"] = "fixed"
+        # grok-register only accepts proxy_mode in {auto,direct,single,pool};
+        # a single explicit --proxy maps to "single" (was wrongly "fixed" → ConfigError).
+        cfg["proxy_mode"] = "single"
         cfg["proxy"] = proxy
     else:
         # Check standard pool location
