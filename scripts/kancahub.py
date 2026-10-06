@@ -553,6 +553,83 @@ def _is_block_signal(text: str) -> bool:
     return any(s in t for s in signals)
 
 
+BACKGROUND_DIR = HOME / ".config" / "auto-freecf" / "background"
+
+
+def _spawn_background(cmd: list[str], *, cwd: Path | None = None, env: dict | None = None,
+                      name: str = "gateway", ready_port: int | None = None,
+                      timeout: float = 15.0) -> int:
+    """Start a long-running server (proxy gateway/daemon) DETACHED so the CLI
+    returns immediately and the flow can continue. Writes a pid/log file and,
+    when ready_port is given, waits until the port accepts connections.
+
+    This fixes the "kancahub proxy gets stuck and can't continue" UX problem:
+    PetaniProxy's --serve/--daemon-gateway normally run in the FOREGROUND.
+    """
+    BACKGROUND_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = BACKGROUND_DIR / f"{name}.log"
+    pid_path = BACKGROUND_DIR / f"{name}.pid"
+    e = os.environ.copy()
+    if env:
+        e.update(env)
+    logf = open(log_path, "a")
+    try:
+        proc = subprocess.Popen(
+            [str(c) for c in cmd],
+            cwd=str(cwd) if cwd else None,
+            env=e,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,  # detach from this terminal (survives the CLI exit)
+        )
+    except FileNotFoundError as ex:
+        print(col("red", f"✗ {ex}"))
+        return 127
+    pid_path.write_text(str(proc.pid))
+    print(col("green", f"  ✓ {name} started in the background (pid {proc.pid})"))
+    print(col("dim", f"    log: {log_path}"))
+    if ready_port:
+        import socket as _socket
+        deadline = time.time() + timeout
+        ready = False
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                print(col("red", f"  ✗ {name} exited early — see {log_path}"))
+                return 1
+            try:
+                with _socket.create_connection(("127.0.0.1", ready_port), timeout=0.5):
+                    ready = True
+                    break
+            except OSError:
+                time.sleep(0.4)
+        if ready:
+            print(col("green", f"  ✓ {name} ready on 127.0.0.1:{ready_port}"))
+        else:
+            print(col("yellow", f"  ⚠ {name} not listening on :{ready_port} yet (still starting?)"))
+    print(col("dim", f"    stop with: kancahub proxy stop   (or kill {pid_path})"))
+    return 0
+
+
+def _stop_background(name: str = "gateway") -> int:
+    pid_path = BACKGROUND_DIR / f"{name}.pid"
+    if not pid_path.exists():
+        print(col("dim", f"  no {name} pid file ({pid_path})"))
+        return 0
+    try:
+        pid = int(pid_path.read_text().strip())
+        os.kill(pid, 15)
+        pid_path.unlink()
+        print(col("green", f"  ✓ stopped {name} (pid {pid})"))
+        return 0
+    except ProcessLookupError:
+        pid_path.unlink(missing_ok=True)
+        print(col("dim", f"  {name} already stopped"))
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(col("red", f"  ✗ could not stop {name}: {e}"))
+        return 1
+
+
 def _run_capture(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> tuple[int, str]:
     print(col("dim", f"$ {' '.join(str(c) for c in cmd)}" + (f"   (cwd={cwd})" if cwd else "")))
     e = os.environ.copy()
@@ -926,6 +1003,12 @@ def cmd_proxy(a) -> int:
     py = pick_python()
     sub = a.proxy_cmd
 
+    # ── stop a background gateway/daemon we started ──
+    if sub == "stop":
+        rc = _stop_background(getattr(a, "name", None) or "gateway")
+        _stop_background("daemon")
+        return rc
+
     # ── proof of masking (real IP vs gateway) ──
     if sub == "verify":
         v = AUTO_FREECF / "scripts" / "proxy_verify.py"
@@ -982,13 +1065,25 @@ def cmd_proxy(a) -> int:
         return petani_cmd(cmd)
 
     if sub == "serve" or sub == "gateway":
+        if getattr(a, "background", False):
+            print(col("yellow", f"Starting rotating gateway on :{a.port} in the BACKGROUND…"))
+            return _spawn_background(
+                [py, str(petani), "--serve", str(a.port), "--target", str(a.target)],
+                cwd=PETANI, name=f"gateway{a.port}", ready_port=int(a.port),
+            )
         print(col("yellow", f"Rotating gateway + REST API + dashboard on :{a.port}"))
         print(col("dim", f"  dashboard: http://127.0.0.1:{a.port}/dashboard"))
         print(col("dim", f"  PAC:       http://127.0.0.1:{a.port}/proxy.pac"))
+        print(col("dim", "  (tip: add -b/--background to detach and keep using the CLI)"))
         return petani_cmd(["--serve", a.port, "--target", a.target])
 
     if sub == "daemon":
+        if getattr(a, "background", False):
+            print(col("yellow", "Starting 24/7 auto-healing gateway on :8888 in the BACKGROUND…"))
+            return _spawn_background([py, str(petani), "--daemon-gateway"],
+                                     cwd=PETANI, name="daemon", ready_port=8888)
         print(col("yellow", "24/7 auto-healing gateway on :8888 (Ctrl-C to stop)"))
+        print(col("dim", "  (tip: add -b/--background to detach and keep using the CLI)"))
         return petani_cmd(["--daemon-gateway"])
 
     if sub == "residential":
@@ -1093,13 +1188,18 @@ def _proxy_start(a, py) -> int:
         return rc
 
     if mode in ("2", "gateway"):
-        port = str(getattr(a, "port", 8888) or 8888)
+        port = int(getattr(a, "port", 8888) or 8888)
         target = str(getattr(a, "target", 30) or 30)
-        print(col("green", f"\n  Proxy ready: http://127.0.0.1:{port}"))
-        print(col("cyan",  f"  Dashboard:   http://127.0.0.1:{port}/dashboard"))
-        print(col("dim",   f"  PAC URL:     http://127.0.0.1:{port}/proxy.pac\n"))
-        # ponytail: shells out to petani-proxy main.py --serve 8888 --target 30
-        return run([py, str(petani), "--serve", port, "--target", target], cwd=PETANI)
+        # Background by default here: the guided flow must NOT block the terminal.
+        print(col("cyan", f"\n  Starting rotating gateway on :{port} in the background…\n"))
+        rc = _spawn_background([py, str(petani), "--serve", str(port), "--target", target],
+                               cwd=PETANI, name=f"gateway{port}", ready_port=port)
+        if rc == 0:
+            print(col("green", f"  Proxy ready: http://127.0.0.1:{port}"))
+            print(col("cyan",  f"  Dashboard:   http://127.0.0.1:{port}/dashboard"))
+            print(col("dim",   f"  PAC URL:     http://127.0.0.1:{port}/proxy.pac"))
+            print(col("dim",   "  stop: kancahub proxy stop\n"))
+        return rc
 
     if mode in ("3", "residential", "w"):
         accs = str(getattr(a, "accounts", 1) or 1)
@@ -1108,11 +1208,15 @@ def _proxy_start(a, py) -> int:
         return run([py, str(petani), "-W", accs], cwd=PETANI)
 
     if mode in ("4", "daemon", "g"):
-        print(col("green", "\n  Proxy ready: http://127.0.0.1:8888"))
-        print(col("cyan",  "  Dashboard:   http://127.0.0.1:8888/dashboard"))
-        print(col("yellow", "  24/7 auto-healing gateway on :8888 (leave running in background, Ctrl-C to stop)…\n"))
-        # ponytail: shells out to petani-proxy main.py --daemon-gateway
-        return run([py, str(petani), "--daemon-gateway"], cwd=PETANI)
+        # Background the daemon so the CLI is never left stuck.
+        print(col("cyan", "\n  Starting 24/7 auto-healing gateway on :8888 in the background…\n"))
+        rc = _spawn_background([py, str(petani), "--daemon-gateway"],
+                               cwd=PETANI, name="daemon", ready_port=8888)
+        if rc == 0:
+            print(col("green", "  Proxy ready: http://127.0.0.1:8888"))
+            print(col("cyan",  "  Dashboard:   http://127.0.0.1:8888/dashboard"))
+            print(col("dim",   "  stop: kancahub proxy stop\n"))
+        return rc
 
     print(col("red", f"✗ unknown mode '{mode}'. Choose 1 (WARP), 2 (Gateway), 3 (Residential), or 4 (Daemon)."))
     return 1
@@ -2867,8 +2971,15 @@ def build_parser() -> argparse.ArgumentParser:
         g = ps.add_parser(name, help="start rotating gateway + REST API + dashboard")
         g.add_argument("--port", type=int, default=8888)
         g.add_argument("--target", type=int, default=30)
+        g.add_argument("-b", "--background", action="store_true",
+                       help="detach the gateway into the background (CLI keeps working)")
 
-    ps.add_parser("daemon", help="24/7 auto-healing gateway on :8888")
+    d = ps.add_parser("daemon", help="24/7 auto-healing gateway on :8888")
+    d.add_argument("-b", "--background", action="store_true",
+                   help="detach the daemon into the background (CLI keeps working)")
+
+    st = ps.add_parser("stop", help="stop a background gateway/daemon started with -b")
+    st.add_argument("--name", default="gateway", help="background job name (default: gateway)")
 
     r = ps.add_parser("residential", help="Webshare residential hunter")
     r.add_argument("-n", "--accounts", type=int, default=1)
