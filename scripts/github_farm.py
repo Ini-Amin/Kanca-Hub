@@ -96,6 +96,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 try:
+    import requests
+except ImportError:
+    requests = None
+
+try:
     from camoufox.async_api import AsyncCamoufox
 except Exception as _e:  # pragma: no cover - only triggers outside the camoufox venv
     AsyncCamoufox = None
@@ -179,6 +184,178 @@ _ENV = _load_env()
 
 def cfg(key: str, default: str = "") -> str:
     return os.environ.get(key) or _ENV.get(key, default)
+
+
+# ─────────────────────────────────────────────────────────── relay mail client & domain helpers
+
+def get_relay_config() -> dict:
+    """Resolve KancaHub mail relay settings (K12_MAIL_API, K12_MAIL_KEY, SUPABASE_URL, K12_DOMAINS)."""
+    env = _load_env()
+    k12_mail_api = os.environ.get("K12_MAIL_API") or env.get("K12_MAIL_API", "")
+    k12_mail_key = os.environ.get("K12_MAIL_KEY") or env.get("K12_MAIL_KEY") or env.get("TMK_KEY", "")
+    supabase_url = os.environ.get("SUPABASE_URL") or env.get("SUPABASE_URL", "")
+
+    if not k12_mail_key or not (k12_mail_api or supabase_url):
+        try:
+            cfg_path = Path.home() / "Auto-FreeCF" / "signup_from_scratch" / "config.json"
+            if cfg_path.exists():
+                cfg_json = json.loads(cfg_path.read_text())
+                if not k12_mail_key:
+                    k12_mail_key = cfg_json.get("mail_api_key", "")
+                if not supabase_url and not k12_mail_api and cfg_json.get("mail_api"):
+                    m = re.match(r"(https://[^/]+)", cfg_json["mail_api"])
+                    if m:
+                        supabase_url = m.group(1)
+        except Exception:
+            pass
+
+    supabase_url = supabase_url.rstrip("/")
+    if k12_mail_api:
+        mail_base = k12_mail_api.rstrip("/")
+        if mail_base.endswith("/new_address"):
+            mail_base = mail_base[:-len("/new_address")]
+    elif supabase_url:
+        mail_base = f"{supabase_url}/functions/v1/temp-mail-api"
+    else:
+        mail_base = ""
+
+    domains = [d.strip() for d in (os.environ.get("K12_DOMAINS") or env.get("K12_DOMAINS", "kancalabs.biz.id,kancalabs.my.id")).split(",") if d.strip()]
+
+    return {
+        "mail_base": mail_base,
+        "mail_key": k12_mail_key,
+        "domains": domains,
+    }
+
+
+def resolve_email_domain(domain_choice: str = "binus") -> str:
+    """Normalize domain choices: binus -> binus.ac.id, bizid -> kancalabs.biz.id, myid -> kancalabs.my.id."""
+    dc = (domain_choice or "binus").strip().lower()
+    if dc in ("binus", "binus.ac.id"):
+        return "binus.ac.id"
+    if dc in ("bizid", "biz.id", "kancalabs.biz.id"):
+        return "kancalabs.biz.id"
+    if dc in ("myid", "my.id", "kancalabs.my.id"):
+        return "kancalabs.my.id"
+    return dc
+
+
+def resolve_domain_and_inbox(email_domain: str = "binus", inbox: str = "binus") -> tuple[str, str]:
+    """
+    Resolve effective domain choice and inbox provider.
+    Defaults to ('binus', 'binus').
+    """
+    dom = (email_domain or "binus").strip().lower()
+    ib = (inbox or "binus").strip().lower()
+    if dom in ("bizid", "myid"):
+        ib = "relay"
+    elif ib == "relay" and dom == "binus":
+        dom = "bizid"
+    return dom, ib
+
+
+def build_signup_email(index: int, domain_choice: str = "binus", rand_suffix: str | None = None) -> str:
+    """
+    Build the signup email address for the given index and domain choice.
+    - binus: plus-addressed school mailbox: raymondi+gh<index>@binus.ac.id (or raymondi@binus.ac.id if index <= 0)
+    - bizid: gh<rand>@kancalabs.biz.id
+    - myid:  gh<rand>@kancalabs.my.id
+    """
+    resolved_dom = resolve_email_domain(domain_choice)
+    if resolved_dom == "binus.ac.id":
+        return build_email(index)
+    rand_part = rand_suffix if rand_suffix is not None else "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    return f"gh{rand_part}@{resolved_dom}"
+
+
+def create_relay_mailbox(domain: str = "kancalabs.biz.id", local_part: str | None = None) -> dict:
+    """Create a mailbox on the KancaHub relay. Returns {email, jwt, address, domain}."""
+    if requests is None:
+        raise RuntimeError("requests package is required for KancaHub relay mail client")
+    conf = get_relay_config()
+    mail_base = conf["mail_base"]
+    mail_key = conf["mail_key"]
+    if not mail_base or not mail_key:
+        raise RuntimeError("KancaHub relay configuration missing (K12_MAIL_API/SUPABASE_URL or K12_MAIL_KEY/TMK_KEY unset)")
+    payload: dict = {"domain": domain}
+    if local_part:
+        payload["name"] = local_part
+    r = requests.post(f"{mail_base}/new_address", json=payload, headers={"x-api-key": mail_key}, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+    addr = data.get("address") or data.get("email") or ""
+    return {"email": addr, "address": addr, "jwt": data.get("jwt", ""), "domain": domain}
+
+
+def poll_relay_inbox(jwt: str) -> list[dict]:
+    """Poll parsed mails from the KancaHub relay for the given JWT."""
+    if requests is None:
+        return []
+    conf = get_relay_config()
+    mail_base = conf["mail_base"]
+    mail_key = conf["mail_key"]
+    if not mail_base or not mail_key:
+        return []
+    r = requests.get(f"{mail_base}/parsed_mails", headers={"Authorization": f"Bearer {jwt}", "x-api-key": mail_key}, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    return data if isinstance(data, list) else data.get("results", [])
+
+
+# ─────────────────────────────────────────────────────────── rate limit & policy helpers
+
+class BackoffManager:
+    """
+    Manages exponential backoff for 429/403 responses per hard rate-limit policy:
+    - 30s start, double each time, capped at 10 minutes (600s).
+    - Stop after 3 consecutive 429/403.
+    """
+    def __init__(self, initial: float = 30.0, factor: float = 2.0, cap: float = 600.0, max_consecutive: int = 3):
+        self.initial = initial
+        self.factor = factor
+        self.cap = cap
+        self.max_consecutive = max_consecutive
+        self.current_delay = initial
+        self.consecutive_count = 0
+
+    def record_rate_limit(self) -> float:
+        self.consecutive_count += 1
+        delay = self.current_delay
+        self.current_delay = min(self.current_delay * self.factor, self.cap)
+        return delay
+
+    def record_success(self) -> None:
+        self.consecutive_count = 0
+        self.current_delay = self.initial
+
+    @property
+    def should_stop(self) -> bool:
+        return self.consecutive_count >= self.max_consecutive
+
+
+def is_bot_challenge(stage: str | None, blocked: str | None) -> bool:
+    """Check if result indicates Cloudflare, DataArkose, DataDome, or anti-bot challenge."""
+    if not stage and not blocked:
+        return False
+    combined = f"{stage or ''} {blocked or ''}".lower()
+    return any(k in combined for k in (
+        "captcha", "arkose", "funcaptcha", "cloudflare", "cf-chl",
+        "datadome", "access_restricted", "network/ip block", "challenge",
+        "unusual activity", "temporarily restricted"
+    ))
+
+
+def is_rate_limited(stage: str | None, blocked: str | None) -> bool:
+    """Check if result indicates 429 Too Many Requests or 403 Forbidden."""
+    if not stage and not blocked:
+        return False
+    combined = f"{stage or ''} {blocked or ''}".lower()
+    return any(k in combined for k in ("429", "too many requests", "rate limit", "403", "forbidden"))
+
+
+async def pace_action(min_s: float = 1.5, max_s: float = 4.0) -> None:
+    """Random delay between page actions (1.5-4s per user directive)."""
+    await asyncio.sleep(random.uniform(min_s, max_s))
 
 
 # ─────────────────────────────────────────────────────────── name/pass gen
@@ -654,10 +831,38 @@ async def read_launch_code(email: str, timeout: int = 240, proxy: str | None = N
             pass  # context manager closes the browser
 
 
+async def wait_for_relay_launch_code(jwt: str, timeout: int = 240, delay: int = 5) -> str | None:
+    """Poll our KancaHub relay for GitHub's 8-digit launch code."""
+    print(f"      [mail] polling KancaHub relay for launch code (max {timeout}s)…", flush=True)
+    start = time.time()
+    seen = set()
+    while time.time() - start < timeout:
+        try:
+            for m in poll_relay_inbox(jwt):
+                mid = m.get("id") or m.get("message_id")
+                if mid in seen:
+                    continue
+                blob = " ".join(str(m.get(k, "")) for k in ("subject", "text", "body", "html", "snippet", "from"))
+                clean_text = re.sub(r"<[^>]+>", " ", blob)
+                code = _extract_launch_code([clean_text])
+                if code:
+                    print(f"\n      [+] GitHub launch code found from relay: {code}", flush=True)
+                    return code
+                seen.add(mid)
+        except Exception as e:  # noqa: BLE001
+            print(f"      [mail] relay inbox error: {e}", flush=True)
+        print(".", end="", flush=True)
+        await asyncio.sleep(delay)
+    print()
+    return None
+
+
 # ─────────────────────────────────────────────────────────── github signup
 
 async def do_signup(page, email: str, password: str, username: str,
-                    dry_run: bool, max_user_tries: int = 6) -> dict:
+                    dry_run: bool, max_user_tries: int = 6,
+                    relay_jwt: str | None = None, inbox_type: str = "binus",
+                    proxy: str | None = None) -> dict:
     """
     Walk https://github.com/signup as far as possible.
 
@@ -667,9 +872,15 @@ async def do_signup(page, email: str, password: str, username: str,
     """
     res: dict = {"success": False, "stage": "start", "blocked": None, "notes": []}
 
-    await page.goto(GITHUB_SIGNUP, wait_until="domcontentloaded")
-    await asyncio.sleep(6)
+    resp = await page.goto(GITHUB_SIGNUP, wait_until="domcontentloaded")
+    await pace_action(2.0, 4.0)
     await screenshot(page, "01_signup")
+
+    if resp and getattr(resp, "status", None) in (429, 403):
+        res["stage"] = f"http_{resp.status}"
+        res["blocked"] = f"HTTP {resp.status}"
+        print(f"      [gh] ❌ HTTP {resp.status} on signup page", flush=True)
+        return res
 
     # Network-level block? Report honestly instead of a bogus selector error.
     blocked = await detect_access_restriction(page)
@@ -694,7 +905,7 @@ async def do_signup(page, email: str, password: str, username: str,
         await screenshot(page, "01_email_missing")
         return res
     res["stage"] = "email_filled"
-    await asyncio.sleep(0.5)
+    await pace_action(1.5, 3.5)
 
     cap = await detect_captcha(page)
     if cap:
@@ -711,7 +922,7 @@ async def do_signup(page, email: str, password: str, username: str,
         return res
 
     await click_button(page, ("Continue", "Create account", "Sign up"))
-    await asyncio.sleep(5)
+    await pace_action(2.0, 4.0)
     await screenshot(page, "02_after_email")
 
     cap = await detect_captcha(page)
@@ -730,7 +941,7 @@ async def do_signup(page, email: str, password: str, username: str,
             res["stage"] = "password_input_not_found"
             return res
         res["stage"] = "password_filled"
-        await asyncio.sleep(0.5)
+        await pace_action(1.5, 3.5)
     else:
         res["notes"].append("no password field seen (maybe email-only step)")
 
@@ -740,7 +951,7 @@ async def do_signup(page, email: str, password: str, username: str,
         return res
 
     await click_button(page, ("Continue", "Next"))
-    await asyncio.sleep(5)
+    await pace_action(2.0, 4.0)
     await screenshot(page, "03_after_password")
 
     cap = await detect_captcha(page)
@@ -759,7 +970,7 @@ async def do_signup(page, email: str, password: str, username: str,
             if not await fill_first_input(page, ['input#login', 'input[name=login]'], uname):
                 res["stage"] = "username_input_not_found"
                 return res
-            await asyncio.sleep(2)  # let the availability check fire
+            await pace_action(1.5, 3.0)  # let the availability check fire
             err = await js(page, """(()=>{const e=document.querySelector('[aria-live],.error,.flash-error,p.color-fg-danger');
                 return e ? (e.innerText||'').trim() : '';})()""", "")
             taken = bool(err and re.search(r'taken|not available|already', err, re.I))
@@ -773,7 +984,7 @@ async def do_signup(page, email: str, password: str, username: str,
         else:
             res["stage"] = "username_unavailable"
             return res
-        await asyncio.sleep(0.5)
+        await pace_action(1.5, 3.0)
     else:
         res["notes"].append("no username field seen")
         res["username"] = username
@@ -785,7 +996,7 @@ async def do_signup(page, email: str, password: str, username: str,
         return res
 
     await click_button(page, ("Continue", "Create account"))
-    await asyncio.sleep(5)
+    await pace_action(2.0, 4.0)
     await screenshot(page, "04_after_username")
 
     cap = await detect_captcha(page)
@@ -804,8 +1015,12 @@ async def do_signup(page, email: str, password: str, username: str,
             'input[autocomplete=one-time-code]','input[inputmode=numeric]','input[maxlength="8"]'];
             for(const s of cands){ if(document.querySelector(s)) return s; } return null;})()""", None)
 
-        print("      [gh] waiting for email launch code from mailbox…", flush=True)
-        code = await read_launch_code(email, timeout=240)
+        if inbox_type == "relay" and relay_jwt:
+            print("      [gh] waiting for email launch code from KancaHub relay…", flush=True)
+            code = await wait_for_relay_launch_code(relay_jwt, timeout=240)
+        else:
+            print("      [gh] waiting for email launch code from school mailbox…", flush=True)
+            code = await read_launch_code(email, timeout=240, proxy=proxy)
         if not code:
             res["stage"] = "launch_code_timeout"
             res["blocked"] = "email_launch_code_not_received"
@@ -826,9 +1041,9 @@ async def do_signup(page, email: str, password: str, username: str,
             await screenshot(page, "05_code_field_missing")
             return res
         res["notes"].append("launch_code_entered")
-        await asyncio.sleep(1)
+        await pace_action(1.5, 3.0)
         await click_button(page, ("Continue", "Verify"))
-        await asyncio.sleep(6)
+        await pace_action(2.0, 4.0)
         await screenshot(page, "06_after_code")
 
     # ── done? ──────────────────────────────────────────────────────
@@ -939,9 +1154,10 @@ def save_account(record: dict) -> None:
 
 # ─────────────────────────────────────────────────────────── --check
 
-def run_check() -> int:
+def run_check(email_domain: str = "binus", inbox: str = "binus") -> int:
+    eff_domain, eff_inbox = resolve_domain_and_inbox(email_domain, inbox)
     print("=" * 60)
-    print("  github_farm --check (Camoufox)")
+    print(f"  github_farm --check (Camoufox) [inbox: {eff_inbox}, domain: {eff_domain}]")
     print("=" * 60)
     ok = True
 
@@ -969,19 +1185,30 @@ def run_check() -> int:
         found = (SCRIPTS / f"{modname}.py").exists()
         print(f"  {'✅' if found else '➖'} {modname:20s} ({SCRIPTS / (modname + '.py')})")
 
-    print(f"  {'✅' if PROFILE_DIR.exists() else '➖'} school profile dir  ({PROFILE_DIR})"
-          f"{'' if PROFILE_DIR.exists() else ' (created on first run / needs a manual MFA login once)'}")
-
-    smail = cfg("SCHOOL_EMAIL")
-    spw = bool(cfg("SCHOOL_MAIL_PASSWORD"))
-    print(f"  {'✅' if smail else '❌'} SCHOOL_EMAIL         {smail or '(unset in .env)'}")
-    print(f"  {'✅' if spw else '❌'} SCHOOL_MAIL_PASSWORD {'set' if spw else '(unset in .env)'}")
-    if not smail or not spw:
-        ok = False
+    if eff_inbox == "relay":
+        rel_cfg = get_relay_config()
+        m_base = rel_cfg.get("mail_base")
+        m_key = bool(rel_cfg.get("mail_key"))
+        m_doms = rel_cfg.get("domains", [])
+        print(f"  {'✅' if m_base else '❌'} K12_MAIL_API / base   {m_base or '(unset)'}")
+        print(f"  {'✅' if m_key else '❌'} K12_MAIL_KEY / TMK    {'set' if m_key else '(unset)'}")
+        print(f"  ℹ️  relay domains       {', '.join(m_doms)}")
+        if not m_base or not m_key:
+            ok = False
+    else:
+        print(f"  {'✅' if PROFILE_DIR.exists() else '➖'} school profile dir  ({PROFILE_DIR})"
+              f"{'' if PROFILE_DIR.exists() else ' (created on first run / needs a manual MFA login once)'}")
+        smail = cfg("SCHOOL_EMAIL")
+        spw = bool(cfg("SCHOOL_MAIL_PASSWORD"))
+        print(f"  {'✅' if smail else '❌'} SCHOOL_EMAIL         {smail or '(unset in .env)'}")
+        print(f"  {'✅' if spw else '❌'} SCHOOL_MAIL_PASSWORD {'set' if spw else '(unset in .env)'}")
+        if not smail or not spw:
+            ok = False
 
     print(f"  {'✅' if ACCOUNTS_FILE.parent.exists() else '❌'} output dir           ({ACCOUNTS_FILE.parent})")
     print(f"  ℹ️  accounts file       {ACCOUNTS_FILE}")
-    print(f"  ℹ️  mailbox URL         {cfg('SCHOOL_MAIL_URL', SCHOOL_MAIL_URL)}")
+    if eff_inbox == "binus":
+        print(f"  ℹ️  mailbox URL         {cfg('SCHOOL_MAIL_URL', SCHOOL_MAIL_URL)}")
     print(f"  ℹ️  target signup       {GITHUB_SIGNUP}")
     print(f"  ℹ️  target education    {GITHUB_EDU}")
     print("  ℹ️  run with: /home/amen/.local/share/auto-freecf/camoufox-venv/bin/python")
@@ -999,21 +1226,33 @@ def build_email(index: int) -> str:
     return f"{BASE_LOCAL}+gh{index}@{SCHOOL_DOMAIN}"
 
 
-async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
-              dry_run: bool, no_proxy: bool = False, retries: int = 0) -> int:
-    if AsyncCamoufox is None:
-        print("=" * 60, flush=True)
-        print("  ✗ Camoufox is not importable in this interpreter.", flush=True)
-        print(f"    {_CAMOUFOX_IMPORT_ERROR}", flush=True)
-        print("  Run under the camoufox venv:", flush=True)
-        print("    /home/amen/.local/share/auto-freecf/camoufox-venv/bin/python "
-              "scripts/github_farm.py …", flush=True)
-        print("=" * 60, flush=True)
-        return 2
-
-    email = build_email(index)
+async def run_single_account(index: int, headless: bool, proxy: str | None, pool: str | None,
+                             dry_run: bool, no_proxy: bool = False, retries: int = 0,
+                             email_domain: str = "binus", inbox: str = "binus") -> tuple[int, dict]:
+    eff_domain, eff_inbox = resolve_domain_and_inbox(email_domain, inbox)
+    resolved_dom = resolve_email_domain(eff_domain)
+    email = build_signup_email(index, eff_domain)
     username = gen_username()
     password = gen_password()
+
+    relay_jwt = None
+    if eff_inbox == "relay":
+        if dry_run:
+            relay_jwt = "dry_run_jwt"
+        else:
+            local_part = email.split("@")[0]
+            try:
+                mb = create_relay_mailbox(domain=resolved_dom, local_part=local_part)
+                relay_jwt = mb.get("jwt")
+                if mb.get("email"):
+                    email = mb["email"]
+            except Exception as e:
+                print(f"      [mail] ❌ failed to create relay mailbox: {e}", flush=True)
+                return 1, {
+                    "email": email,
+                    "signup": {"stage": "relay_mailbox_error", "blocked": str(e), "success": False},
+                    "success": False,
+                }
 
     gateway_proc = None
     if proxy:
@@ -1047,7 +1286,7 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
     print("  GITHUB FARM (Camoufox / Playwright)", flush=True)
     print("=" * 60, flush=True)
     print(f"  index     : {index}", flush=True)
-    print(f"  email     : {email}", flush=True)
+    print(f"  email     : {email}  [{eff_inbox} / {eff_domain}]", flush=True)
     print(f"  username  : {username}", flush=True)
     print(f"  password  : {password}", flush=True)
     print(f"  dry-run   : {dry_run}", flush=True)
@@ -1066,18 +1305,19 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
         "username": username,
         "password": password,
         "index": index,
+        "email_domain": eff_domain,
+        "inbox": eff_inbox,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dry_run": dry_run,
         "proxy": chosen_proxy or None,
         "push_to_note": proxy_src,
-        "note": "School mailbox is the ONLY address used (plus-addressing). Does not touch 'Ini-Amin'.",
+        "note": f"Inbox: {eff_inbox} ({eff_domain})",
     }
 
     retry_pool = _load_pool(pool) if pool else []
     used_proxies: list[str] = [chosen_proxy] if chosen_proxy else []
     attempt = 0
 
-    # Camoufox text-entry logging can leak the launch code; quiet it a touch.
     try:
         while True:
             attempt += 1
@@ -1101,10 +1341,9 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
                         print(f"      📌 Sticky gateway session applied (id={email})", flush=True)
 
                     try:
-                        await page.goto(GITHUB_SIGNUP, wait_until="domcontentloaded")
-                        await asyncio.sleep(6)
-
-                        signup = await do_signup(page, email, password, username, dry_run)
+                        signup = await do_signup(page, email, password, username, dry_run,
+                                                 relay_jwt=relay_jwt, inbox_type=eff_inbox,
+                                                 proxy=chosen_proxy)
                         record["signup"] = signup
                         if signup.get("username"):
                             record["username"] = signup["username"]
@@ -1137,10 +1376,14 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
 
                         edu = {"stage": "skipped", "needs_human": ["Signup did not complete."]}
                         if signup.get("success") or (dry_run and signup.get("stage") != "access_restricted"):
-                            try:
-                                edu = await do_education(page, email, record["username"], dry_run)
-                            except Exception as e:
-                                edu = {"stage": "error", "needs_human": [f"Education navigation failed: {e}"]}
+                            if eff_inbox == "binus":
+                                try:
+                                    edu = await do_education(page, email, record["username"], dry_run)
+                                except Exception as e:
+                                    edu = {"stage": "error", "needs_human": [f"Education navigation failed: {e}"]}
+                            else:
+                                edu = {"stage": "skipped_non_academic_domain",
+                                       "needs_human": ["Custom domain used; Education pack requires school email."]}
                         record["education"] = edu
 
                         print("\n  --- education result ---", flush=True)
@@ -1153,12 +1396,14 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
                         # be written as if it succeeded (it would look like a real account).
                         if signup.get("success") and not dry_run:
                             record["signup_attempts"] = attempt
+                            record["status"] = "created"
                             save_account(record)
                         else:
+                            record["status"] = "not_created"
                             print(f"      [skip] not saved to {ACCOUNTS_FILE.name} "
                                   f"(signup success={signup.get('success')}, "
                                   f"stage={signup.get('stage')}, dry_run={dry_run})", flush=True)
-                        return 0 if signup.get("success") or dry_run else 1
+                        return (0 if signup.get("success") or dry_run else 1), record
                     finally:
                         if not headless:
                             print("\n  browser left open 8s for inspection…", flush=True)
@@ -1166,21 +1411,104 @@ async def run(index: int, headless: bool, proxy: str | None, pool: str | None,
             except Exception as e:  # noqa: BLE001
                 print(f"  ✗ browser/flow error: {type(e).__name__}: {e}", flush=True)
                 record["error"] = f"{type(e).__name__}: {e}"
-                # do not persist a record for a crashed flow
-                return 1
+                record["signup"] = {"stage": "crashed", "blocked": str(e), "success": False}
+                return 1, record
     finally:
         if gateway_proc is not None:
             stop_gateway(gateway_proc)
             print("  [egress] Stopped clean egress gateway.", flush=True)
 
 
-def main() -> int:
+async def run(index: int = 1, headless: bool = False, proxy: str | None = None,
+              pool: str | None = None, dry_run: bool = False, no_proxy: bool = False,
+              retries: int = 0, email_domain: str = "binus", inbox: str = "binus",
+              delay_min: float = 20.0, delay_max: float = 45.0,
+              max_accounts: int = 5) -> int:
+    """
+    Farm GitHub accounts with rate-limit policy:
+    - Concurrency 1 (strictly sequential).
+    - 20-45s random delay between accounts (configurable via delay_min/delay_max).
+    - 1.5-4s random delay between page actions.
+    - 429/403 exponential backoff (30s initial, doubles, cap 10min; stops after 3 consecutive).
+    - Cloudflare/DataArkose/anti-bot challenge detection halts the run immediately.
+    - Up to max_accounts (default 5).
+    """
+    if AsyncCamoufox is None:
+        print("=" * 60, flush=True)
+        print("  ✗ Camoufox is not importable in this interpreter.", flush=True)
+        print(f"    {_CAMOUFOX_IMPORT_ERROR}", flush=True)
+        print("  Run under the camoufox venv:", flush=True)
+        print("    /home/amen/.local/share/auto-freecf/camoufox-venv/bin/python "
+              "scripts/github_farm.py …", flush=True)
+        print("=" * 60, flush=True)
+        return 2
+
+    eff_domain, eff_inbox = resolve_domain_and_inbox(email_domain, inbox)
+    backoff_mgr = BackoffManager(initial=30.0, factor=2.0, cap=600.0, max_consecutive=3)
+    total_created = 0
+    accounts_to_process = max(1, max_accounts)
+
+    for step in range(accounts_to_process):
+        current_index = index + step
+        print("=" * 60, flush=True)
+        print(f"  GITHUB FARM — ACCOUNT {step + 1}/{accounts_to_process} "
+              f"(index={current_index}, domain={eff_domain}, inbox={eff_inbox})", flush=True)
+        print("=" * 60, flush=True)
+
+        status, record = await run_single_account(
+            index=current_index,
+            headless=headless,
+            proxy=proxy,
+            pool=pool,
+            dry_run=dry_run,
+            no_proxy=no_proxy,
+            retries=retries,
+            email_domain=eff_domain,
+            inbox=eff_inbox,
+        )
+
+        signup = record.get("signup", {})
+        stage = signup.get("stage")
+        blocked = signup.get("blocked")
+        success = bool(signup.get("success"))
+
+        if success or record.get("status") == "created":
+            total_created += 1
+            backoff_mgr.record_success()
+        elif is_rate_limited(stage, blocked):
+            backoff_delay = backoff_mgr.record_rate_limit()
+            print(f"      [rate-limit] 429/403 hit (consecutive: "
+                  f"{backoff_mgr.consecutive_count}/{backoff_mgr.max_consecutive})", flush=True)
+            if backoff_mgr.should_stop:
+                print("      [rate-limit] 🛑 STOP: 3 consecutive 429/403 responses. "
+                      "Halting farm per rate-limit policy.", flush=True)
+                break
+            print(f"      [rate-limit] ⏳ Backing off for {backoff_delay:.1f}s…", flush=True)
+            await asyncio.sleep(backoff_delay)
+            continue
+        elif is_bot_challenge(stage, blocked):
+            print(f"      [anti-bot] 🛑 STOP: Bot challenge/block appeared ({blocked or stage}). "
+                  "Halting farm per rate-limit policy.", flush=True)
+            break
+        else:
+            backoff_mgr.record_success()
+
+        # Inter-account pacing (20-45s random delay per user directive)
+        if step + 1 < accounts_to_process:
+            pause = random.uniform(delay_min, delay_max)
+            print(f"\n      [pace] sleeping {pause:.1f}s before next account…\n", flush=True)
+            await asyncio.sleep(pause)
+
+    return 0 if (total_created > 0 or dry_run) else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="GitHub signup + Education application helper (Camoufox). "
                     "Automates form fill + email launch-code; Arkose/captcha and "
                     "identity attestation remain human steps.")
     ap.add_argument("--check", action="store_true", help="check deps + mailbox config, then exit")
-    ap.add_argument("--index", type=int, default=1, help="N for raymondi+gh<N>@binus.ac.id")
+    ap.add_argument("--index", type=int, default=1, help="starting N for account address (default 1)")
     ap.add_argument("--headless", action="store_true", help="run under Xvfb ('virtual') headless")
     ap.add_argument("--proxy", default=None,
                     help="proxy URL; supports the KancaHub gateway http://127.0.0.1:8888 (X-Session-ID)")
@@ -1194,12 +1522,40 @@ def main() -> int:
                     help="force direct connection (bypass auto clean egress gateway)")
     ap.add_argument("--dry-run", action="store_true",
                     help="walk the signup flow, screenshot, but do not submit/create")
-    args = ap.parse_args()
+    ap.add_argument("--email-domain", choices=["binus", "bizid", "myid"], default="binus",
+                    help="email domain choice: binus (default, school mailbox), "
+                         "bizid (kancalabs.biz.id via relay), myid (kancalabs.my.id via relay)")
+    ap.add_argument("--inbox", choices=["binus", "relay"], default="binus",
+                    help="inbox source: binus (default, Outlook school mailbox) or relay (KancaHub mail relay)")
+    ap.add_argument("--delay-min", type=float, default=20.0, metavar="SEC",
+                    help="minimum random delay between accounts in seconds (default 20)")
+    ap.add_argument("--delay-max", type=float, default=45.0, metavar="SEC",
+                    help="maximum random delay between accounts in seconds (default 45)")
+    ap.add_argument("--max-accounts", type=int, default=5, metavar="N",
+                    help="maximum accounts to process in this run (default 5)")
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = build_parser()
+    args = ap.parse_args(argv)
 
     if args.check:
-        return run_check()
-    return asyncio.run(run(args.index, args.headless, args.proxy, args.pool, args.dry_run,
-                           no_proxy=args.no_proxy, retries=max(0, args.retries)))
+        return run_check(email_domain=args.email_domain, inbox=args.inbox)
+    return asyncio.run(run(
+        index=args.index,
+        headless=args.headless,
+        proxy=args.proxy,
+        pool=args.pool,
+        dry_run=args.dry_run,
+        no_proxy=args.no_proxy,
+        retries=max(0, args.retries),
+        email_domain=args.email_domain,
+        inbox=args.inbox,
+        delay_min=args.delay_min,
+        delay_max=args.delay_max,
+        max_accounts=args.max_accounts,
+    ))
 
 
 if __name__ == "__main__":
