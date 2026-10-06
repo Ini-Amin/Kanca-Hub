@@ -1095,6 +1095,28 @@ def _ledger_record(farm: str, *, target: str = "", egress: str = "", exit_ip: st
         pass
 
 
+def cmd_egress_node(a) -> int:
+    """Use a device's own connection as an egress node (serve here / register remote)."""
+    py = pick_python()
+    tool = AUTO_FREECF / "scripts" / "egress_node.py"
+    if not tool.exists():
+        print(col("red", "✗ egress_node.py not found"))
+        return 1
+    sub = getattr(a, "en_cmd", None) or "list"
+    if sub == "serve":
+        cmd = [py, str(tool), "serve", "--host", getattr(a, "host", "0.0.0.0"),
+               "--port", str(getattr(a, "port", 8899))]
+        if getattr(a, "background", False):
+            return _spawn_background(cmd, cwd=AUTO_FREECF, name="egress-node",
+                                     ready_port=int(getattr(a, "port", 8899)))
+        return run(cmd, cwd=AUTO_FREECF)
+    if sub == "add":
+        return run([py, str(tool), "add", a.name, a.url], cwd=AUTO_FREECF)
+    if sub == "remove":
+        return run([py, str(tool), "remove", a.name], cwd=AUTO_FREECF)
+    return run([py, str(tool), "list"], cwd=AUTO_FREECF)
+
+
 def cmd_session(a) -> int:
     """One long-running CLI session: run a proxy gateway INSIDE it and run farms
     from the same prompt, reusing that gateway. The gateway is owned by this
@@ -3033,6 +3055,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="group")
     sub.add_parser("doctor", help="health + dependency check across all tools, services & proxies")
+    en = sub.add_parser("egress-node", help="use a device's OWN connection as an egress node (phone/PC on the same network)")
+    ens = en.add_subparsers(dest="en_cmd")
+    ens.add_parser("list", help="list registered device nodes + probe them (default)")
+    ensrv = ens.add_parser("serve", help="run THIS device as an egress node (proxy on its own IP)")
+    ensrv.add_argument("--host", default="0.0.0.0", help="bind interface (default 0.0.0.0; use a Tailscale IP for safety)")
+    ensrv.add_argument("--port", type=int, default=8899)
+    ensrv.add_argument("-b", "--background", action="store_true", help="run the node in the background")
+    ena = ens.add_parser("add", help="register a remote device node")
+    ena.add_argument("name")
+    ena.add_argument("url", help="e.g. http://100.77.106.64:8899")
+    enr = ens.add_parser("remove", help="forget a device node")
+    enr.add_argument("name")
     ses = sub.add_parser("session", help="one long-running CLI: run the proxy gateway inside it and run farms that reuse it")
     ses.add_argument("--port", type=int, default=8888, help="gateway port (default 8888)")
     ses.add_argument("--target", type=int, default=30, help="proxy pool target size (default 30)")
@@ -3476,6 +3510,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_doctor(args)
     if g == "report":
         return cmd_report(args)
+    if g == "egress-node":
+        return cmd_egress_node(args)
     if g == "session":
         return cmd_session(args)
     if g == "beginner":

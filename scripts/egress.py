@@ -21,6 +21,7 @@ Importable without side effects (no background gateway spawned on import).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -187,6 +188,20 @@ def auto_egress(
 
     # ── AUTO STRATEGY ──
 
+    # 0. Registered DEVICE egress nodes (another device's own connection — e.g. a
+    #    phone on mobile data, or a host on a different network). These are the
+    #    highest-value free rung because they are real devices, not public proxies.
+    if allow_mobile:
+        for name, node_url in _load_egress_nodes().items():
+            st = probe_status(target_url, proxy=node_url, timeout=8.0)
+            if 200 <= st < 400 and not is_blocked(st):
+                if verbose:
+                    eg = check_gateway_egress(node_url, retries=1, timeout=4.0)
+                    print(f"  [egress] ✓ Device node '{name}' verified for {target_url} (HTTP {st}, exit {eg or '?'})", file=sys.stderr)
+                return node_url, None, f"node:{name}"
+            elif verbose:
+                print(f"  [egress] • Device node '{name}' returned HTTP {st} for {target_url}", file=sys.stderr)
+
     # 1. Existing local gateway on 127.0.0.1:8888 or :8899
     for port in (8888, 8899):
         if is_port_open("127.0.0.1", port):
@@ -306,6 +321,18 @@ def auto_egress(
     if verbose:
         print("  [egress] ✗ All proxy candidates failed or blocked; falling back to direct", file=sys.stderr)
     return None, None, "direct"
+
+
+def _load_egress_nodes() -> dict[str, str]:
+    """Registered device egress nodes (name -> url) from egress_nodes.json."""
+    try:
+        p = Path(os.environ.get("EGRESS_NODES", Path.home() / ".config" / "auto-freecf" / "egress_nodes.json"))
+        if not p.exists():
+            return {}
+        data = json.loads(p.read_text())
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _phone_connected() -> bool:
