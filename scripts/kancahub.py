@@ -285,6 +285,18 @@ def _stop_auto_gateways() -> None:
             except Exception:  # noqa: BLE001 - best-effort teardown
                 pass
 
+# Shown whenever the free proxy ladder fails / falls back to direct, so the user
+# always sees the strongest (free) alternative: their own mobile/hotspot egress.
+EGRESS_HINT = (
+    "  Hint: GitHub/TokenHarbor block datacenter + WARP IPs. If this keeps failing,\n"
+    "        tether your PHONE (mobile hotspot) and re-run with --proxy none — a real\n"
+    "        carrier IP is the free path that GitHub accepts. See: kancahub doctor"
+)
+
+def print_egress_hint() -> None:
+    print(col("cyan", EGRESS_HINT))
+
+
 class EgressChoice:
     """Outcome of resolving a --proxy mode for one farm command."""
 
@@ -348,6 +360,7 @@ def _choose_egress(mode: str, target_url: str) -> EgressChoice:
         return EgressChoice(None, "warp", warp=True)
 
     print(col("yellow", "  [proxy] auto: no usable proxy — using a direct connection"))
+    print_egress_hint()
     return EgressChoice(None, "direct", direct=True)
 
 def _resolve_proxy(mode: str, target_url: str) -> str | None:
@@ -2812,6 +2825,9 @@ def render_menu() -> str:
     lines.append("")
     lines.append(f"  [{col('bold', 'h')}] Help & command reference")
     lines.append(f"  [{col('bold', 'q')}] Exit")
+    lines.append("")
+    lines.append(col("dim", "  Tip: if a farm is IP-blocked (GitHub/TokenHarbor), tether your phone and"))
+    lines.append(col("dim", "       re-run with --proxy none (a mobile/carrier IP is the free fix)."))
     return "\n".join(lines)
 
 
