@@ -75,6 +75,7 @@ def classify_auth(
     hrefs: list[str],
     has_email: bool,
     has_pass: bool,
+    has_next: bool = False,
 ) -> dict:
     """Classify available auth methods from DOM evidence. Pure — no I/O.
 
@@ -83,15 +84,16 @@ def classify_auth(
         hrefs: href/action URLs of links and oauth anchors.
         has_email: an email input exists.
         has_pass: a password input exists.
+        has_next: a 'Next' or 'Continue' button exists (multi-step email start).
 
     Returns:
-        {"methods": [...], "has_email_form": bool, "preferred": str|None}
+        {"methods": [...], "has_email_form": bool, "preferred": str|None, "step": str|None}
 
     `methods` is ordered by routing preference: **email first**, then github,
     then google. Rationale (user directive): if the site offers an email+password
     signup, use it first (it's self-service); fall back to GitHub/Google social
-    only when no email form exists. A real email form requires BOTH an email and
-    a password input.
+    only when no email form exists. has_email_form is True if (email AND password)
+    OR (email AND has_next).
     """
     text = " ".join(str(x or "").lower() for x in labels)
     links = " ".join(str(x or "").lower() for x in hrefs)
@@ -101,7 +103,23 @@ def classify_auth(
     has_google = any(h in text for h in GOOGLE_TEXT_HINTS) or \
         any(h in links for h in GOOGLE_HREF_HINTS)
 
-    has_email_form = bool(has_email and has_pass)
+    effective_has_next = bool(has_next)
+    if not effective_has_next:
+        next_hints = ("next", "continue", "lanjut", "selanjutnya", "berikutnya", "berikut", "proceed")
+        for lbl in labels:
+            l = str(lbl or "").strip().lower()
+            if any(h == l or l.startswith(h + " ") or l.endswith(" " + h) or f" {h} " in l for h in next_hints):
+                effective_has_next = True
+                break
+
+    has_email_form = bool((has_email and has_pass) or (has_email and effective_has_next))
+
+    step = None
+    if has_email_form:
+        if has_email and not has_pass:
+            step = "email_only"
+        else:
+            step = "email_password"
 
     methods: list[str] = []
     if has_email_form:          # email/password FIRST (self-service signup)
@@ -115,7 +133,71 @@ def classify_auth(
         "methods": methods,
         "has_email_form": has_email_form,
         "preferred": methods[0] if methods else None,
+        "step": step,
     }
+
+
+def next_step_action(visible_fields: set[str], buttons: set[str]) -> str:
+    """Decide the next action in a multi-step signup flow. Pure — no I/O.
+
+    Args:
+        visible_fields: set of input field types/names visible on current step.
+        buttons: set of button texts visible on current step.
+
+    Returns:
+        One of:
+          - 'stop_captcha': captcha challenge present
+          - 'stop_phone_otp': phone / OTP verification required
+          - 'fill_password': password field needs to be filled
+          - 'fill_name': name fields need to be filled
+          - 'fill_dob': date of birth fields need to be filled
+          - 'fill_email': email field needs to be filled
+          - 'click_next': no unfilled fields, next/continue button present
+          - 'stop_unknown': no recognized fields or buttons
+    """
+    fields_norm = {str(f).strip().lower() for f in (visible_fields or set()) if f}
+    buttons_norm = {str(b).strip().lower() for b in (buttons or set()) if b}
+
+    # 1. Captcha / Bot protection check
+    captcha_hints = ("captcha", "arkose", "funcaptcha", "recaptcha", "hcaptcha", "turnstile", "puzzle", "robot", "human")
+    if any(any(hint in f for hint in captcha_hints) for f in fields_norm) or \
+       any(any(hint in b for hint in captcha_hints) for b in buttons_norm):
+        return "stop_captcha"
+
+    # 2. Phone / OTP / Verification code check
+    phone_otp_hints = ("phone", "tel", "otp", "code", "sms", "verification", "verify")
+    if any(any(hint in f for hint in phone_otp_hints) for f in fields_norm):
+        return "stop_phone_otp"
+
+    # 3. Fillable fields: password
+    pass_hints = ("password", "pass", "passwd", "confirm_password", "confirm_pass")
+    if any(any(hint in f for hint in pass_hints) for f in fields_norm):
+        return "fill_password"
+
+    # 4. Fillable fields: name
+    name_hints = ("name", "first_name", "last_name", "firstname", "lastname")
+    if any(any(hint in f for hint in name_hints) for f in fields_norm):
+        return "fill_name"
+
+    # 5. Fillable fields: DOB
+    dob_hints = ("dob", "birthdate", "birth", "birth_year", "birth_month", "birth_day", "month", "day", "year")
+    if any(any(hint in f for hint in dob_hints) for f in fields_norm):
+        return "fill_dob"
+
+    # 6. Fillable fields: email
+    if any("email" in f for f in fields_norm):
+        return "fill_email"
+
+    # 7. Next / Continue / Submit button
+    next_btn_hints = (
+        "next", "continue", "create account", "create_account", "sign up", "sign_up",
+        "submit", "lanjut", "selanjutnya", "berikutnya", "berikut"
+    )
+    if any(any(hint in b for hint in next_btn_hints) for b in buttons_norm):
+        return "click_next"
+
+    # 8. Unrecognized / broken step
+    return "stop_unknown"
 
 def load_github_accounts(path: Path | str | None = None) -> list[dict]:
     """Load usable GitHub accounts (github_accounts.json). Empty list if none."""
@@ -294,6 +376,7 @@ async def run_autofarm(
             "methods": result.get("auth_methods", []),
             "preferred": result.get("auth_preferred"),
             "has_email_form": result.get("has_email_form", False),
+            "step": result.get("step"),
             "stopped_at": result.get("stopped_at"),
         }, indent=2))
         return result
@@ -363,9 +446,11 @@ async def _drive_page(
     result["auth_methods"] = methods
     result["auth_preferred"] = classification.get("preferred")
     result["has_email_form"] = classification.get("has_email_form", False)
+    result["step"] = classification.get("step")
+    step_str = f" step={result['step']}" if result.get("step") else ""
     print(f"  [inspect] methods={methods or ['none']} "
           f"has_email_form={result['has_email_form']} "
-          f"preferred={result['auth_preferred']}")
+          f"preferred={result['auth_preferred']}{step_str}")
 
     if not methods:
         result["stopped_at"] = "no_supported_auth_method"
@@ -443,64 +528,302 @@ async def _run_browser_flow(
         finally:
             await browser.close()
 
-async def _route_email(page, url, email, password, username, host, result) -> dict:
-    """Fill the email/password signup form and verify honestly."""
-    email_sel = "input[type='email'], input[name*='email' i], input[id*='email' i]"
-    pass_sel = "input[type='password'], input[name*='pass' i], input[id*='pass' i]"
-    user_sel = "input[name*='user' i], input[name*='name' i], input[id*='user' i]"
-    submit_sel = ("button[type='submit'], input[type='submit'], button:has-text('Sign'), "
-                  "button:has-text('Register'), button:has-text('Daftar'), button:has-text('Submit')")
+async def _find_clickable_next_button(page):
+    selectors = [
+        "button:has-text('Next')",
+        "button:has-text('Continue')",
+        "button:has-text('Create account')",
+        "button:has-text('Create Account')",
+        "button:has-text('Sign up')",
+        "button:has-text('Sign Up')",
+        "button:has-text('Submit')",
+        "button:has-text('Register')",
+        "button:has-text('Daftar')",
+        "button:has-text('Lanjut')",
+        "button:has-text('Selanjutnya')",
+        "button:has-text('Berikutnya')",
+        "button:has-text('Berikut')",
+        "input[type='submit']",
+        "button[type='submit']",
+        "input[type='button'][value*='Next' i]",
+        "input[type='button'][value*='Continue' i]",
+        "input[type='button'][value*='Berikutnya' i]",
+        "[role='button']:has-text('Next')",
+        "[role='button']:has-text('Continue')",
+        "[role='button']:has-text('Berikutnya')",
+    ]
+    for sel in selectors:
+        try:
+            elements = await page.query_selector_all(sel)
+            for el in elements:
+                if await el.is_visible() and await el.is_enabled():
+                    return el
+        except Exception:
+            continue
+    return None
 
+
+async def _is_captcha_present(page) -> bool:
+    captcha_selectors = [
+        "iframe[src*='arkoselabs']",
+        "iframe[src*='funcaptcha']",
+        "iframe[src*='recaptcha']",
+        "iframe[src*='hcaptcha']",
+        "#enforcementFrame",
+        "[data-e2e='enforcement-frame']",
+        ".cf-turnstile",
+        "iframe[src*='challenges.cloudflare.com']",
+    ]
+    for sel in captcha_selectors:
+        try:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                return True
+        except Exception:
+            continue
     try:
-        if await page.query_selector(email_sel):
-            print("  • Found email input, filling…")
-            await page.fill(email_sel, email)
-            await page.wait_for_timeout(500)
+        body_text = await page.evaluate("() => document.body ? document.body.innerText.toLowerCase() : ''")
+        captcha_phrases = (
+            "solve the puzzle",
+            "solve a puzzle",
+            "are you a human",
+            "verify you are human",
+            "verify that you are human",
+            "human verification",
+            "security challenge",
+            "not a robot",
+            "arkose",
+        )
+        if any(p in body_text for p in captcha_phrases):
+            return True
+    except Exception:
+        pass
+    return False
 
-        if await page.query_selector(user_sel) and not await page.query_selector(email_sel):
-            await page.fill(user_sel, username)
-            await page.wait_for_timeout(500)
 
-        if await page.query_selector(pass_sel):
-            print("  • Found password input, filling…")
-            await page.fill(pass_sel, password)
-            await page.wait_for_timeout(500)
-            confirm_sel = "input[name*='confirm' i], input[id*='confirm' i]"
-            if await page.query_selector(confirm_sel):
-                await page.fill(confirm_sel, password)
+async def _is_phone_otp_present(page) -> bool:
+    try:
+        otp_selectors = [
+            "input[name*='otp' i]",
+            "input[id*='otp' i]",
+            "input[name*='code' i]",
+            "input[id*='code' i]",
+            "input[placeholder*='code' i]",
+            "input[type='tel']",
+            "input[name*='phone' i]",
+            "input[id*='phone' i]",
+        ]
+        for sel in otp_selectors:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                return True
+        body_text = await page.evaluate("() => document.body ? document.body.innerText.toLowerCase() : ''")
+        otp_phrases = (
+            "enter code",
+            "verification code",
+            "verify your email",
+            "verify email",
+            "we sent a code",
+            "enter the code",
+            "phone number",
+            "enter your phone",
+        )
+        if any(p in body_text for p in otp_phrases):
+            return True
+    except Exception:
+        pass
+    return False
 
-        chk = await page.query_selector("input[type='checkbox']")
-        if chk and not await chk.is_checked():
-            await chk.check()
-            await page.wait_for_timeout(500)
 
+async def _fill_known_fields(page, email: str, password: str, username: str) -> bool:
+    filled_any = False
+
+    # Email
+    email_sel = "input[type='email'], input[name*='email' i], input[id*='email' i]"
+    try:
+        el = await page.query_selector(email_sel)
+        if el and await el.is_visible():
+            val = (await el.input_value() or "").strip()
+            if not val:
+                print("  • Found email input, filling…")
+                await el.fill(email)
+                await page.wait_for_timeout(random.randint(400, 800))
+                filled_any = True
+    except Exception:
+        pass
+
+    # Password
+    pass_sel = "input[type='password'], input[name*='pass' i], input[id*='pass' i]"
+    try:
+        el = await page.query_selector(pass_sel)
+        if el and await el.is_visible():
+            val = (await el.input_value() or "").strip()
+            if not val:
+                print("  • Found password input, filling…")
+                await el.fill(password)
+                await page.wait_for_timeout(random.randint(400, 800))
+                filled_any = True
+
+                confirm_sel = "input[name*='confirm' i], input[id*='confirm' i], input[name*='repeat' i], input[placeholder*='confirm' i]"
+                c_el = await page.query_selector(confirm_sel)
+                if c_el and await c_el.is_visible():
+                    c_val = (await c_el.input_value() or "").strip()
+                    if not c_val:
+                        await c_el.fill(password)
+                        await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+    # First & Last Name
+    first_sel = "input[name*='first' i], input[id*='first' i], input[placeholder*='first' i], input[name*='fname' i]"
+    last_sel = "input[name*='last' i], input[id*='last' i], input[placeholder*='last' i], input[name*='lname' i]"
+    try:
+        fn_el = await page.query_selector(first_sel)
+        ln_el = await page.query_selector(last_sel)
+        if fn_el and await fn_el.is_visible():
+            if not (await fn_el.input_value() or "").strip():
+                print("  • Found first name input, filling…")
+                await fn_el.fill("Kanca")
+                filled_any = True
+                await page.wait_for_timeout(400)
+        if ln_el and await ln_el.is_visible():
+            if not (await ln_el.input_value() or "").strip():
+                print("  • Found last name input, filling…")
+                await ln_el.fill("Labs")
+                filled_any = True
+                await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+    # Single username / name (if not first/last and not email)
+    name_sel = "input[name*='user' i], input[name*='name' i], input[id*='user' i]"
+    try:
+        n_el = await page.query_selector(name_sel)
+        if n_el and await n_el.is_visible():
+            t = (await n_el.get_attribute("type") or "").lower()
+            if t not in ("email", "password", "hidden", "submit", "checkbox"):
+                if not (await n_el.input_value() or "").strip():
+                    print("  • Found username/name input, filling…")
+                    await n_el.fill(username)
+                    filled_any = True
+                    await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+    # DOB: Year
+    year_sel = "select[name*='year' i], select[id*='year' i], input[name*='year' i], input[id*='year' i], input[placeholder*='year' i]"
+    try:
+        y_el = await page.query_selector(year_sel)
+        if y_el and await y_el.is_visible():
+            tag = await y_el.evaluate("el => el.tagName.toLowerCase()")
+            if tag == "select":
+                try:
+                    await y_el.select_option(value="1995")
+                except Exception:
+                    await y_el.select_option(index=10)
+            else:
+                if not (await y_el.input_value() or "").strip():
+                    await y_el.fill("1995")
+            filled_any = True
+            await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+    # DOB: Month
+    month_sel = "select[name*='month' i], select[id*='month' i], input[name*='month' i], input[id*='month' i]"
+    try:
+        m_el = await page.query_selector(month_sel)
+        if m_el and await m_el.is_visible():
+            tag = await m_el.evaluate("el => el.tagName.toLowerCase()")
+            if tag == "select":
+                await m_el.select_option(index=1)
+            else:
+                if not (await m_el.input_value() or "").strip():
+                    await m_el.fill("01")
+            filled_any = True
+            await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+    # DOB: Day
+    day_sel = "select[name*='day' i], select[id*='day' i], input[name*='day' i], input[id*='day' i], input[placeholder*='day' i]"
+    try:
+        d_el = await page.query_selector(day_sel)
+        if d_el and await d_el.is_visible():
+            tag = await d_el.evaluate("el => el.tagName.toLowerCase()")
+            if tag == "select":
+                try:
+                    await d_el.select_option(value="15")
+                except Exception:
+                    await d_el.select_option(index=15)
+            else:
+                if not (await d_el.input_value() or "").strip():
+                    await d_el.fill("15")
+            filled_any = True
+            await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+    # Checkboxes
+    try:
+        chks = await page.query_selector_all("input[type='checkbox']")
+        for chk in chks:
+            if await chk.is_visible() and not await chk.is_checked():
+                await chk.check()
+                filled_any = True
+                await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+    return filled_any
+
+
+async def _extract_visible_text(page) -> str:
+    try:
+        return await page.evaluate("""() => {
+            const body = document.body;
+            return body ? body.innerText.slice(0, 300).replace(/\\s+/g, ' ') : '';
+        }""")
+    except Exception:
+        return ""
+
+
+async def _route_email(page, url, email, password, username, host, result, max_steps: int = 8) -> dict:
+    """Fill email/password signup and drive multi-step flows up to max_steps."""
+    print("  • Starting email signup flow (supporting multi-step)…")
+
+    # Step 1: fill initial fields (email, and password if present)
+    try:
+        await _fill_known_fields(page, email, password, username)
         if await page.query_selector(".cf-turnstile, iframe[src*='challenges.cloudflare.com']"):
             print("  • Cloudflare Turnstile detected! Waiting for challenge…")
             await page.wait_for_timeout(5000)
     except Exception as exc:
         result["stopped_at"] = "fill_failed"
-        result["error"] = f"form fill failed: {exc}"
-        print(f"  ✗ Form fill failed: {exc}")
+        result["error"] = f"form fill failed at step 1: {exc}"
+        print(f"  ✗ Form fill failed at step 1: {exc}")
         return result
 
-    submit_btn = await page.query_selector(submit_sel)
+    submit_btn = await _find_clickable_next_button(page)
     if not submit_btn:
         result["stopped_at"] = "no_submit_button"
-        result["error"] = "no submit button found"
-        print("  ⚠ No submit button found — not claiming success.")
+        result["error"] = "no submit or Next button found on step 1"
+        print("  ⚠ No submit/Next button found on step 1 — not claiming success.")
         return result
 
-    print("  • Clicking submit button…")
+    print("  • [step 1] Clicking Next/Submit button…")
     try:
         await submit_btn.click()
     except Exception as exc:
         result["stopped_at"] = "submit_failed"
         result["error"] = str(exc)
-        print(f"  ✗ Submit click failed: {exc}")
+        print(f"  ✗ Step 1 click failed: {exc}")
         return result
-    await page.wait_for_timeout(5000)
 
-    # HONESTY GATE: a submit click is not success. Require a real post-login signal.
+    # Respect rate limits: 1-3s between actions
+    delay = random.uniform(1.5, 3.0)
+    await page.wait_for_timeout(int(delay * 1000))
+
     session = await _capture_session(page, host)
     result["final_url"] = page.url
     result["session"] = session
@@ -508,10 +831,64 @@ async def _route_email(page, url, email, password, username, host, result) -> di
         result["success"] = True
         result["stopped_at"] = "post_login_verified"
         print(f"  ✓ Verified post-login signal at {page.url}")
-    else:
-        result["stopped_at"] = "no_post_login_signal"
-        result["error"] = f"submitted but no post-login signal — still on {page.url}"
-        print(f"  ✗ Submitted, but no post-login signal (still on {page.url}); success=false.")
+        return result
+
+    # Multi-step loop: step 2 up to max_steps
+    for step_idx in range(2, max_steps + 1):
+        print(f"  [step {step_idx}/{max_steps}] Inspecting page at {page.url}…")
+
+        if await _is_captcha_present(page):
+            result["stopped_at"] = "stop_captcha"
+            result["error"] = "captcha or human verification required"
+            print("  ⚠ Captcha / verification challenge detected — stopping honestly.")
+            return result
+
+        if await _is_phone_otp_present(page):
+            result["stopped_at"] = "stop_phone_otp"
+            result["error"] = "phone or email OTP verification required"
+            print("  ⚠ Phone or email OTP verification required — stopping honestly.")
+            return result
+
+        filled = await _fill_known_fields(page, email, password, username)
+
+        next_btn = await _find_clickable_next_button(page)
+        if not next_btn and not filled:
+            vis_text = await _extract_visible_text(page)
+            result["stopped_at"] = "stop_unknown"
+            result["error"] = f"no known field or button at step {step_idx}: {vis_text[:120]}"
+            print(f"  ✗ Step {step_idx} stopped at unknown view: {vis_text[:120]}")
+            return result
+
+        if not next_btn:
+            result["stopped_at"] = "no_submit_button"
+            result["error"] = f"filled fields at step {step_idx} but no Next button found"
+            print(f"  ⚠ Step {step_idx} filled fields but no Next button found.")
+            return result
+
+        print(f"  • [step {step_idx}] Clicking Next/Submit button…")
+        try:
+            await next_btn.click()
+        except Exception as exc:
+            result["stopped_at"] = "submit_failed"
+            result["error"] = str(exc)
+            print(f"  ✗ Step {step_idx} click failed: {exc}")
+            return result
+
+        delay = random.uniform(1.5, 3.0)
+        await page.wait_for_timeout(int(delay * 1000))
+
+        session = await _capture_session(page, host)
+        result["final_url"] = page.url
+        result["session"] = session
+        if _post_login_signal(page.url, session, url, host):
+            result["success"] = True
+            result["stopped_at"] = "post_login_verified"
+            print(f"  ✓ Verified post-login signal at {page.url}")
+            return result
+
+    result["stopped_at"] = "max_steps_exceeded"
+    result["error"] = f"exceeded maximum multi-step steps ({max_steps})"
+    print(f"  ✗ Exceeded {max_steps} steps without post-login signal.")
     return result
 
 async def _route_github(page, url, host, account: dict, result: dict) -> dict:
@@ -586,14 +963,15 @@ async def inspect_auth_methods(page, target_url: str) -> dict:
 
     try:
         elements = await page.locator(
-            "button, a, input[type='submit'], [role='button']"
+            "button, a, input[type='submit'], input[type='button'], [role='button']"
         ).all()
         for el in elements[:60]:
             try:
                 txt = (await el.inner_text()).strip()
                 aria = (await el.get_attribute("aria-label") or "").strip()
                 title = (await el.get_attribute("title") or "").strip()
-                combined = " ".join(x for x in (txt, aria, title) if x)
+                val = (await el.get_attribute("value") or "").strip()
+                combined = " ".join(x for x in (txt, aria, title, val) if x)
                 if combined:
                     labels.append(combined)
                 href = (await el.get_attribute("href") or "").strip()
@@ -629,7 +1007,31 @@ async def inspect_auth_methods(page, target_url: str) -> dict:
     except Exception:
         pass
 
-    classification = classify_auth(labels, hrefs, has_email, has_pass)
+    has_next = False
+    next_hints = ("next", "continue", "lanjut", "selanjutnya", "berikutnya", "berikut", "proceed")
+    for lbl in labels:
+        l_lower = (lbl or "").strip().lower()
+        if any(h == l_lower or l_lower.startswith(h + " ") or l_lower.endswith(" " + h) or f" {h} " in l_lower for h in next_hints):
+            has_next = True
+            break
+    if not has_next:
+        try:
+            next_btn = await page.query_selector(
+                "button:has-text('Next'), button:has-text('Continue'), "
+                "button:has-text('Lanjut'), button:has-text('Selanjutnya'), "
+                "button:has-text('Berikutnya'), button:has-text('Berikut'), "
+                "input[type='submit'][value*='Next' i], input[type='button'][value*='Next' i], "
+                "input[type='submit'][value*='Continue' i], input[type='button'][value*='Continue' i], "
+                "input[type='submit'][value*='Berikutnya' i], input[type='button'][value*='Berikutnya' i], "
+                "[role='button']:has-text('Next'), [role='button']:has-text('Continue'), "
+                "[role='button']:has-text('Berikutnya')"
+            )
+            if next_btn:
+                has_next = True
+        except Exception:
+            pass
+
+    classification = classify_auth(labels, hrefs, has_email, has_pass, has_next=has_next)
     classification["target"] = target_url
     return classification
 
