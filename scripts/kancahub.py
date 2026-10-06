@@ -2894,17 +2894,23 @@ def cmd_gmail(a) -> int:
         # ~/.config/auto-freecf/.env (GMAIL_FARM_ADDRESS). No password needed here —
         # the farm only needs the base ADDRESS to make you+tag@gmail.com variants.
         plus_addr = getattr(a, "plus_address", None) or _env_get("GMAIL_FARM_ADDRESS", ENV_FILE) or None
-        plus_pfx = getattr(a, "plus_prefix", None) or _env_get("GMAIL_FARM_PREFIX", ENV_FILE) or "farm"
         count = getattr(a, "count", 1) or 1
         if plus_addr:
-            samples = [make_plus_address(plus_addr, plus_pfx, i + 1) for i in range(min(count, 3))]
-            print(col("cyan", f"  • Gmail plus-addressing enabled (base: {plus_addr}, prefix: {plus_pfx})"))
-            print(col("dim", f"    Generated: {', '.join(samples)}{'...' if count > 3 else ''}"))
+            # HONEST: Google usernames cannot contain '+', so you CANNOT create
+            # 'base+farmN@gmail.com'. Plus-addressing only REDIRECTS mail to an
+            # address you already own — it is for signing up to OTHER services,
+            # not for creating new Gmails. This farm makes NEW accounts with
+            # random names, so the base address is not used here.
+            print(col("yellow", f"  ⚠ Plus-addressing ({plus_addr}) does NOT create Gmail accounts — "
+                                f"Google usernames cannot contain '+'. It only redirects mail to a Gmail you "
+                                f"already own, for signups to OTHER services. This farm still makes NEW random Gmails."))
+            if getattr(a, "dry_run", False):
+                print(col("dim", "    For provider/service signups, use: autofarm --plus-address " + plus_addr))
 
         cmd = [py, str(gc), "--count", str(count)]
         if getattr(a, "headless", False):
             cmd.append("--headless")
-        if getattr(a, "proxy", None):
+        if getattr(a, "proxy", None) and not getattr(a, "no_proxy", False):
             cmd += ["--proxy", a.proxy]
         if getattr(a, "out", None):
             cmd += ["--out", a.out]
@@ -3419,11 +3425,14 @@ def build_parser() -> argparse.ArgumentParser:
     gmf.add_argument("--count", type=int, default=1, help="accounts to attempt (default 1)")
     gmf.add_argument("--headless", action="store_true", help="run the browser headless")
     gmf.add_argument("--proxy", default=None, help="scheme://host:port (no credentials)")
+    gmf.add_argument("--no-proxy", action="store_true", help="force a direct connection (use your own egress)")
     gmf.add_argument("--out", default=None, help="JSON results file (appended to)")
     gmf.add_argument("--dry-run", action="store_true", help="walk the flow, do not submit")
     gmf.add_argument("--random-password", action="store_true", help="generate a password per account")
     gmf.add_argument("--mobile-rotate", action="store_true", help="rotate tethered phone carrier IP before run & retry on block")
-    gmf.add_argument("--plus-address", default=None, metavar="EMAIL", help="base Gmail address for plus-addressing (e.g. you@gmail.com)")
+    gmf.add_argument("--plus-address", default=None, metavar="EMAIL",
+                     help="base Gmail you OWN for plus-addressing (redirects mail; does NOT create "
+                          "Gmail accounts and is not used by THIS farm — intended for service signups)")
     gmf.add_argument("--plus-prefix", default="farm", metavar="STR", help="tag prefix for plus-addressing (default: farm)")
     gmd = gms.add_parser("dry-run", help="walk the flow without submitting")
     gmd.add_argument("--count", type=int, default=1)
