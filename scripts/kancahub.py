@@ -713,6 +713,101 @@ def _stop_background(name: str = "gateway") -> int:
         return 1
 
 
+class JobRegistry:
+    """Long-running jobs started from the menu, tracked by THIS process.
+
+    The whole point: when the user picks 'Start the proxy gateway' (or another
+    long-lived action) from `kancahub`/`kancahub menu`, it must NOT block the
+    menu — it starts as a background job here, the menu returns immediately, and
+    the job's status is always visible. No second terminal needed.
+    """
+
+    def __init__(self):
+        self.jobs: dict[str, subprocess.Popen] = {}
+        self.logs: dict[str, Path] = {}
+
+    def start(self, name: str, cmd: list[str], *, cwd: Path | None = None,
+              env: dict | None = None) -> int:
+        # If it is already running, just report.
+        if self.alive(name):
+            print(col("yellow", f"  '{name}' is already running (pid {self.jobs[name].pid})"))
+            return 0
+        BACKGROUND_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = BACKGROUND_DIR / f"job-{name}.log"
+        self.logs[name] = log_path
+        logf = open(log_path, "a")
+        try:
+            proc = subprocess.Popen(
+                [str(c) for c in cmd], cwd=str(cwd) if cwd else None,
+                env={**os.environ, **(env or {})},
+                stdout=logf, stderr=subprocess.STDOUT, start_new_session=True,
+            )
+        except FileNotFoundError as ex:
+            print(col("red", f"✗ {ex}"))
+            return 127
+        self.jobs[name] = proc
+        print(col("green", f"  ✓ started '{name}' in the background (pid {proc.pid})"))
+        print(col("dim", f"    log: {log_path}   ·   stop: choose [j] then the job, or kancahub proxy stop"))
+        # brief grace so an instant crash is visible
+        time.sleep(1.0)
+        if proc.poll() is not None:
+            print(col("red", f"  ✗ '{name}' exited immediately — see {log_path}"))
+            return 1
+        return 0
+
+    def alive(self, name: str) -> bool:
+        p = self.jobs.get(name)
+        return p is not None and p.poll() is None
+
+    def running(self) -> list[str]:
+        return [n for n in list(self.jobs) if self.alive(n)]
+
+    def stop(self, name: str) -> int:
+        p = self.jobs.get(name)
+        if p is None:
+            print(col("dim", f"  no job named '{name}'"))
+            return 0
+        if p.poll() is None:
+            # Kill the whole process GROUP (the job may fork grandchildren like
+            # PetaniProxy's server/worker) so nothing is left listening.
+            try:
+                os.killpg(os.getpgid(p.pid), 15)
+            except Exception:  # noqa: BLE001
+                try:
+                    p.terminate()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                p.wait(timeout=6)
+            except Exception:  # noqa: BLE001
+                try:
+                    os.killpg(os.getpgid(p.pid), 9)
+                except Exception:  # noqa: BLE001
+                    pass
+            print(col("green", f"  ✓ stopped '{name}'"))
+        self.jobs.pop(name, None)
+        return 0
+
+    def stop_all(self) -> None:
+        for n in list(self.jobs):
+            self.stop(n)
+
+
+# Menu keys that start LONG-RUNNING servers/loops -> run as background jobs.
+# (Everything else is a normal, quick, interactive command.)
+MENU_BACKGROUND: dict[str, str] = {
+    "2": "gateway",     # Start the proxy gateway  (PetaniProxy --serve/--daemon)
+    "4": "harvest",     # Harvest proxies          (long harvest)
+}
+
+# The argv each background menu item runs (as its own process). These must be
+# NON-INTERACTIVE so running them with no stdin never blocks or errors.
+MENU_BACKGROUND_CMD: dict[str, list[str]] = {
+    "2": ["proxy", "gateway", "--port", "8888", "--target", "30"],  # rotating gateway
+    "4": ["proxy", "harvest", "--target", "20"],                    # long harvest
+}
+
+
 def _run_capture(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> tuple[int, str]:
     print(col("dim", f"$ {' '.join(str(c) for c in cmd)}" + (f"   (cwd={cwd})" if cwd else "")))
     e = os.environ.copy()
@@ -3486,9 +3581,9 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
 
     # Group 1-2: Egress & Diagnostics
     ("1", "Check everything is healthy", "doctor", ["doctor"]),
-    ("2", "Start the proxy gateway", "proxy start", ["proxy", "start"]),
+    ("2", "Start the proxy gateway (background)", "proxy gateway", ["proxy", "gateway"]),
     ("3", "Manage WARP tunnel", "warp", ["warp"]),
-    ("4", "Harvest proxies", "proxy harvest", ["proxy", "harvest"]),
+    ("4", "Harvest proxies (background)", "proxy harvest", ["proxy", "harvest"]),
 
     # Group 3: Accounts (github/thk/gmail/k12/grok/stack)
     ("5", "GitHub Education account farm", "github farm", ["github", "farm"]),
@@ -3643,25 +3738,74 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
     return 0
 
 
+def _jobs_menu(jobs: "JobRegistry") -> None:
+    """List/inspect/stop the background jobs started from the menu."""
+    while True:
+        names = list(jobs.jobs)
+        print(col("bold", "\n  Background jobs:\n"))
+        if not names:
+            print(col("dim", "  (none) — start one with menu option [2] gateway or [4] harvest\n"))
+            return
+        for i, n in enumerate(names, 1):
+            state = col("green", "● running") if jobs.alive(n) else col("dim", "○ stopped")
+            log = jobs.logs.get(n)
+            print(f"   [{i}] {n:<10} {state}   log: {log}")
+        print("\n   [l N] tail job N's log     [s N] stop job N     [a] stop all     [Enter] back")
+        try:
+            c = input("  jobs> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not c:
+            return
+        if c == "a":
+            jobs.stop_all()
+            continue
+        if c.startswith(("l", "s")) and len(c) > 1:
+            try:
+                idx = int(c[1:].strip()) - 1
+                name = names[idx]
+            except (ValueError, IndexError):
+                print(col("yellow", "  pick a valid number"))
+                continue
+            if c[0] == "s":
+                jobs.stop(name)
+            else:
+                log = jobs.logs.get(name)
+                if log and log.exists():
+                    print(col("dim", f"  — tail of {log} —"))
+                    print("\n".join(log.read_text(errors="replace").splitlines()[-25:]))
+                else:
+                    print(col("dim", "  no log"))
+
+
 def interactive_mode(p: argparse.ArgumentParser) -> int:
     """Beginner-friendly unified interactive menu when run without arguments."""
     print(get_ascii_banner())
+    jobs = JobRegistry()
 
     while True:
         print(render_menu())
+        running = jobs.running()
+        if running:
+            print(col("green", f"  background jobs: {', '.join(running)}   (choose [j] to manage)"))
         print()
 
         try:
-            choice = input(f" {C['bold']}Select an option [0-{len(UNIFIED_MENU)-1}, h, q]: {C['reset']}").strip().lower()
+            choice = input(f" {C['bold']}Select an option [0-{len(UNIFIED_MENU)-1}, j, h, q]: {C['reset']}").strip().lower()
         except (EOFError, KeyboardInterrupt):
+            jobs.stop_all()
             print("\nExiting.")
             return 0
 
         if not choice or choice in ("q", "quit", "exit"):
+            jobs.stop_all()
             return 0
         if choice == "h":
             p.print_help()
             return 0
+        if choice == "j":
+            _jobs_menu(jobs)
+            continue
         if choice == "0":
             try:
                 run_end_to_end_flow(p)
@@ -3684,6 +3828,15 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
         if not cmd_args:
             continue
 
+        # Long-running / server-y items run in the BACKGROUND so the menu is never
+        # stuck on PetaniProxy — the flow continues in the same CLI.
+        if _key in MENU_BACKGROUND:
+            job = MENU_BACKGROUND[_key]
+            print(col("cyan", f"\n▶ Starting in background: kancahub {cmd_str}\n"))
+            jobs.start(job, [sys.executable, str(SCRIPTS_DIR / "kancahub.py")] + MENU_BACKGROUND_CMD.get(_key, cmd_args))
+            print(col("dim", "  the menu stays usable — choose [j] to see/stop jobs.\n"))
+            continue
+
         print(col("cyan", f"\n▶ Running: kancahub {cmd_str}\n"))
         try:
             dispatch(p, p.parse_args(cmd_args))
@@ -3693,6 +3846,7 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
         try:
             input(f" {C['bold']}Press Enter to return to menu...{C['reset']}")
         except (EOFError, KeyboardInterrupt):
+            jobs.stop_all()
             return 0
         print()
 
