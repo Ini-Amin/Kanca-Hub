@@ -118,3 +118,4 @@ gmail_accounts.json
 scripts/gmail_accounts.json
 # Nested standalone project (separate upstream repo) — never commit
 grok-farm/
+results/
