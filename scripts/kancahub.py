@@ -19,7 +19,7 @@ features (not just pass-throughs):
   grok    Grok xAI farm (grok-register: SSO risk gate, 5 mail providers, pool)
             run · web · gui · retry · pool · inject (SSO tokens -> 9Router via grok2api)
   github  GitHub account farm (our domain / BINUS) + SheerID verification
-            farm · verify · check   (SheerID link extraction & verifier handoff)
+            farm · verify · edu · check   (SheerID link extraction & verifier handoff)
   mail    School mailbox (BINUS M365) via browser — read signup OTPs
             test (selftest) · otp (--timeout) · login
   gmail   Gmail account farm (gmail-account-creator, nodriver)
@@ -1401,13 +1401,15 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
                 "               via KancaHub mail relay OR the BINUS school mailbox.\n"
                 "  2. verify    Automate SheerID / GitHub Student Pack verification from a direct URL or\n"
                 "               by extracting the verification link from the school M365 inbox.\n"
-                "  3. check     Verify environment dependencies, Camoufox, and mailbox/relay credentials.\n"
+                "  3. edu       One-shot flow: farm -> verify -> human pause (camera/student-ID stays human).\n"
+                "  4. check     Verify environment dependencies, Camoufox, and mailbox/relay credentials.\n"
                 "\n"
                 "Examples:\n"
                 "  kancahub github farm --domain bizid --max-accounts 3\n"
                 "  kancahub github farm --domain binus --index 1 --headless\n"
                 "  kancahub github verify --from-mail\n"
                 "  kancahub github verify --url 'https://services.sheerid.com/verify/<id>/'\n"
+                "  kancahub github edu --interactive\n"
                 "  kancahub github check"
             ),
         )
@@ -1496,6 +1498,55 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
     gv.add_argument("--debug", action="store_true", help="enable debug mode for SheerID verifier")
     gv.add_argument("--email", default=None, help="manual email to supply to SheerID verifier")
 
+    # ---- edu (one-shot: farm -> verify -> human pause) ----
+    ge = ghs.add_parser(
+        "edu",
+        help="one-shot GitHub Education flow: farm -> SheerID verify -> human pause",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "One-shot GitHub Education (Student Pack) flow.\n"
+            "\n"
+            "Stages (stops + reports at the first failure):\n"
+            "  1. farm          Create ONE GitHub account (github_farm.py) with the chosen\n"
+            "                   --domain/--inbox, through --proxy auto egress.\n"
+            "  2. verify        SheerID verification: uses --url, else extracts the link from\n"
+            "                   the school mailbox (--from-mail). Skipped with --no-verify.\n"
+            "  3. human pause   If verification needs a real camera/student-ID/phone upload:\n"
+            "                   with --interactive, print instructions and WAIT for you;\n"
+            "                   otherwise stop and tell you a human is required.\n"
+            "\n"
+            "HONEST: camera / student-ID / phone steps cannot be automated — this flow is\n"
+            "human-assisted by design. No fake documents are ever generated here.\n"
+            "\n"
+            "Examples:\n"
+            "  kancahub github edu --interactive\n"
+            "  kancahub github edu --domain binus --inbox binus --url 'https://services.sheerid.com/verify/<id>/'\n"
+            "  kancahub github edu --no-verify            # account only"
+        ),
+    )
+    ge.add_argument(
+        "--domain",
+        choices=["binus", "bizid", "myid"],
+        default="bizid",
+        help="email domain for the new account: bizid (default, kancalabs.biz.id), "
+             "myid (kancalabs.my.id), binus (school mailbox)",
+    )
+    ge.add_argument(
+        "--inbox",
+        choices=["binus", "relay"],
+        default="relay",
+        help="inbox source: relay (default, KancaHub mail relay) or binus (Outlook school mailbox)",
+    )
+    ge.add_argument("--proxy", default="auto", metavar="PROXY", help=PROXY_HELP)
+    ge.add_argument("--interactive", action="store_true",
+                    help="pause and wait for the human at the camera/student-ID/phone step")
+    ge.add_argument("--no-verify", action="store_true",
+                    help="skip the SheerID verify stage (account creation only)")
+    ge.add_argument("--url", default=None,
+                    help="direct SheerID verification URL (skips mailbox extraction)")
+    ge.add_argument("--max-accounts", type=int, default=1, metavar="N",
+                    help="max accounts for the farm stage (default: 1)")
+
     # ---- check ----
     gc = ghs.add_parser(
         "check",
@@ -1523,6 +1574,159 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
 
     return ghp
 
+
+def build_edu_steps(no_verify: bool = False) -> list[str]:
+    """Ordered stage list for the one-shot github edu flow (pure, testable).
+
+    Returns ['farm'] with --no-verify, else ['farm', 'verify', 'human_pause'].
+    """
+    if no_verify:
+        return ["farm"]
+    return ["farm", "verify", "human_pause"]
+
+# --- markers in the SheerID verifier output that mean "a human is required" ---
+# (camera capture / student-ID photo / phone verification cannot be automated)
+_EDU_HUMAN_MARKERS = (
+    "camera", "selfie", "student id", "student-id", "photo of", "upload a photo",
+    "upload photo", "document upload", "docupload", "phone verification",
+    "verify your phone", "id upload",
+)
+
+def edu_needs_human(output: str) -> bool:
+    """True when verifier output indicates a physical human step is required."""
+    low = (output or "").lower()
+    return any(m in low for m in _EDU_HUMAN_MARKERS)
+
+# --- markers that the verifier reached the document upload / auto-pass stage ---
+_EDU_DOC_MARKERS = ("langkah 4", "docupload", "dokumen diupload", "dokumen guru",
+                    "auto-pass", "auto_pass", "upload selesai")
+
+def edu_doc_upload_attempted(output: str) -> bool:
+    """True when verifier output shows the docUpload step was attempted (or auto-passed)."""
+    low = (output or "").lower()
+    return any(m in low for m in _EDU_DOC_MARKERS)
+
+def _github_accounts_count() -> int:
+    """Number of accounts recorded in github_accounts.json (0 on any error)."""
+    try:
+        data = json.loads((AUTO_FREECF / "github_accounts.json").read_text())
+    except Exception:  # noqa: BLE001 - missing/corrupt file just means "no account"
+        return 0
+    accounts = data.get("accounts") if isinstance(data, dict) else data
+    return len(accounts or [])
+
+def _sheerid_find_url(py_camo: str, a: Any, proxy_override: str | None = None) -> str | None:
+    """Extract the SheerID verification link from the school mailbox.
+
+    Prints its own errors (same messages as the historical inline code).
+    Returns the URL, or None on failure. `proxy_override` (a concrete URL from
+    an already-resolved egress choice) wins over a.proxy when given.
+    """
+    finder = AUTO_FREECF / "scripts" / "sheerid_link_finder.py"
+    if not finder.exists():
+        print(col("red", f"✗ sheerid_link_finder.py not found at {finder}"))
+        return None
+    print(col("cyan", "Searching school mailbox for SheerID verification link via Camoufox…"))
+    finder_cmd = [
+        py_camo,
+        str(finder),
+        "--json",
+        "--timeout",
+        str(getattr(a, "timeout", 180)),
+    ]
+    if getattr(a, "headless", False):
+        finder_cmd.append("--headless")
+    proxy = proxy_override or getattr(a, "proxy", None) or (
+        "127.0.0.1:8888" if getattr(a, "gateway", False) else None)
+    # The finder takes a concrete proxy URL; never forward mode keywords.
+    if proxy and proxy.strip().lower() in ("auto", "none", "direct", "warp", "off"):
+        proxy = None
+    if proxy:
+        finder_cmd += ["--proxy", proxy]
+    if getattr(a, "open", False):
+        finder_cmd.append("--open")
+
+    try:
+        proc = subprocess.run(
+            finder_cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(AUTO_FREECF),
+        )
+    except Exception as e:  # noqa: BLE001
+        print(col("red", f"✗ Failed to execute sheerid_link_finder.py: {e}"))
+        return None
+
+    try:
+        data = json.loads(proc.stdout) if proc.stdout.strip() else {}
+    except Exception:
+        data = {}
+
+    if proc.returncode != 0 or not data.get("success"):
+        err_msg = data.get("error") if isinstance(data, dict) else None
+        if not err_msg:
+            err_msg = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+        print(col("red", f"✗ SheerID link finder failed: {err_msg}"))
+        return None
+
+    url = data.get("url")
+    print(col("green", f"✓ Found SheerID verification URL: {url}"))
+    if getattr(a, "open", False):
+        print(col("green", "Verification link inspected in browser."))
+    return url
+
+def _sheerid_run(py: str, url: str, *, proxy: str | None = None,
+                 debug: bool = False, email: str | None = None,
+                 capture: bool = False) -> tuple[int, str]:
+    """Run the K-12 SheerID verifier against `url`. Returns (exit_code, output).
+
+    capture=False streams output live (plain `verify`); capture=True captures it
+    (used by `edu` to detect camera/ID/phone steps in the output).
+    """
+    script = K12_DIR / "script.py"
+    if not script.exists():
+        print(col("red", f"✗ SheerID verifier not found at {script}"))
+        print(col("yellow", f"  Extracted verification URL is: {url}"))
+        print(col("yellow", "  You can open and verify this URL manually in a browser."))
+        return 1, ""
+
+    print(col("bold", "\n  GitHub SheerID Verification Handoff"))
+    print(col("yellow", "  ⚠️  NOTE: GitHub Student Pack uses SheerID for select academic partner verifications."))
+    print(col("yellow", "     The underlying solver (script.py) was built for K-12 Teacher verification."))
+    print(col("yellow", "     If GitHub requires a student-specific program or student ID document upload,"))
+    print(col("yellow", "     the automated solver may report a program mismatch and require manual upload.\n"))
+
+    vcmd = [py, str(script), url]
+    if proxy:
+        vcmd += ["--proxy", proxy]
+    if debug:
+        vcmd.append("--debug")
+    if email:
+        vcmd += ["--email", email]
+
+    if capture:
+        try:
+            proc = subprocess.run(vcmd, cwd=str(K12_DIR), capture_output=True, text=True)
+        except Exception as e:  # noqa: BLE001
+            print(col("red", f"✗ Failed to execute SheerID verifier: {e}"))
+            return 1, ""
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if out:
+            print(out, end="" if out.endswith("\n") else "\n")
+        return proc.returncode, out
+    return run(vcmd, cwd=K12_DIR), ""
+
+def _print_edu_summary(summary: dict) -> None:
+    """Final honest report for the github edu flow."""
+    print(col("bold", "\n  GitHub Edu flow summary"))
+    print(f"    account created : {'yes' if summary.get('account') else 'no'}")
+    print(f"    sheerid reached : {'yes' if summary.get('sheerid') else 'no'}")
+    print(f"    docUpload       : {'attempted' if summary.get('doc_upload') else 'not reached'}")
+    pending = summary.get("human_pending") or []
+    if pending:
+        print(f"    human steps     : {', '.join(pending)}")
+    else:
+        print("    human steps     : none detected (GitHub's manual review may still apply)")
 
 def cmd_github(a) -> int:
     """GitHub account farm & Student Pack verification."""
@@ -1563,57 +1767,11 @@ def cmd_github(a) -> int:
             _stop_auto_gateways()
 
     if sub == "verify":
-        finder = AUTO_FREECF / "scripts" / "sheerid_link_finder.py"
-        script = K12_DIR / "script.py"
-
         url = getattr(a, "url", None)
         if getattr(a, "from_mail", False):
-            if not finder.exists():
-                print(col("red", f"✗ sheerid_link_finder.py not found at {finder}"))
+            url = _sheerid_find_url(py_camo, a)
+            if not url:
                 return 1
-            print(col("cyan", "Searching school mailbox for SheerID verification link via Camoufox…"))
-            finder_cmd = [
-                py_camo,
-                str(finder),
-                "--json",
-                "--timeout",
-                str(getattr(a, "timeout", 180)),
-            ]
-            if getattr(a, "headless", False):
-                finder_cmd.append("--headless")
-            proxy = a.proxy or ("127.0.0.1:8888" if getattr(a, "gateway", False) else None)
-            if proxy:
-                finder_cmd += ["--proxy", proxy]
-            if getattr(a, "open", False):
-                finder_cmd.append("--open")
-
-            try:
-                proc = subprocess.run(
-                    finder_cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=str(AUTO_FREECF),
-                )
-            except Exception as e:
-                print(col("red", f"✗ Failed to execute sheerid_link_finder.py: {e}"))
-                return 1
-
-            try:
-                data = json.loads(proc.stdout) if proc.stdout.strip() else {}
-            except Exception:
-                data = {}
-
-            if proc.returncode != 0 or not data.get("success"):
-                err_msg = data.get("error") if isinstance(data, dict) else None
-                if not err_msg:
-                    err_msg = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
-                print(col("red", f"✗ SheerID link finder failed: {err_msg}"))
-                return 1
-
-            url = data.get("url")
-            print(col("green", f"✓ Found SheerID verification URL: {url}"))
-            if getattr(a, "open", False):
-                print(col("green", "Verification link inspected in browser."))
 
         if not url:
             print(col("red", "✗ SheerID verification URL required."))
@@ -1622,27 +1780,109 @@ def cmd_github(a) -> int:
             print(col("yellow", "  Example: kancahub github verify --url https://services.sheerid.com/verify/..."))
             return 1
 
-        if not script.exists():
-            print(col("red", f"✗ SheerID verifier not found at {script}"))
-            print(col("yellow", f"  Extracted verification URL is: {url}"))
-            print(col("yellow", "  You can open and verify this URL manually in a browser."))
+        proxy = getattr(a, "proxy", None) or ("127.0.0.1:8888" if getattr(a, "gateway", False) else None)
+        rc, _ = _sheerid_run(py, url, proxy=proxy,
+                             debug=getattr(a, "debug", False),
+                             email=getattr(a, "email", None))
+        return rc
+
+    if sub == "edu":
+        steps = build_edu_steps(no_verify=getattr(a, "no_verify", False))
+        print(col("bold", f"\n  GitHub Edu one-shot flow — stages: {' -> '.join(steps)}"))
+        summary = {
+            "account": False,
+            "sheerid": False,
+            "doc_upload": False,
+            "human_pending": [],
+        }
+        # Check the farm tool BEFORE resolving egress, so a missing tool is a
+        # clear, offline error (no gateway spawned, no network touched).
+        if "farm" in steps and not farm.exists():
+            print(col("red", f"✗ github_farm.py not found at {farm}"))
+            print(col("yellow", f"  Expected at: {farm}"))
+            print(col("yellow", "  Install/restore the Auto-FreeCF repo, then re-run."))
             return 1
 
-        print(col("bold", "\n  GitHub SheerID Verification Handoff"))
-        print(col("yellow", "  ⚠️  NOTE: GitHub Student Pack uses SheerID for select academic partner verifications."))
-        print(col("yellow", "     The underlying solver (script.py) was built for K-12 Teacher verification."))
-        print(col("yellow", "     If GitHub requires a student-specific program or student ID document upload,"))
-        print(col("yellow", "     the automated solver may report a program mismatch and require manual upload.\n"))
+        # Resolve the egress ONCE; the same concrete proxy serves every stage
+        # (farm, mailbox finder, SheerID verifier). The gateway stays alive for
+        # the whole flow and is torn down in the finally below.
+        mode = getattr(a, "proxy", None) or PROXY_AUTO
+        choice = _choose_egress(mode, EGRESS_TARGETS["github"])
+        resolved_proxy = choice.proxy if choice is not None else None
+        try:
+            # ── [1] farm: create ONE account ────────────────────────────
+            if "farm" in steps:
+                print(col("bold", "\n  [1/3] farm: creating a GitHub account…"))
+                before = _github_accounts_count()
+                cmd = [py_camo, str(farm)] + map_github_farm_args(a, choice)
+                rc = run(cmd, cwd=AUTO_FREECF)
+                if rc != 0:
+                    print(col("red", f"\n✗ STOP: farm stage failed (exit {rc}). Nothing else was attempted."))
+                    print(col("yellow", "  Anti-bot/CAPTCHA or a blocked egress IP are the usual causes — see the log above."))
+                    _print_edu_summary(summary)
+                    return rc
+                after = _github_accounts_count()
+                summary["account"] = after > before
+                if not summary["account"]:
+                    print(col("yellow", "\n⚠ farm exited 0 but no NEW account landed in github_accounts.json."))
 
-        vcmd = [py, str(script), url]
-        proxy = a.proxy or ("127.0.0.1:8888" if getattr(a, "gateway", False) else None)
-        if proxy:
-            vcmd += ["--proxy", proxy]
-        if getattr(a, "debug", False):
-            vcmd.append("--debug")
-        if getattr(a, "email", None):
-            vcmd += ["--email", a.email]
-        return run(vcmd, cwd=K12_DIR)
+            # ── [2] verify: SheerID ─────────────────────────────────────
+            if "verify" in steps:
+                print(col("bold", "\n  [2/3] verify: SheerID Student Pack verification…"))
+                url = getattr(a, "url", None)
+                if not url:
+                    url = _sheerid_find_url(py_camo, a, proxy_override=resolved_proxy)
+                    if not url:
+                        print(col("red", "\n✗ STOP: could not obtain a SheerID verification URL."))
+                        print(col("yellow", "  Pass --url <sheerid-url>, or fix the school-mailbox extraction."))
+                        _print_edu_summary(summary)
+                        return 1
+                summary["sheerid"] = True
+                # A missing verifier is a tool problem, not a human step: clear
+                # error + exit 1 (no traceback, nothing else attempted).
+                if not (K12_DIR / "script.py").exists():
+                    print(col("red", f"✗ SheerID verifier not found at {K12_DIR / 'script.py'}"))
+                    print(col("yellow", f"  Extracted verification URL: {url}"))
+                    print(col("yellow", "  Restore the K-12 tool or open that URL manually in a browser."))
+                    _print_edu_summary(summary)
+                    return 1
+                rc, out = _sheerid_run(py, url, proxy=resolved_proxy, capture=True)
+                summary["doc_upload"] = edu_doc_upload_attempted(out)
+                needs_human = edu_needs_human(out) or (rc != 0 and not summary["doc_upload"])
+                if needs_human:
+                    summary["human_pending"].append("camera / student-ID / phone step (SheerID)")
+                if rc != 0 and not needs_human:
+                    print(col("red", f"\n✗ STOP: SheerID verifier failed (exit {rc})."))
+                    _print_edu_summary(summary)
+                    return rc
+
+            # ── [3] human pause ─────────────────────────────────────────
+            if "human_pause" in steps and summary["human_pending"]:
+                print(col("bold", "\n  [3/3] human pause: a physical step is required"))
+                print(col("yellow", "  SheerID/GitHub needs something only a human can provide:"))
+                print(col("yellow", "    • a live camera capture / selfie, or"))
+                print(col("yellow", "    • a photo of a real student ID, or"))
+                print(col("yellow", "    • phone/SMS verification."))
+                print(col("yellow", "  No script can do this — and we never fake documents."))
+                if getattr(a, "interactive", False):
+                    print(col("cyan", "\n  Complete the physical step now (in the open browser / on your phone)."))
+                    try:
+                        input("  Press Enter when done (or Ctrl+C to stop): ")
+                    except (EOFError, KeyboardInterrupt):
+                        print(col("yellow", "\n  No input received — stopping; the human step remains pending."))
+                        _print_edu_summary(summary)
+                        return 1
+                    print(col("green", "  ✓ Continuing after human step."))
+                else:
+                    print(col("yellow", "  Re-run with --interactive to be walked through it, or finish it manually."))
+        finally:
+            _stop_auto_gateways()
+
+        _print_edu_summary(summary)
+        if summary["human_pending"] and not getattr(a, "interactive", False):
+            print(col("yellow", "  Result: flow reached the human step; finish it manually to complete verification."))
+            return 0 if summary["account"] else 1
+        return 0 if summary["account"] or summary["sheerid"] else 1
 
     print(col("red", f"✗ unknown github command: {sub}"))
     return 1
