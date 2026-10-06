@@ -59,9 +59,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
+import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -453,6 +456,166 @@ def cmd_mobile(a) -> int:
         if getattr(a, "wait", None):
             cmd += ["--wait", str(a.wait)]
     return run(cmd, cwd=AUTO_FREECF)
+
+
+def _mobile_rotate_once(wait: float = 25.0) -> str | None:
+    """Rotate the tethered phone's carrier IP once via mobile_rotate.py --rotate.
+    Returns the new IP (str), or None if no device is connected / rotation fails."""
+    py = pick_python()
+    tool = AUTO_FREECF / "scripts" / "mobile_rotate.py"
+    if not tool.exists():
+        print(col("yellow", "  [mobile] Note: mobile_rotate.py not found"))
+        return None
+    try:
+        proc = subprocess.run(
+            [py, str(tool), "--rotate", "--wait", str(wait)],
+            capture_output=True,
+            text=True,
+            timeout=wait + 30.0,
+        )
+    except Exception as exc:
+        print(col("yellow", f"  [mobile] Note: mobile rotate invocation failed ({exc})"))
+        return None
+
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        print(col("yellow", f"  [mobile] Note: no tethered phone carrier rotation available ({err or 'no device'})"))
+        return None
+
+    out = proc.stdout or ""
+    new_ip = None
+    for line in out.splitlines():
+        if "IP after" in line:
+            parts = line.split(":", 1)
+            if len(parts) > 1:
+                cand = parts[1].split()[0].strip()
+                if cand and cand != "?":
+                    new_ip = cand
+                    break
+    if not new_ip:
+        m = re.search(r"IP after\s*:\s*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)", out)
+        if m:
+            new_ip = m.group(1)
+
+    if new_ip:
+        print(col("green", f"  [mobile] ✓ Rotated carrier IP: {new_ip}"))
+    return new_ip
+
+
+def make_plus_address(base_email: str | None, prefix: str = "farm", n: int = 1) -> str:
+    """Generate a plus-addressed email from a base address. Pure — no I/O.
+
+    Examples:
+      make_plus_address('you@gmail.com', 'farm', 3) -> 'you+farm3@gmail.com'
+      make_plus_address('gmail.com', 'farm', 3)     -> 'farm3@gmail.com' (domain-only)
+      make_plus_address('@gmail.com', 'farm', 3)    -> 'farm3@gmail.com' (domain-only)
+      make_plus_address('invalid', 'farm', 3)       -> '' (invalid input)
+    """
+    if not base_email or not isinstance(base_email, str):
+        return ""
+    base = base_email.strip()
+    if not base:
+        return ""
+    pfx = str(prefix if prefix is not None else "farm").strip()
+
+    if "@" in base:
+        parts = base.split("@", 1)
+        local = parts[0].strip()
+        domain = parts[1].strip()
+        # strip any existing plus suffix from the local part
+        local = local.split("+", 1)[0].strip()
+        if not domain or "." not in domain:
+            return ""
+        tag = f"{pfx}{n}" if pfx else str(n)
+        if not local:
+            # domain-only like "@gmail.com"
+            return f"{tag}@{domain}"
+        return f"{local}+{tag}@{domain}"
+    else:
+        # Domain-only like "gmail.com"
+        if "." in base and not base.startswith("."):
+            tag = f"{pfx}{n}" if pfx else str(n)
+            return f"{tag}@{base}"
+        return ""
+
+
+def _is_block_signal(text: str) -> bool:
+    t = (text or "").lower()
+    signals = (
+        "403",
+        "access_restricted",
+        "not supported",
+        "take a breath",
+        "forbidden",
+        "blocked",
+        "country your connection exits from",
+    )
+    return any(s in t for s in signals)
+
+
+def _run_capture(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> tuple[int, str]:
+    print(col("dim", f"$ {' '.join(str(c) for c in cmd)}" + (f"   (cwd={cwd})" if cwd else "")))
+    e = os.environ.copy()
+    if env:
+        e.update(env)
+    output_lines: list[str] = []
+    try:
+        proc = subprocess.Popen(
+            [str(c) for c in cmd],
+            cwd=str(cwd) if cwd else None,
+            env=e,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        if proc.stdout:
+            for line in proc.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                output_lines.append(line)
+        ret = proc.wait()
+        return ret, "".join(output_lines)
+    except FileNotFoundError as ex:
+        print(col("red", f"✗ {ex}"))
+        return 127, str(ex)
+
+
+def run_with_mobile_retry(
+    cmd: list[str],
+    cwd: Path | None = None,
+    env: dict | None = None,
+    *,
+    mobile_rotate: bool = False,
+    wait: float = 25.0,
+) -> int:
+    """Run a farm command. If mobile_rotate is enabled:
+      1. Rotate carrier IP once before the run.
+      2. If execution fails with a block signal (403, access_restricted, not supported, take a breath),
+         sleep 20-45s, rotate carrier IP again (cap: 2 rotations), and retry once.
+    """
+    if not mobile_rotate:
+        return run(cmd, cwd=cwd, env=env)
+
+    # Rotation 1: before the run
+    print(col("cyan", "  [mobile] Rotating carrier IP before run (--mobile-rotate enabled)…"))
+    _mobile_rotate_once(wait=wait)
+
+    code, out = _run_capture(cmd, cwd=cwd, env=env)
+    if code == 0:
+        return 0
+
+    if _is_block_signal(out):
+        print(col("yellow", "\n  ⚠ Block signal detected during farm run."))
+        delay = random.uniform(20.0, 30.0)
+        print(col("cyan", f"  [mobile] Cooling down ({delay:.1f}s) and rotating carrier IP for retry…"))
+        time.sleep(delay)
+        # Rotation 2: retry rotation (cap: 2 per account/run)
+        _mobile_rotate_once(wait=wait)
+        print(col("cyan", "  [mobile] Retrying farm command with fresh mobile egress…"))
+        code, _ = _run_capture(cmd, cwd=cwd, env=env)
+
+    return code
 
 
 def cmd_doctor(_a) -> int:
@@ -1212,7 +1375,7 @@ def cmd_thk(a) -> int:
                 # to stay direct so the user's egress (e.g. mobile tether) is used.
                 env["TOKENHARBOR_NO_PROXY"] = "1"
         try:
-            return run(cmd, cwd=HARBOR, env=env)
+            return run_with_mobile_retry(cmd, cwd=HARBOR, env=env, mobile_rotate=getattr(a, "mobile_rotate", False))
         finally:
             _stop_auto_gateways()
 
@@ -1569,6 +1732,7 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
     gf.add_argument("--delay-min", type=float, default=20.0, metavar="SEC", help="min delay between accounts (default: 20s)")
     gf.add_argument("--delay-max", type=float, default=45.0, metavar="SEC", help="max delay between accounts (default: 45s)")
     gf.add_argument("--max-accounts", type=int, default=5, metavar="N", help="max accounts to process in this run (default: 5)")
+    gf.add_argument("--mobile-rotate", action="store_true", help="rotate tethered phone carrier IP before run & retry on block")
 
     # ---- verify ----
     gv = ghs.add_parser(
@@ -1869,7 +2033,7 @@ def cmd_github(a) -> int:
         cmd = [py_camo, str(farm)] + map_github_farm_args(a, choice)
         print(col("yellow", "Note: Anti-bot CAPTCHA puzzles and Education attestation remain manual steps if encountered."))
         try:
-            return run(cmd, cwd=AUTO_FREECF)
+            return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, mobile_rotate=getattr(a, "mobile_rotate", False))
         finally:
             _stop_auto_gateways()
 
@@ -2053,7 +2217,15 @@ def cmd_gmail(a) -> int:
         return run([py, str(gc), "--check"], cwd=AUTO_FREECF)
 
     if sub == "farm":
-        cmd = [py, str(gc), "--count", str(getattr(a, "count", 1) or 1)]
+        plus_addr = getattr(a, "plus_address", None)
+        plus_pfx = getattr(a, "plus_prefix", "farm") or "farm"
+        count = getattr(a, "count", 1) or 1
+        if plus_addr:
+            samples = [make_plus_address(plus_addr, plus_pfx, i + 1) for i in range(min(count, 3))]
+            print(col("cyan", f"  • Gmail plus-addressing enabled (base: {plus_addr}, prefix: {plus_pfx})"))
+            print(col("dim", f"    Generated: {', '.join(samples)}{'...' if count > 3 else ''}"))
+
+        cmd = [py, str(gc), "--count", str(count)]
         if getattr(a, "headless", False):
             cmd.append("--headless")
         if getattr(a, "proxy", None):
@@ -2064,7 +2236,7 @@ def cmd_gmail(a) -> int:
             cmd.append("--dry-run")
         if getattr(a, "random_password", False):
             cmd.append("--random-password")
-        return run(cmd, cwd=AUTO_FREECF)
+        return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, mobile_rotate=getattr(a, "mobile_rotate", False))
 
     if sub == "dry-run":
         cmd = [py, str(gc), "--count", str(getattr(a, "count", 1) or 1), "--dry-run"]
@@ -2430,6 +2602,10 @@ def build_parser() -> argparse.ArgumentParser:
             "--country", default=None, metavar="CC",
             help="egress country filter (e.g. US, SG; default: auto other-country, excludes ID for thk)",
         )
+        _farm_parser.add_argument(
+            "--mobile-rotate", action="store_true",
+            help="rotate tethered phone carrier IP before run & retry on block",
+        )
     tk = ts.add_parser("test-key", help="test a thk_ key")
     tk.add_argument("key")
     ts.add_parser("enable-free", help="enable free models for an account")
@@ -2540,6 +2716,9 @@ def build_parser() -> argparse.ArgumentParser:
     gmf.add_argument("--out", default=None, help="JSON results file (appended to)")
     gmf.add_argument("--dry-run", action="store_true", help="walk the flow, do not submit")
     gmf.add_argument("--random-password", action="store_true", help="generate a password per account")
+    gmf.add_argument("--mobile-rotate", action="store_true", help="rotate tethered phone carrier IP before run & retry on block")
+    gmf.add_argument("--plus-address", default=None, metavar="EMAIL", help="base Gmail address for plus-addressing (e.g. you@gmail.com)")
+    gmf.add_argument("--plus-prefix", default="farm", metavar="STR", help="tag prefix for plus-addressing (default: farm)")
     gmd = gms.add_parser("dry-run", help="walk the flow without submitting")
     gmd.add_argument("--count", type=int, default=1)
     gmd.add_argument("--proxy", default=None)
@@ -2780,6 +2959,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "none = force direct; WARP = force Cloudflare WARP; or an explicit "
                          "proxy URL such as http://127.0.0.1:8888")
     af.add_argument("--no-proxy", action="store_true", help="alias for --proxy none: force direct")
+    af.add_argument("--mobile-rotate", action="store_true", help="rotate tethered phone carrier IP before run & retry on block")
+    af.add_argument("--plus-address", default=None, metavar="EMAIL", help="use plus-addressing (you+farm1@gmail.com) instead of disposable domain")
+    af.add_argument("--plus-prefix", default="farm", metavar="STR", help="tag prefix for plus-addressing (default: farm)")
 
     return p
 
@@ -2865,6 +3047,11 @@ def cmd_autofarm(a) -> int:
         cmd += ["--out", a.out]
     if getattr(a, "headless", False):
         cmd.append("--headless")
+    if getattr(a, "plus_address", None):
+        plus_pfx = getattr(a, "plus_prefix", "farm") or "farm"
+        sample_email = make_plus_address(a.plus_address, plus_pfx, 1)
+        print(col("cyan", f"  • Plus-addressing configured: {sample_email}"))
+
     # Smart egress auto-wire: resolve --proxy auto|none|URL against the target.
     force_none = bool(getattr(a, "no_proxy", False)) or str(getattr(a, "proxy", "") or "").lower() in ("none", "direct", "off", "no")
     mode = PROXY_NONE if force_none else (getattr(a, "proxy", None) or PROXY_AUTO)
@@ -2874,9 +3061,9 @@ def cmd_autofarm(a) -> int:
         if force_none or not choice.proxy:
             # Tell autofarm explicitly to stay direct (it otherwise grabs pool[0]).
             cmd.append("--no-proxy")
-            return run(cmd, cwd=AUTO_FREECF)
+            return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, mobile_rotate=getattr(a, "mobile_rotate", False))
         cmd += ["--proxy", choice.proxy]
-        return run(cmd, cwd=AUTO_FREECF, env=_proxy_env(choice))
+        return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, env=_proxy_env(choice), mobile_rotate=getattr(a, "mobile_rotate", False))
     finally:
         _stop_auto_gateways()
 
