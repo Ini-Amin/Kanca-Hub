@@ -556,6 +556,89 @@ def _is_block_signal(text: str) -> bool:
 BACKGROUND_DIR = HOME / ".config" / "auto-freecf" / "background"
 
 
+class SessionGateway:
+    """A proxy gateway OWNED and tracked by the current kancahub process.
+
+    Unlike the detached -b mode, this runs a child process that the CLI keeps a
+    handle on: it reports status, is reused by farm commands in the SAME session,
+    and is stopped when the session exits. This is the 'one long-running CLI that
+    does proxy AND farms' model.
+    """
+
+    def __init__(self, port: int = 8888, target: int = 30):
+        self.port = int(port)
+        self.target = int(target)
+        self.proc: subprocess.Popen | None = None
+        self._log_path: Path | None = None
+
+    # -- lifecycle ---------------------------------------------------------
+    def start(self, petani: Path, py: str) -> bool:
+        if self.alive:
+            print(col("yellow", f"  gateway already running on :{self.port}"))
+            return True
+        BACKGROUND_DIR.mkdir(parents=True, exist_ok=True)
+        self._log_path = BACKGROUND_DIR / f"session-gateway-{self.port}.log"
+        logf = open(self._log_path, "a")
+        print(col("cyan", f"  starting gateway on :{self.port} (owned by this session)…"))
+        try:
+            self.proc = subprocess.Popen(
+                [py, "-u", str(petani), "--serve", str(self.port), "--target", str(self.target)],
+                cwd=str(PETANI), stdout=logf, stderr=subprocess.STDOUT,
+            )
+        except FileNotFoundError as ex:
+            print(col("red", f"✗ {ex}"))
+            return False
+        # wait for it to accept connections
+        import socket as _socket
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            if self.proc.poll() is not None:
+                print(col("red", f"✗ gateway exited early — see {self._log_path}"))
+                return False
+            try:
+                with _socket.create_connection(("127.0.0.1", self.port), timeout=0.5):
+                    print(col("green", f"  ✓ gateway ready on 127.0.0.1:{self.port}"))
+                    return True
+            except OSError:
+                time.sleep(0.4)
+        print(col("yellow", f"  ⚠ gateway not ready yet on :{self.port}"))
+        return True
+
+    @property
+    def alive(self) -> bool:
+        if self.proc is not None and self.proc.poll() is None:
+            return True
+        if self.proc is not None:
+            return False
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/status", timeout=3):
+                return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    @property
+    def pool_size(self) -> int | None:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/status", timeout=3) as r:
+                data = json.loads(r.read())
+            return int(data.get("stats", {}).get("pool_size"))
+        except Exception:  # noqa: BLE001
+            return None
+
+    def stop(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                try:
+                    self.proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            print(col("dim", f"  gateway on :{self.port} stopped"))
+        self.proc = None
+
+
 def _spawn_background(cmd: list[str], *, cwd: Path | None = None, env: dict | None = None,
                       name: str = "gateway", ready_port: int | None = None,
                       timeout: float = 15.0) -> int:
@@ -915,6 +998,105 @@ def _ledger_record(farm: str, *, target: str = "", egress: str = "", exit_ip: st
                            stage=stage, ok=ok, count=count, note=note)
     except Exception:  # noqa: BLE001
         pass
+
+
+def cmd_session(a) -> int:
+    """One long-running CLI session: run a proxy gateway INSIDE it and run farms
+    from the same prompt, reusing that gateway. The gateway is owned by this
+    process and stops when you leave the session."""
+    py = pick_python()
+    petani = PETANI / "main.py"
+    gw = SessionGateway(port=int(getattr(a, "port", 8888) or 8888),
+                        target=int(getattr(a, "target", 30) or 30))
+
+    def status_line() -> str:
+        if gw.alive:
+            pool = gw.pool_size
+            pool_s = f"{pool} proxies" if pool is not None else "?"
+            return col("green", f"gateway :{gw.port}  ● UP  ({pool_s})")
+        return col("dim", f"gateway :{gw.port}  ○ down")
+
+    p = build_parser()
+
+    # optionally auto-start the gateway at session start
+    if getattr(a, "start_gateway", False) and petani.exists():
+        gw.start(petani, py)
+
+    print(col("bold", "\n  kancahub session — one CLI for proxy + farms.\n"))
+    print(col("dim", "  the gateway runs INSIDE this session (tracked here), farms reuse it.\n"))
+
+    while True:
+        print("  " + status_line())
+        print()
+        print("   [g] start/refresh gateway      [s] stop gateway        [i] gateway info")
+        print("   [1] github farm      [2] thk batch    [3] grok run    [4] gmail farm")
+        print("   [5] k12 auto         [6] stack signup [7] autofarm    [d] doctor")
+        print("   [q] quit (stops the gateway)")
+        try:
+            ch = input(f"\n  {col('bold', 'session')}> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if ch in ("q", "", "quit", "exit"):
+            break
+        if ch == "g":
+            if petani.exists():
+                gw.start(petani, py)
+            else:
+                print(col("red", f"✗ PetaniProxy not found at {PETANI}"))
+            continue
+        if ch == "s":
+            gw.stop()
+            continue
+        if ch == "i":
+            if gw.alive:
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{gw.port}/api/status", timeout=4) as r:
+                        print(col("dim", r.read().decode()[:600]))
+                except Exception as e:  # noqa: BLE001
+                    print(col("red", f"  could not read gateway info: {e}"))
+            else:
+                print(col("dim", "  gateway is down — press [g] to start"))
+            continue
+
+        # farms run in this same session; they inherit the gateway via --proxy.
+        proxy_arg = f"http://127.0.0.1:{gw.port}" if gw.alive else "auto"
+        farms = {
+            "1": ["github", "farm", "--proxy", proxy_arg],
+            "2": ["thk", "batch", "1", "--proxy", proxy_arg],
+            "3": ["grok", "run", "-n", "1", "--proxy", proxy_arg],
+            "4": ["gmail", "farm", "--proxy", proxy_arg],
+            "5": ["k12", "auto", "--proxy", proxy_arg],
+            "6": ["stack", "signup", "-n", "1"],
+            "7": [],  # autofarm prompts for a URL
+            "d": ["doctor"],
+        }
+        if ch == "7":
+            try:
+                url = input("  target URL: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if not url:
+                continue
+            argv = ["autofarm", url, "--proxy", proxy_arg]
+        elif ch in farms and farms[ch]:
+            argv = farms[ch]
+        else:
+            print(col("yellow", "  unknown option"))
+            continue
+
+        print(col("cyan", f"\n  ▶ kancahub {' '.join(argv)}"))
+        try:
+            dispatch(p, p.parse_args(argv))
+        except SystemExit:
+            pass
+        except Exception as e:  # noqa: BLE001
+            print(col("red", f"  error: {e}"))
+        print()
+
+    gw.stop()
+    print(col("dim", "\n  session closed.\n"))
+    return 0
 
 
 def cmd_report(a) -> int:
@@ -2756,6 +2938,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="group")
     sub.add_parser("doctor", help="health + dependency check across all tools, services & proxies")
+    ses = sub.add_parser("session", help="one long-running CLI: run the proxy gateway inside it and run farms that reuse it")
+    ses.add_argument("--port", type=int, default=8888, help="gateway port (default 8888)")
+    ses.add_argument("--target", type=int, default=30, help="proxy pool target size (default 30)")
+    ses.add_argument("--start-gateway", action="store_true", help="start the gateway immediately at session start")
     rep = sub.add_parser("report", help="show the farm run ledger (what worked/failed across runs)")
     rep.add_argument("-n", "--tail", type=int, default=0, help="also show the last N entries")
     rep.add_argument("--clear", action="store_true", help="clear the ledger")
@@ -3195,6 +3381,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_doctor(args)
     if g == "report":
         return cmd_report(args)
+    if g == "session":
+        return cmd_session(args)
     if g == "beginner":
         return beginner_entry(p)
     if g == "adb":
