@@ -33,3 +33,20 @@
 - `THK/deepseek-v4.1-flash:free` -> **HTTP 200** (works).
 - Created combo **`thk-fallback`** = [THK/deepseek-v4.1-flash:free, THK/qwen3.8-flash:free,
   THK/mimo-v2.6-flash:free, THK/mimo-v2.5:free, THK/glm-5.2:free]. Use `model: "thk-fallback"`.
+
+## 5. Gmail on Waydroid — far, but not finished
+- Installed **Kiwi Browser (x64)** on Waydroid (Chromium-based) -> CDP works via the
+  WebView devtools socket (`webview_devtools_remote_<pid>`; forward that, not
+  chrome_devtools_remote).
+- A **fresh Waydroid** serves `accounts.google.com/signup` cleanly: name step -> birthday
+  step, **no immediate block** (unlike campus/datacenter IPs).
+- CDP fills: name -> "Next" -> birthday advanced OK. BUT Google's **birthday Material
+  dropdowns + year validation** reject pure JS value-setting ("Maximum of 4 characters
+  entered"); it needs real key events.
+- **KEY: `adb shell input tap/type` WORKS on Waydroid** (no MIUI block). So the right driver
+  is `adb input` (coordinate taps + `input text`), not JS. That's the next step.
+
+## 6. Universal approach — status
+The generic pipeline (inspect target -> detect auth -> route email/github) exists in
+`autofarm`. On Waydroid everything is now unblocked (input + CDP + fresh device + GMS),
+so it is the right host to finish the universal flow.
