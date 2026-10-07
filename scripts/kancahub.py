@@ -2031,12 +2031,11 @@ def _stack_manage(a, py) -> int:
 
 # ═══════════════════════════════════════════════════════════════ thk
 
-# TokenHarbor tolerates only a few signups per exit IP before it throttles
-# ("take a breath"); rotate the carrier IP between chunks of this size.
-THK_PER_IP_DEFAULT = 2  # measured: 2 signups then "Too many sign-ups from this network" (1h)
+# TokenHarbor caps signups per network. Measured live on a fresh mobile IP: 5 accounts (even
+# at 12s gaps) then "Too many sign-ups from this network. Please try again in an hour."
+# Pace did not matter, only the per-IP count. 4 leaves a safety margin; 5 is the hard max.
+THK_PER_IP_DEFAULT = 4
 THK_PER_IP_MAX = 5
-# seconds between TokenHarbor accounts (harbor itself only slept 2s)
-THK_PACE = {"fast": (20.0, 45.0), "normal": (45.0, 60.0), "safe": (90.0, 120.0)}
 
 
 def thk_classify(out: str) -> str:
@@ -2061,6 +2060,27 @@ def _thk_account_count() -> int:
         return len(d) if isinstance(d, list) else (1 if d else 0)
     except Exception:  # noqa: BLE001
         return 0
+
+
+def _current_ip() -> str | None:
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import session_guard
+        return session_guard.get_ip()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _thk_fresh_ip(used: set[str], tries: int = 3) -> bool:
+    """Rotate the carrier IP until it is one we have not used this run. Records it in `used`."""
+    for _ in range(tries):
+        ip = _mobile_rotate_once()
+        if ip and ip not in used:
+            used.add(ip)
+            return True
+        print(col("yellow", f"  [thk] carrier returned {'the same' if ip else 'no'} IP; rotating again…"))
+    return False
 
 
 def thk_chunks(count: int, per_ip: int = THK_PER_IP_DEFAULT) -> list[int]:
@@ -2132,10 +2152,9 @@ def cmd_thk(a) -> int:
                 env["TOKENHARBOR_NO_PROXY"] = "1"
         try:
             mobile = getattr(a, "mobile_rotate", False)
-            lo, hi = THK_PACE.get(getattr(a, "pace", "normal"), THK_PACE["normal"])
             env = dict(env or {})
-            env["TOKENHARBOR_DELAY_MIN"], env["TOKENHARBOR_DELAY_MAX"] = str(lo), str(hi)
             before = _thk_account_count()
+            used_ips: set[str] = {_current_ip() or ""}
             # Batches run in per-IP chunks; the carrier IP rotates between chunks
             # (--mobile-rotate does its own rotation before each chunk's run).
             chunks = thk_chunks(a.count, getattr(a, "per_ip", THK_PER_IP_DEFAULT)) if sub == "batch" else [None]
@@ -2145,7 +2164,10 @@ def cmd_thk(a) -> int:
                     cmd = [py, "-m", "tools.tokenharbor.cli", "batch", str(n)]
                     if len(chunks) > 1:
                         print(col("cyan", f"\n  [thk] chunk {i}/{len(chunks)}: {n} account(s) on this IP"))
-                crc = run_with_mobile_retry(cmd, cwd=HARBOR, env=env, mobile_rotate=mobile,
+                # chunk 1 rotates inside run_with_mobile_retry; later chunks were already rotated
+                # (and verified fresh) by _thk_fresh_ip, so don't toggle airplane mode twice.
+                crc = run_with_mobile_retry(cmd, cwd=HARBOR, env=env,
+                                            mobile_rotate=mobile and i == 1,
                                             account=f"thk:{n or 1}x")
                 made = _thk_account_count() - before  # real accounts, not the chunk size
                 why = thk_classify(_LAST_RUN_OUT.get("text", ""))
@@ -2167,9 +2189,14 @@ def cmd_thk(a) -> int:
                         print(col("yellow", "  [thk] per-IP cap reached; re-run on a fresh IP "
                                             "(or use --mobile-rotate to rotate automatically)."))
                         break
-                    gap = random.uniform(lo, hi)
-                    print(col("dim", f"  [thk] pacing {gap:.0f}s before next chunk (then rotate IP)"))
-                    time.sleep(gap)
+                    # --mobile-rotate rotates again before the next run; here we only make sure the
+                    # carrier handed out a DIFFERENT IP (it often keeps the same one), else the next
+                    # chunk would run on a capped IP.
+                    if not _thk_fresh_ip(used_ips):
+                        print(col("red", "  [thk] could not get a new IP after 3 rotations — "
+                                         "stopping before the next chunk (wait ~1h or switch network)."))
+                        rc = rc or 1
+                        break
             # Record every thk batch attempt so 'kancahub report' can show what worked.
             _ledger_record(
                 "thk",
@@ -3481,8 +3508,6 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("count", nargs="?", type=int, default=1)
     tb.add_argument("--per-ip", type=int, default=THK_PER_IP_DEFAULT, metavar="N",
                     help=f"accounts per egress IP before rotating (default {THK_PER_IP_DEFAULT}, max {THK_PER_IP_MAX})")
-    tb.add_argument("--pace", choices=sorted(THK_PACE), default="normal",
-                    help="gap between accounts: fast 20-45s / normal 45-60s / safe 90-120s")
     tb.add_argument("--inject", action="store_true", help="inject new keys into 9Router when the batch ends")
     tb.add_argument("--store", choices=["9router", "ledger", "both"], default=None,
                     help="where to record results: 9router (SQLite via inject), ledger (jsonl), both")
@@ -4228,6 +4253,8 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
 
     # 1b) thk only: per-IP cap, inject into 9Router, where to store
     if kind == "thk":
+        print(col("dim", f"   (TokenHarbor allows ~{THK_PER_IP_MAX} signups per IP, then locks it ~1h; "
+                         f"{THK_PER_IP_DEFAULT} is safe — the IP rotates automatically after that)"))
         per = _ask(f"accounts per IP before rotating (1-{THK_PER_IP_MAX})", str(THK_PER_IP_DEFAULT))
         if per.isdigit():
             argv += ["--per-ip", str(max(1, min(int(per), THK_PER_IP_MAX)))]
@@ -4238,10 +4265,11 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
         if store in ("9router", "ledger", "both"):
             argv += ["--store", store]
 
-    # 2) pacing (github only supports --pace today)
-    pace = _ask("pace (fast/normal/safe)", "normal")
-    if kind in ("github", "thk") and pace in ("fast", "normal", "safe"):
-        argv += ["--pace", pace]
+    # 2) pacing (github only supports --pace today; thk is limited by a per-IP count, not speed)
+    if kind != "thk":
+        pace = _ask("pace (fast/normal/safe)", "normal")
+        if kind == "github" and pace in ("fast", "normal", "safe"):
+            argv += ["--pace", pace]
 
     # 3) egress  (auto = best available ladder incl. mobile; none = your raw connection)
     egress = _ask("egress — auto=best-available(incl. phone) / none=direct / mobile / warp", "auto")
