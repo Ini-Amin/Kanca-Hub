@@ -35,7 +35,7 @@ PETANI_OUT = HOME / "petani-proxy" / "output"
 AUTO_FREECF = HOME / "Auto-FreeCF"
 TARGETS = [
     AUTO_FREECF / "signup_from_scratch" / "proxies.txt",   # signup pipeline + github + grok
-    HOME / "harbor" / "tools" / "proxies.txt",             # harbor (TokenHarbor)
+    Path(__file__).resolve().parent.parent / "harbor" / "tools" / "proxies.txt",             # harbor (TokenHarbor)
 ]
 SOURCES = [
     PETANI_OUT / "webshare_residential.txt",   # real residential (best)

@@ -4,13 +4,13 @@ harbor_config.py — configure the local `harbor` (TokenHarbor) install for us.
 
 What it does
 ------------
-1. Sets ``[tempik].base_url`` in ``~/harbor/tools/tokenharbor/config.toml`` to the
+1. Sets ``[tempik].base_url`` in ``<repo>/harbor/tools/tokenharbor/config.toml`` to the
    deployed Tempik worker (https://tempik.kancalabs.workers.dev).
 2. Copies the Capsolver key: reads ``CAPSOLVER_API_KEY`` from
    ``~/.config/auto-freecf/.env`` (if present) and writes it to
-   ``~/harbor/tools/.capsolver_key``. If the key is absent, it prints clear
+   ``<repo>/harbor/tools/.capsolver_key``. If the key is absent, it prints clear
    instructions and leaves harbor's existing key file untouched.
-3. Optionally refreshes harbor's proxy list ``~/harbor/tools/proxies.txt`` from
+3. Optionally refreshes harbor's proxy list ``<repo>/harbor/tools/proxies.txt`` from
    ``~/Auto-FreeCF/signup_from_scratch/proxies.txt`` (if the source exists).
    Harbor expects ``user:pass@host:port`` (it prepends ``http://`` itself), so
    any ``http://``/``https://`` scheme is stripped on the way in.
@@ -38,7 +38,7 @@ from pathlib import Path
 
 HOME = Path.home()
 
-HARBOR_DIR = HOME / "harbor"
+HARBOR_DIR = Path(__file__).resolve().parent.parent / "harbor"
 HARBOR_CONFIG = HARBOR_DIR / "tools" / "tokenharbor" / "config.toml"
 HARBOR_CAPSOLVER = HARBOR_DIR / "tools" / ".capsolver_key"
 HARBOR_PROXIES = HARBOR_DIR / "tools" / "proxies.txt"

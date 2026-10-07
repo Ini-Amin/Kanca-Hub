@@ -11,7 +11,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 class TestHarborNoProxyEnv(unittest.TestCase):
     def test_harbor_cli_respects_no_proxy_env(self):
-        src = (Path.home() / "harbor" / "tools" / "tokenharbor" / "cli.py").read_text()
+        src = (REPO / "harbor" / "tools" / "tokenharbor" / "cli.py").read_text()
         self.assertIn("TOKENHARBOR_NO_PROXY", src,
                       "harbor must honor TOKENHARBOR_NO_PROXY to force direct egress")
 

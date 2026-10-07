@@ -10,7 +10,7 @@ This reads harbor's account.json (list of {email,password,api_key,...} where
 api_key is `thk_live_...`) and upserts one providerConnections row per key.
 
 Usage:
-    python3 inject_thk_9router.py -i ~/harbor/account.json
+    python3 inject_thk_9router.py -i <repo>/harbor/account.json
     python3 inject_thk_9router.py -i account.json --verify --dry-run
     python3 inject_thk_9router.py -i account.json --model deepseek-v4.1-flash:free
 """
@@ -147,7 +147,7 @@ def upsert(con: sqlite3.Connection, node_id: str, key: str, name: str,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Inject TokenHarbor keys into 9Router")
-    ap.add_argument("-i", "--input", default=str(Path.home() / "harbor" / "account.json"),
+    ap.add_argument("-i", "--input", default=str(Path(__file__).resolve().parent.parent / "harbor" / "account.json"),
                     help="harbor account.json")
     ap.add_argument("--db", default=str(DB_PATH))
     ap.add_argument("--model", default=THK_DEFAULT_MODEL)
