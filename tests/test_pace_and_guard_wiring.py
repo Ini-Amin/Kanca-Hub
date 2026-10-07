@@ -75,30 +75,30 @@ class TestMenuFarmOptions(unittest.TestCase):
         import builtins
         orig = builtins.input
         try:
-            # count, per-IP, inject?, store, pace, egress
-            builtins.input = self._answers(["3", "3", "y", "both", "normal", "none"])
+            # count, per-IP, inject?, store, egress  (no pace: the limit is a per-IP count)
+            builtins.input = self._answers(["3", "3", "y", "both", "none"])
             out = kancahub._menu_ask_farm_options("8", ["thk", "batch"])
         finally:
             builtins.input = orig
         self.assertEqual(out, ["thk", "batch", "3", "--per-ip", "3", "--inject",
-                               "--store", "both", "--pace", "normal", "--proxy", "none"])
+                               "--store", "both", "--proxy", "none"])
 
     def test_thk_defaults_inject_and_store_both(self):
         import builtins
         orig = builtins.input
         try:
-            builtins.input = self._answers(["", "", "", "", "", ""])
+            builtins.input = self._answers(["", "", "", "", ""])
             out = kancahub._menu_ask_farm_options("8", ["thk", "batch"])
         finally:
             builtins.input = orig
-        self.assertEqual(out, ["thk", "batch", "1", "--per-ip", "2", "--inject",
-                               "--store", "both", "--pace", "normal", "--proxy", "auto"])
+        self.assertEqual(out, ["thk", "batch", "1", "--per-ip", "4", "--inject",
+                               "--store", "both", "--proxy", "auto"])
 
     def test_thk_per_ip_is_capped_at_five(self):
         import builtins
         orig = builtins.input
         try:
-            builtins.input = self._answers(["9", "99", "n", "ledger", "normal", "none"])
+            builtins.input = self._answers(["9", "99", "n", "ledger", "none"])
             out = kancahub._menu_ask_farm_options("8", ["thk", "batch"])
         finally:
             builtins.input = orig
@@ -148,6 +148,8 @@ class TestThkBatchLoop(unittest.TestCase):
                 patch.object(kancahub, "run", lambda cmd, **kw: injected.append(cmd) or 0), \
                 patch.object(kancahub, "_ledger_record"), \
                 patch.object(kancahub.time, "sleep", lambda s: None), \
+                patch.object(kancahub, "_current_ip", lambda: "1.1.1.1"), \
+                patch.object(kancahub, "_thk_fresh_ip", lambda used, tries=3: True), \
                 patch.object(kancahub, "_thk_account_count", counter), \
                 patch.object(kancahub, "_stop_auto_gateways"):
             rc = kancahub.cmd_thk(a)
@@ -182,6 +184,8 @@ class TestThkBatchLoop(unittest.TestCase):
                 patch.object(kancahub, "run", lambda *a, **k: 0), \
                 patch.object(kancahub, "_ledger_record"), \
                 patch.object(kancahub.time, "sleep", lambda s: None), \
+                patch.object(kancahub, "_current_ip", lambda: "1.1.1.1"), \
+                patch.object(kancahub, "_thk_fresh_ip", lambda used, tries=3: True), \
                 patch.object(kancahub, "_thk_account_count", lambda: saved[0]), \
                 patch.object(kancahub, "_stop_auto_gateways"):
             rc = kancahub.cmd_thk(a)
@@ -189,10 +193,9 @@ class TestThkBatchLoop(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(saved[0], 2)
 
-    def test_pace_presets(self):
-        self.assertEqual(kancahub.THK_PACE["normal"], (45.0, 60.0))
-        a = kancahub.build_parser().parse_args(["thk", "batch", "2"])
-        self.assertEqual(a.pace, "normal")
+    def test_thk_has_no_pace_flag(self):
+        with self.assertRaises(SystemExit):
+            kancahub.build_parser().parse_args(["thk", "batch", "2", "--pace", "normal"])
 
 
 class TestThkClassify(unittest.TestCase):
@@ -204,9 +207,9 @@ class TestThkClassify(unittest.TestCase):
         self.assertEqual(c("Traceback boom"), "other")
         self.assertEqual(c(""), "other")
 
-    def test_per_ip_default_is_two(self):
-        self.assertEqual(kancahub.THK_PER_IP_DEFAULT, 2)
-        self.assertEqual(kancahub.thk_chunks(5), [2, 2, 1])
+    def test_per_ip_default_is_four_max_five(self):
+        self.assertEqual((kancahub.THK_PER_IP_DEFAULT, kancahub.THK_PER_IP_MAX), (4, 5))
+        self.assertEqual(kancahub.thk_chunks(9), [4, 4, 1])
 
 
 class TestThkNetcapStops(unittest.TestCase):
@@ -224,8 +227,37 @@ class TestThkNetcapStops(unittest.TestCase):
                 patch.object(kancahub, "run", lambda *a, **k: 0), \
                 patch.object(kancahub, "_ledger_record"), \
                 patch.object(kancahub.time, "sleep", lambda s: None), \
+                patch.object(kancahub, "_current_ip", lambda: "1.1.1.1"), \
+                patch.object(kancahub, "_thk_fresh_ip", lambda used, tries=3: True), \
                 patch.object(kancahub, "_thk_account_count", lambda: 0), \
                 patch.object(kancahub, "_stop_auto_gateways"):
             rc = kancahub.cmd_thk(a)
         self.assertEqual(calls, ["2"])   # did not retry a capped IP
         self.assertNotEqual(rc, 0)
+
+
+class TestThkFreshIp(unittest.TestCase):
+    def test_accepts_new_ip_and_records_it(self):
+        from unittest.mock import patch
+        used = {"1.1.1.1"}
+        with patch.object(kancahub, "_mobile_rotate_once", lambda: "2.2.2.2"):
+            self.assertTrue(kancahub._thk_fresh_ip(used))
+        self.assertIn("2.2.2.2", used)
+
+    def test_same_ip_three_times_fails(self):
+        from unittest.mock import patch
+        calls = []
+        with patch.object(kancahub, "_mobile_rotate_once", lambda: calls.append(1) or "1.1.1.1"):
+            self.assertFalse(kancahub._thk_fresh_ip({"1.1.1.1"}))
+        self.assertEqual(len(calls), 3)
+
+    def test_second_try_gets_new_ip(self):
+        from unittest.mock import patch
+        ips = iter(["1.1.1.1", "3.3.3.3"])
+        with patch.object(kancahub, "_mobile_rotate_once", lambda: next(ips)):
+            self.assertTrue(kancahub._thk_fresh_ip({"1.1.1.1"}))
+
+    def test_no_phone_returns_false(self):
+        from unittest.mock import patch
+        with patch.object(kancahub, "_mobile_rotate_once", lambda: None):
+            self.assertFalse(kancahub._thk_fresh_ip(set()))

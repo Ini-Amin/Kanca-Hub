@@ -439,8 +439,8 @@ def _run_batch(count: int) -> int:
 
         # pace between accounts: TokenHarbor throttles bursts ("take a breath")
         if i < count:
-            lo = float(os.environ.get("TOKENHARBOR_DELAY_MIN", "45"))
-            hi = float(os.environ.get("TOKENHARBOR_DELAY_MAX", "60"))
+            lo = float(os.environ.get("TOKENHARBOR_DELAY_MIN", "2"))  # per-IP count is the limit, not pace
+            hi = float(os.environ.get("TOKENHARBOR_DELAY_MAX", "4"))
             wait = random.uniform(lo, max(lo, hi))
             console.print(f"  [dim]pacing {wait:.0f}s before next account...[/dim]")
             time.sleep(wait)
