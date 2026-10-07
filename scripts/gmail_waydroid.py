@@ -36,11 +36,14 @@ import random
 import string
 import time
 import urllib.request
+from pathlib import Path
 
 try:
     from websocket import create_connection
 except Exception:  # noqa: BLE001
     create_connection = None
+
+DEFAULT_MD = Path.home() / "gmail_accounts.md"
 
 
 def _pages(cdp: str) -> list[dict]:
@@ -115,6 +118,27 @@ def gen_username(first: str, last: str) -> str:
     return base + "".join(random.choices(string.digits, k=5))
 
 
+def save_markdown(rec: dict, path: str) -> None:
+    """Append one created account to a Markdown table (creates the file/table once)."""
+    import os
+    from datetime import datetime, timezone
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    header = (
+        "# Gmail accounts (grok/gmail farm)\n\n"
+        "| # | email | password | status | created (UTC) | source |\n"
+        "|---|-------|----------|--------|---------------|--------|\n"
+    )
+    row_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    if not p.exists():
+        p.write_text(header, encoding="utf-8")
+    # count existing data rows for the index
+    n = sum(1 for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("| ") and "---" not in ln and not ln.startswith("| #"))
+    row = f"| {n+1} | {rec.get('email','')} | {rec.get('password','')} | {rec.get('final_state','')} | {row_ts} | waydroid/kiwi |\n"
+    with p.open("a", encoding="utf-8") as f:
+        f.write(row)
+
+
 def run(cdp_url: str, first: str, last: str, password: str | None, month: str, day: int, year: int) -> dict:
     pg = _pages(cdp_url)
     ws = ([p["webSocketDebuggerUrl"] for p in pg if "signup" in (p.get("url") or "")]
@@ -162,12 +186,19 @@ def main() -> int:
     ap.add_argument("--month", default="May")
     ap.add_argument("--day", type=int, default=15)
     ap.add_argument("--year", type=int, default=1991)
+    ap.add_argument("--md", default=str(DEFAULT_MD), help="Markdown store for created accounts")
     a = ap.parse_args()
     if create_connection is None:
         print("✗ websocket-client not installed")
         return 1
     rec = run(a.cdp, a.first, a.last, a.password, a.month, a.day, a.year)
     print(json.dumps(rec, indent=2))
+    if rec.get("email"):
+        try:
+            save_markdown(rec, a.md)
+            print(f"  ✓ stored in {a.md}")
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! markdown store failed: {e}")
     print("\n  Honest note: Google finishes signup behind a DEVICE VERIFICATION gate "
           "(mophoneverification). Reaching it means the whole form pipeline works; the gate "
           "itself needs a real device/phone attestation.")
