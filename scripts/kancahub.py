@@ -81,7 +81,7 @@ PETANI = HOME / "petani-proxy"
 K12_ROOT = PETANI / "Farm-Acc-ChatGPT-K-12-Teachers"
 K12_DIR = K12_ROOT / "PyRuntime_64"
 YOWES = PETANI / "yowes"
-HARBOR = HOME / "harbor"
+HARBOR = AUTO_FREECF / "harbor"  # vendored in-repo (was ~/harbor, lost 2026-10-07)
 GROK_REG = HOME / "grok-register"
 NINE_ROUTER_DB = HOME / ".9router" / "db" / "data.sqlite"
 VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
@@ -2023,6 +2023,19 @@ def _stack_manage(a, py) -> int:
 
 # ═══════════════════════════════════════════════════════════════ thk
 
+# TokenHarbor tolerates only a few signups per exit IP before it throttles
+# ("take a breath"); rotate the carrier IP between chunks of this size.
+THK_PER_IP_DEFAULT = 3
+THK_PER_IP_MAX = 5
+
+
+def thk_chunks(count: int, per_ip: int = THK_PER_IP_DEFAULT) -> list[int]:
+    """Split `count` accounts into per-IP chunks, e.g. (7, 3) -> [3, 3, 1]. Pure."""
+    per_ip = max(1, min(int(per_ip), THK_PER_IP_MAX))
+    count = max(0, int(count))
+    return [per_ip] * (count // per_ip) + ([count % per_ip] if count % per_ip else [])
+
+
 def cmd_thk(a) -> int:
     py = pick_python()
     sub = a.thk_cmd
@@ -2059,6 +2072,10 @@ def cmd_thk(a) -> int:
             mode = getattr(a, "proxy", None) or PROXY_AUTO
             if getattr(a, "no_proxy", False):
                 mode = PROXY_NONE
+            if getattr(a, "mobile_rotate", False):
+                # The tethered phone's carrier IP IS the egress: go direct (harbor
+                # NO_PROXY) and rotate it; a pool gateway would mix IPs mid-session.
+                mode = PROXY_NONE
             user_country = getattr(a, "country", None)
             thk_policy = EGRESS_COUNTRY.get("thk", {})
             thk_exclude = set(thk_policy.get("exclude", set()))
@@ -2080,17 +2097,46 @@ def cmd_thk(a) -> int:
                 # to stay direct so the user's egress (e.g. mobile tether) is used.
                 env["TOKENHARBOR_NO_PROXY"] = "1"
         try:
-            rc = run_with_mobile_retry(cmd, cwd=HARBOR, env=env,
-                                       mobile_rotate=getattr(a, "mobile_rotate", False),
-                                       account=f"thk:{getattr(a, 'count', 1)}x")
+            mobile = getattr(a, "mobile_rotate", False)
+            # Batches run in per-IP chunks; the carrier IP rotates between chunks
+            # (--mobile-rotate does its own rotation before each chunk's run).
+            chunks = thk_chunks(a.count, getattr(a, "per_ip", THK_PER_IP_DEFAULT)) if sub == "batch" else [None]
+            rc, made = 0, 0
+            for i, n in enumerate(chunks, 1):
+                if n is not None:
+                    cmd = [py, "-m", "tools.tokenharbor.cli", "batch", str(n)]
+                    if len(chunks) > 1:
+                        print(col("cyan", f"\n  [thk] chunk {i}/{len(chunks)}: {n} account(s) on this IP"))
+                crc = run_with_mobile_retry(cmd, cwd=HARBOR, env=env, mobile_rotate=mobile,
+                                            account=f"thk:{n or 1}x")
+                if crc == 0:
+                    made += n or 1
+                else:
+                    rc = crc
+                    if n is not None:
+                        break  # a failed chunk means this IP/egress is burnt: stop, don't hammer
+                if n is not None and i < len(chunks) and not mobile:
+                    print(col("yellow", "  [thk] per-IP cap reached; re-run on a fresh IP "
+                                        "(or use --mobile-rotate to rotate automatically)."))
+                    break
             # Record every thk batch attempt so 'kancahub report' can show what worked.
             _ledger_record(
                 "thk",
                 target=EGRESS_TARGETS["thk"],
-                egress=("mobile" if getattr(a, "mobile_rotate", False) else (choice.source if 'choice' in dir() else "")),
-                stage=("created" if rc == 0 else "failed"),
-                ok=(rc == 0),
+                egress=("mobile" if mobile else (choice.source if 'choice' in dir() else "")),
+                stage=("created" if made else "failed"),
+                ok=bool(made) if sub == "batch" else (rc == 0),
+                count=made,
             )
+            if sub == "batch" and (getattr(a, "inject", False) or getattr(a, "store", None) in ("9router", "both")) and made:
+                print(col("cyan", "\n  [thk] injecting new keys into 9Router…"))
+                inj_rc = run([py, str(AUTO_FREECF / "scripts" / "inject_thk_9router.py"), "--verify"], cwd=AUTO_FREECF)
+                if inj_rc != 0:
+                    print(col("yellow", "  ⚠ inject failed; keys stay in harbor/account.json — retry: kancahub thk inject"))
+                    rc = rc or inj_rc
+            if sub == "batch":
+                print(col("green" if made else "red", f"\n  [thk] {made}/{a.count} account(s) created"))
+                return 0 if made else (rc or 1)
             return rc
         finally:
             _stop_auto_gateways()
@@ -3382,6 +3428,11 @@ def build_parser() -> argparse.ArgumentParser:
     ts = tp.add_subparsers(dest="thk_cmd")
     tb = ts.add_parser("batch", help="create N TokenHarbor accounts")
     tb.add_argument("count", nargs="?", type=int, default=1)
+    tb.add_argument("--per-ip", type=int, default=THK_PER_IP_DEFAULT, metavar="N",
+                    help=f"accounts per egress IP before rotating (default {THK_PER_IP_DEFAULT}, max {THK_PER_IP_MAX})")
+    tb.add_argument("--inject", action="store_true", help="inject new keys into 9Router when the batch ends")
+    tb.add_argument("--store", choices=["9router", "ledger", "both"], default=None,
+                    help="where to record results: 9router (SQLite via inject), ledger (jsonl), both")
     tsetup = ts.add_parser("setup", help="full setup on TokenHarbor (interactive)")
     tck = ts.add_parser("create-key", help="create an API key for an existing account")
     # Farm commands: wire kancahub's smart egress in by default (fallback: harbor's
@@ -3413,7 +3464,7 @@ def build_parser() -> argparse.ArgumentParser:
     tsy.add_argument("--db", default=None)
     tsy.add_argument("--prune", action="store_true")
     tse = ts.add_parser("setup-env", help="wire harbor: config.toml + Tempik base_url + capsolver + proxies (harbor_config.py)")
-    tse.add_argument("--harbor-dir", default=None, help="harbor repo dir (default ~/harbor)")
+    tse.add_argument("--harbor-dir", default=None, help="harbor repo dir (default <repo>/harbor)")
     tse.add_argument("--env-file", default=None, help="auto-freecf .env path")
     tse.add_argument("--proxies-src", default=None, help="source proxies.txt to copy into harbor/tools")
     tse.add_argument("--tempik-url", default=None, help="Tempik base URL override")
@@ -4043,7 +4094,9 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
     print(col("green", f"✓ Step 2 complete: {farm_label} completed successfully.\n"))
 
     # ── Step (c): Inject to 9Router ──
-    if inject_args:
+    if inject_args and "--inject" in farm_args:
+        print(col("dim", f"[Step 3/4] Already injected by the batch (--inject). Skipping.\n"))
+    elif inject_args:
         print(col("bold", f"[Step 3/4] Injecting credentials into 9Router ({' '.join(inject_args)})…"))
         rc_inject = dispatch(p, p.parse_args(inject_args))
         if rc_inject != 0:
@@ -4119,6 +4172,18 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
         argv = [a for a in argv if a not in ("--max-accounts",)]  # drop dupes if re-run
         if n.isdigit() and n != "1":
             argv += ["--max-accounts", n]
+
+    # 1b) thk only: per-IP cap, inject into 9Router, where to store
+    if kind == "thk":
+        per = _ask(f"accounts per IP before rotating (1-{THK_PER_IP_MAX})", str(THK_PER_IP_DEFAULT))
+        if per.isdigit():
+            argv += ["--per-ip", str(max(1, min(int(per), THK_PER_IP_MAX)))]
+        inj = _ask("Inject into 9Router (bulk) when done? (y/n)", "y").lower()
+        if inj in ("y", "yes"):
+            argv += ["--inject"]
+        store = _ask("Store into (9router/ledger/both)", "both").lower()
+        if store in ("9router", "ledger", "both"):
+            argv += ["--store", store]
 
     # 2) pacing (github only supports --pace today)
     pace = _ask("pace (fast/normal/safe)", "normal")
