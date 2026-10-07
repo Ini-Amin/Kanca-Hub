@@ -50,3 +50,18 @@
 The generic pipeline (inspect target -> detect auth -> route email/github) exists in
 `autofarm`. On Waydroid everything is now unblocked (input + CDP + fresh device + GMS),
 so it is the right host to finish the universal flow.
+
+## 7. Waydroid Gmail — precise blocker (honest)
+- The **WebView browser (de.baumann.browser / FOSS Browser) cannot render Google's signup SPA**:
+  `readyState=loading`, 0 inputs, empty body for 30s+ -> CDP can drive nothing.
+- **Kiwi (real Chromium, x64) is installed and runs**, but on this build it exposes **no
+  `chrome_devtools_remote` socket** (remote scanning blocked: no chrome_devtools_remote in
+  /proc/net/unix), so CDP can't attach. Its remote-debugging is an **in-app** setting.
+- NEXT STEPS to finish Waydroid Gmail:
+  1. In Kiwi: `Settings -> (search) developer/USB debugging` enable remote debugging, OR
+     install **Chrome/Chromium** (Play Store) which expose `chrome_devtools_remote` by default.
+  2. Or drive without CDP: since **`adb input` works on Waydroid**, script raw-coordinate
+     taps + `input text` against the Chrome/Kiwi UI (no a11y needed for typing, only coords).
+  3. Confirm the birthday drop-downs accept real key events (the JS path was rejected).
+- Waydroid itself is NOT the problem: fresh device, GMS, working input, host-IP egress all
+  verified. It's purely the *browser's* CDP exposure that needs one more step.
