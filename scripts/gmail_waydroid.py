@@ -31,6 +31,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
+import re
+import subprocess
 import json
 import random
 import string
@@ -139,7 +142,55 @@ def save_markdown(rec: dict, path: str) -> None:
         f.write(row)
 
 
-def run(cdp_url: str, first: str, last: str, password: str | None, month: str, day: int, year: int) -> dict:
+KIWI = "com.kiwibrowser.browser/com.google.android.apps.chrome.Main"
+
+
+def _sh(*cmd: str, t: int = 30) -> str:
+    env = {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")}
+    env.setdefault("WAYLAND_DISPLAY", "wayland-0")
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=t, env=env).stdout.replace("\r", "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def ensure_device(port: int = 9222) -> bool:
+    """Show the Waydroid window, launch Kiwi (explicit activity: `monkey` fails), forward CDP."""
+    m = re.search(r"IP address:\s*(\S+)", _sh("waydroid", "status", t=15))
+    if not m:
+        print("✗ Waydroid session not running (waydroid session start)")
+        return False
+    w = f"{m.group(1)}:5555"
+    _sh("adb", "connect", w)
+    _sh("waydroid", "show-full-ui", t=20)
+    adb = lambda *a, t=30: _sh("adb", "-s", w, *a, t=t)  # noqa: E731
+
+    def sock() -> str:
+        s = re.search(r"(chrome_devtools_remote)", adb("shell", "cat /proc/net/unix"))
+        return s.group(1) if s else ""
+
+    if not sock():
+        adb("shell", f"am start -n {KIWI}")
+        for _ in range(8):
+            time.sleep(3)
+            if sock():
+                break
+            # Kiwi only exposes the socket after its onboarding "Continue" is tapped
+            adb("shell", "uiautomator dump /sdcard/u.xml")
+            b = re.search(r'text="Continue"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', adb("shell", "cat /sdcard/u.xml"))
+            if b:
+                x1, y1, x2, y2 = map(int, b.groups())
+                adb("shell", f"input tap {(x1+x2)//2} {(y1+y2)//2}")
+    if not sock():
+        print("✗ Kiwi devtools socket never appeared")
+        return False
+    adb("forward", "--remove-all")
+    adb("forward", f"tcp:{port}", "localabstract:chrome_devtools_remote")
+    return True
+
+
+def run(cdp_url: str, first: str, last: str, password: str | None, month: str, day: int, year: int,
+        wait: int = 0) -> dict:
     pg = _pages(cdp_url)
     ws = ([p["webSocketDebuggerUrl"] for p in pg if "signup" in (p.get("url") or "")]
           or [pg[0]["webSocketDebuggerUrl"]])[0]
@@ -184,6 +235,17 @@ def run(cdp_url: str, first: str, last: str, password: str | None, month: str, d
         rec["password"] = pw
         d.click_label("Next"); time.sleep(8)
 
+    if d.state() == "device_verify":
+        # 'init' page needs Continue; 'initial' page then shows the QR for a real phone
+        if "/initial" not in (d.js("location.href") or ""):
+            d.click_label("Continue"); time.sleep(4)
+        if "/initial" in (d.js("location.href") or ""):
+            rec["qr"] = True
+            print(f"\n  >>> SCAN THE QR in the Waydroid window with your phone ({wait}s)...", flush=True)
+            for _ in range(wait // 5):
+                time.sleep(5)
+                if d.state() == "success":
+                    break
     rec["final_state"] = d.state()
     rec["final_url"] = (d.js("location.href") or "")[:120]
     d.c.close() if hasattr(d.c, "close") else None
@@ -200,11 +262,15 @@ def main() -> int:
     ap.add_argument("--day", type=int, default=15)
     ap.add_argument("--year", type=int, default=1991)
     ap.add_argument("--md", default=str(DEFAULT_MD), help="Markdown store for created accounts")
+    ap.add_argument("--wait", type=int, default=180, help="seconds to wait for you to scan the QR (0 = don't wait)")
+    ap.add_argument("--no-launch", action="store_true", help="skip show-full-ui / Kiwi launch / adb forward")
     a = ap.parse_args()
     if create_connection is None:
         print("✗ websocket-client not installed")
         return 1
-    rec = run(a.cdp, a.first, a.last, a.password, a.month, a.day, a.year)
+    if not a.no_launch and not ensure_device(int(a.cdp.rsplit(":", 1)[-1])):
+        return 1
+    rec = run(a.cdp, a.first, a.last, a.password, a.month, a.day, a.year, a.wait)
     print(json.dumps(rec, indent=2))
     if rec.get("email"):
         try:
