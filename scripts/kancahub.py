@@ -2950,6 +2950,9 @@ def cmd_gmail(a) -> int:
             cmd += ["--day", str(a.day)]
         if getattr(a, "year", None):
             cmd += ["--year", str(a.year)]
+        cmd += ["--wait", str(getattr(a, "wait", 180))]
+        if getattr(a, "no_launch", False):
+            cmd.append("--no-launch")
         print(col("cyan", "Driving Gmail signup on Waydroid via Kiwi CDP (real mouse events)"))
         print(col("dim", "  prereqs: waydroid running + Kiwi CDP on :9222 (adb forward)"))
         return run(cmd, cwd=AUTO_FREECF)
@@ -3535,6 +3538,8 @@ def build_parser() -> argparse.ArgumentParser:
     gmw.add_argument("--year", type=int, default=1991)
     gmw.add_argument("--md", default=None,
                      help="Markdown store for created accounts (default ~/gmail_accounts.md)")
+    gmw.add_argument("--wait", type=int, default=180, help="seconds to wait for you to scan the QR")
+    gmw.add_argument("--no-launch", action="store_true", help="skip Waydroid UI/Kiwi launch/adb forward")
 
     # ---- proxy ----
     pp = sub.add_parser("proxy", help="PetaniProxy: harvest proxies, rotating gateway & background daemon")
