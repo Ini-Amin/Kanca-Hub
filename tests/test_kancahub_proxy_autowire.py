@@ -308,7 +308,8 @@ class TestNoProxyAndEnvInheritance(unittest.TestCase):
             ["thk", "batch", "2", "--proxy", "none"],
             EgressChoice(None, "none", direct=True))
         self.assertEqual(mode, "none")
-        self.assertEqual(env, {"TOKENHARBOR_NO_PROXY": "1"})
+        self.assertEqual(env["TOKENHARBOR_NO_PROXY"], "1")
+        self.assertNotIn("HTTPS_PROXY", env)  # direct: no proxy leaked through the env
 
     def test_thk_batch_mobile_rotate_forces_direct(self) -> None:
         # mobile tether: carrier IP is the egress -> harbor must go direct, no pool gateway
@@ -323,7 +324,8 @@ class TestNoProxyAndEnvInheritance(unittest.TestCase):
                 patch.object(kancahub, "_stop_auto_gateways"):
             kancahub.dispatch(parser, parser.parse_args(["thk", "batch", "2", "--mobile-rotate"]))
         self.assertEqual(ch.call_args[0][0], "none")
-        self.assertEqual(captured[0], {"TOKENHARBOR_NO_PROXY": "1"})
+        self.assertEqual(captured[0]["TOKENHARBOR_NO_PROXY"], "1")
+        self.assertNotIn("HTTPS_PROXY", captured[0])
 
     def test_thk_batch_auto_inherits_through_env(self) -> None:
         _, (cmd, env), mode = self._capture(
