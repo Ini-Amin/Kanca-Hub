@@ -1206,17 +1206,42 @@ def cmd_9router(a) -> int:
             print(col("dim", "   enable: kancahub 9router mitm enable --tool antigravity --sudo-password <pw>"))
             return 0
         if action in ("enable", "disable", "trust-cert"):
+            # 9Router writes ~/.9router/mitm/.mitm.lock WITHOUT creating the dir ->
+            # ENOENT. Pre-create it (the known fix/workaround).
+            try:
+                (Path.home() / ".9router" / "mitm" / "logs").mkdir(parents=True, exist_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
             body = {"tool": tool, "action": action}
+            # The enable endpoint requires an apiKey. Reuse the caller's --api-key,
+            # else auto-fetch a 9Router API key.
+            api_key = getattr(a, "api_key", None) or os.environ.get("GROK2API_KEY")
+            if not api_key:
+                kcode, kresp = _r9_api("GET", "/api/keys", base=base)
+                if kcode == 200:
+                    try:
+                        ks = json.loads(kresp).get("keys", [])
+                        if ks:
+                            api_key = ks[0].get("key")
+                    except Exception:  # noqa: BLE001
+                        pass
+            if api_key:
+                body["apiKey"] = api_key
             pw = getattr(a, "sudo_password", None) or os.environ.get("KANCAHUB_SUDO_PASSWORD")
             if pw:
                 body["sudoPassword"] = pw
             code, resp = _r9_api("POST", "/api/cli-tools/antigravity-mitm", body=body, base=base)
             ok = 200 <= code < 300
             print(col("green" if ok else "red", f"  {'✓' if ok else '✗'} mitm {action} ({tool}) -> HTTP {code}"))
+            if resp:
+                try:
+                    d = json.loads(resp)
+                    if d.get("running") is not None:
+                        print(col("dim", f"  running={d.get('running')} pid={d.get('pid')}"))
+                except Exception:  # noqa: BLE001
+                    print(col("dim", f"  {resp[:200]}"))
             if not ok and "sudo" in resp.lower():
                 print(col("yellow", "  needs a sudo password: pass --sudo-password or set KANCAHUB_SUDO_PASSWORD"))
-            if resp and not ok:
-                print(col("dim", f"  {resp[:200]}"))
             return 0 if ok else 1
         print(col("yellow", f"unknown mitm action '{action}'"))
         return 1
@@ -3234,6 +3259,7 @@ def build_parser() -> argparse.ArgumentParser:
     r9m.add_argument("action", nargs="?", default="status", choices=["status", "enable", "disable", "trust-cert"])
     r9m.add_argument("--tool", default="antigravity", help="IDE tool: antigravity|copilot|kiro|cursor (default antigravity)")
     r9m.add_argument("--sudo-password", default=None, help="sudo password (mitm binds :443 + installs a CA)")
+    r9m.add_argument("--api-key", default=None, help="9Router API key for the mitm enable step (auto-fetched if omitted)")
     r9m.add_argument("--base", default="http://localhost:20128", help="9Router base URL (default :20128)")
     ipr = sub.add_parser("ip-reuse", help="CGNAT session guard: exit-IP reuse per IP + mid-session IP changes")
     ipr.add_argument("--clear", action="store_true", help="clear the recorded session history")
