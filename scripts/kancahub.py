@@ -2937,6 +2937,23 @@ def cmd_gmail(a) -> int:
         print(col("cyan", "Using the Android phone (ADB) — trusted-device path"))
         return run(cmd, cwd=AUTO_FREECF)
 
+    if sub == "waydroid":
+        wd = AUTO_FREECF / "scripts" / "gmail_waydroid.py"
+        if not wd.exists():
+            print(col("red", "✗ gmail_waydroid.py not found"))
+            return 1
+        cmd = [py, str(wd), "--cdp", getattr(a, "cdp", "http://127.0.0.1:9222")]
+        for flag in ("first", "last", "password", "month", "md"):
+            if getattr(a, flag, None):
+                cmd += [f"--{flag}", str(getattr(a, flag))]
+        if getattr(a, "day", None):
+            cmd += ["--day", str(a.day)]
+        if getattr(a, "year", None):
+            cmd += ["--year", str(a.year)]
+        print(col("cyan", "Driving Gmail signup on Waydroid via Kiwi CDP (real mouse events)"))
+        print(col("dim", "  prereqs: waydroid running + Kiwi CDP on :9222 (adb forward)"))
+        return run(cmd, cwd=AUTO_FREECF)
+
     if not gc.exists():
         print(col("red", f"✗ gmail_creator.py not found at {gc}"))
         return 1
@@ -3506,6 +3523,18 @@ def build_parser() -> argparse.ArgumentParser:
                      help="browser package on the phone (default com.android.chrome)")
     gma.add_argument("--password", default=None)
     gma.add_argument("--dry-run", action="store_true")
+
+    gmw = gms.add_parser("waydroid",
+                          help="create Gmail on Waydroid (fresh Android 13 + GMS) via Kiwi CDP")
+    gmw.add_argument("--cdp", default="http://127.0.0.1:9222", help="Kiwi CDP endpoint (default :9222)")
+    gmw.add_argument("--first", default="Victor")
+    gmw.add_argument("--last", default="Hayes")
+    gmw.add_argument("--password", default=None)
+    gmw.add_argument("--month", default="May")
+    gmw.add_argument("--day", type=int, default=15)
+    gmw.add_argument("--year", type=int, default=1991)
+    gmw.add_argument("--md", default=None,
+                     help="Markdown store for created accounts (default ~/gmail_accounts.md)")
 
     # ---- proxy ----
     pp = sub.add_parser("proxy", help="PetaniProxy: harvest proxies, rotating gateway & background daemon")

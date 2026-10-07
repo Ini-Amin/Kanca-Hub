@@ -160,8 +160,21 @@ def run(cdp_url: str, first: str, last: str, password: str | None, month: str, d
         d.click_label("Next"); time.sleep(6)
     if d.state() in ("username", "username_radio"):
         un = gen_username(first, last)
-        d.setf("input[name=Username]", un)
         rec["username"] = un; rec["email"] = un + "@gmail.com"
+        # Google's username step has two shapes:
+        #  (a) a visible text field  -> type there, click Next
+        #  (b) suggested addresses (radio buttons) + 'Create your own Gmail address'
+        typed = d.setf("input[name=Username]", un)
+        if not typed or d.state() == "username_radio":
+            # click a suggestion radio that matches, else pick "Create your own"
+            picked = d.js(f"""(()=>{{const rs=[...document.querySelectorAll('input[name=usernameRadio]')].filter(x=>x.value!=='custom');
+              const m=rs.find(x=>({json.dumps(un)}).startsWith(x.value.slice(0,6)));
+              (m||rs[0])?.click(); return true;}})()""")
+            time.sleep(1)
+            # if that didn't take, try "Create your own Gmail address" then type
+            if d.state() == "username_radio":
+                d.click_label("Create your own Gmail address"); time.sleep(1.5)
+                d.setf("input[name=Username]", un)
         d.click_label("Next"); time.sleep(5)
     if d.state() == "password":
         pw = password or ("Kx" + "".join(random.choices(string.ascii_letters + string.digits, k=9)) + "#7")
