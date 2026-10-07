@@ -2027,6 +2027,17 @@ def _stack_manage(a, py) -> int:
 # ("take a breath"); rotate the carrier IP between chunks of this size.
 THK_PER_IP_DEFAULT = 3
 THK_PER_IP_MAX = 5
+# seconds between TokenHarbor accounts (harbor itself only slept 2s)
+THK_PACE = {"fast": (20.0, 45.0), "normal": (45.0, 60.0), "safe": (90.0, 120.0)}
+
+
+def _thk_account_count() -> int:
+    """Real number of accounts saved by harbor (account.json), not what we asked for."""
+    try:
+        d = json.loads((HARBOR / "account.json").read_text())
+        return len(d) if isinstance(d, list) else (1 if d else 0)
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def thk_chunks(count: int, per_ip: int = THK_PER_IP_DEFAULT) -> list[int]:
@@ -2098,6 +2109,10 @@ def cmd_thk(a) -> int:
                 env["TOKENHARBOR_NO_PROXY"] = "1"
         try:
             mobile = getattr(a, "mobile_rotate", False)
+            lo, hi = THK_PACE.get(getattr(a, "pace", "normal"), THK_PACE["normal"])
+            env = dict(env or {})
+            env["TOKENHARBOR_DELAY_MIN"], env["TOKENHARBOR_DELAY_MAX"] = str(lo), str(hi)
+            before = _thk_account_count()
             # Batches run in per-IP chunks; the carrier IP rotates between chunks
             # (--mobile-rotate does its own rotation before each chunk's run).
             chunks = thk_chunks(a.count, getattr(a, "per_ip", THK_PER_IP_DEFAULT)) if sub == "batch" else [None]
@@ -2109,16 +2124,21 @@ def cmd_thk(a) -> int:
                         print(col("cyan", f"\n  [thk] chunk {i}/{len(chunks)}: {n} account(s) on this IP"))
                 crc = run_with_mobile_retry(cmd, cwd=HARBOR, env=env, mobile_rotate=mobile,
                                             account=f"thk:{n or 1}x")
-                if crc == 0:
-                    made += n or 1
-                else:
+                made = _thk_account_count() - before  # real accounts, not the chunk size
+                if crc != 0:
                     rc = crc
                     if n is not None:
                         break  # a failed chunk means this IP/egress is burnt: stop, don't hammer
-                if n is not None and i < len(chunks) and not mobile:
-                    print(col("yellow", "  [thk] per-IP cap reached; re-run on a fresh IP "
-                                        "(or use --mobile-rotate to rotate automatically)."))
-                    break
+                elif n is not None and made < sum(chunks[:i]):
+                    rc = rc or 1  # chunk "succeeded" but short: some signups were throttled
+                if n is not None and i < len(chunks):
+                    if not mobile:
+                        print(col("yellow", "  [thk] per-IP cap reached; re-run on a fresh IP "
+                                            "(or use --mobile-rotate to rotate automatically)."))
+                        break
+                    gap = random.uniform(lo, hi)
+                    print(col("dim", f"  [thk] pacing {gap:.0f}s before next chunk (then rotate IP)"))
+                    time.sleep(gap)
             # Record every thk batch attempt so 'kancahub report' can show what worked.
             _ledger_record(
                 "thk",
@@ -3430,6 +3450,8 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("count", nargs="?", type=int, default=1)
     tb.add_argument("--per-ip", type=int, default=THK_PER_IP_DEFAULT, metavar="N",
                     help=f"accounts per egress IP before rotating (default {THK_PER_IP_DEFAULT}, max {THK_PER_IP_MAX})")
+    tb.add_argument("--pace", choices=sorted(THK_PACE), default="normal",
+                    help="gap between accounts: fast 20-45s / normal 45-60s / safe 90-120s")
     tb.add_argument("--inject", action="store_true", help="inject new keys into 9Router when the batch ends")
     tb.add_argument("--store", choices=["9router", "ledger", "both"], default=None,
                     help="where to record results: 9router (SQLite via inject), ledger (jsonl), both")
@@ -4187,7 +4209,7 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
 
     # 2) pacing (github only supports --pace today)
     pace = _ask("pace (fast/normal/safe)", "normal")
-    if kind == "github" and pace in ("fast", "normal", "safe"):
+    if kind in ("github", "thk") and pace in ("fast", "normal", "safe"):
         argv += ["--pace", pace]
 
     # 3) egress  (auto = best available ladder incl. mobile; none = your raw connection)
