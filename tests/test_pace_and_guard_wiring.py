@@ -91,7 +91,7 @@ class TestMenuFarmOptions(unittest.TestCase):
             out = kancahub._menu_ask_farm_options("8", ["thk", "batch"])
         finally:
             builtins.input = orig
-        self.assertEqual(out, ["thk", "batch", "1", "--per-ip", "3", "--inject",
+        self.assertEqual(out, ["thk", "batch", "1", "--per-ip", "2", "--inject",
                                "--store", "both", "--pace", "normal", "--proxy", "auto"])
 
     def test_thk_per_ip_is_capped_at_five(self):
@@ -193,3 +193,39 @@ class TestThkBatchLoop(unittest.TestCase):
         self.assertEqual(kancahub.THK_PACE["normal"], (45.0, 60.0))
         a = kancahub.build_parser().parse_args(["thk", "batch", "2"])
         self.assertEqual(a.pace, "normal")
+
+
+class TestThkClassify(unittest.TestCase):
+    def test_reasons(self):
+        c = kancahub.thk_classify
+        self.assertEqual(c("x Signup failed: Too many sign-ups from this network. Please try again in an hour."), "netcap")
+        self.assertEqual(c("You're doing that a bit fast - take a breath and try again."), "throttled")
+        self.assertEqual(c("Your IP or email provider is not supported"), "blocked")
+        self.assertEqual(c("Traceback boom"), "other")
+        self.assertEqual(c(""), "other")
+
+    def test_per_ip_default_is_two(self):
+        self.assertEqual(kancahub.THK_PER_IP_DEFAULT, 2)
+        self.assertEqual(kancahub.thk_chunks(5), [2, 2, 1])
+
+
+class TestThkNetcapStops(unittest.TestCase):
+    def test_netcap_chunk_stops_batch_even_when_rc_zero(self):
+        from unittest.mock import patch
+        a = kancahub.build_parser().parse_args(["thk", "batch", "6", "--per-ip", "2", "--mobile-rotate"])
+        calls = []
+        def fake(cmd, **kw):
+            calls.append(cmd[-1])
+            kancahub._LAST_RUN_OUT["text"] = "Signup failed: Too many sign-ups from this network. Please try again in an hour."
+            return 0  # harbor exits 0 only if something was made; here we simulate a late cap
+        with patch.object(kancahub, "_choose_egress",
+                          return_value=kancahub.EgressChoice(None, "none", direct=True)), \
+                patch.object(kancahub, "run_with_mobile_retry", fake), \
+                patch.object(kancahub, "run", lambda *a, **k: 0), \
+                patch.object(kancahub, "_ledger_record"), \
+                patch.object(kancahub.time, "sleep", lambda s: None), \
+                patch.object(kancahub, "_thk_account_count", lambda: 0), \
+                patch.object(kancahub, "_stop_auto_gateways"):
+            rc = kancahub.cmd_thk(a)
+        self.assertEqual(calls, ["2"])   # did not retry a capped IP
+        self.assertNotEqual(rc, 0)

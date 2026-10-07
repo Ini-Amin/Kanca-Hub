@@ -299,6 +299,11 @@ class TestNoProxyAndEnvInheritance(unittest.TestCase):
         with patch.object(kancahub, "_choose_egress", return_value=choice) as ch, \
                 patch.object(kancahub, "run",
                              lambda cmd, cwd=None, env=None: captured.append((cmd, env)) or 0), \
+                patch.object(kancahub, "_run_capture",  # thk captures output: must never run for real
+                             lambda cmd, cwd=None, env=None: captured.append((cmd, env)) or (0, "")), \
+                patch.object(kancahub, "_ledger_record"), \
+                patch.object(kancahub, "_thk_account_count", lambda: 1), \
+                patch.object(kancahub.time, "sleep", lambda s: None), \
                 patch.object(kancahub, "_stop_auto_gateways"):
             rc = kancahub.dispatch(parser, parser.parse_args(argv))
         return rc, captured[0], ch.call_args[0][0]
