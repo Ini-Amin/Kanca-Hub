@@ -310,6 +310,21 @@ class TestNoProxyAndEnvInheritance(unittest.TestCase):
         self.assertEqual(mode, "none")
         self.assertEqual(env, {"TOKENHARBOR_NO_PROXY": "1"})
 
+    def test_thk_batch_mobile_rotate_forces_direct(self) -> None:
+        # mobile tether: carrier IP is the egress -> harbor must go direct, no pool gateway
+        # run_with_mobile_retry would rotate the real phone IP + run the farm: stub it.
+        captured: list = []
+        parser = build_parser()
+        with patch.object(kancahub, "_choose_egress",
+                          return_value=EgressChoice(None, "none", direct=True)) as ch, \
+                patch.object(kancahub, "run_with_mobile_retry",
+                             lambda cmd, cwd=None, env=None, **kw: captured.append(env) or 0), \
+                patch.object(kancahub, "_ledger_record"), \
+                patch.object(kancahub, "_stop_auto_gateways"):
+            kancahub.dispatch(parser, parser.parse_args(["thk", "batch", "2", "--mobile-rotate"]))
+        self.assertEqual(ch.call_args[0][0], "none")
+        self.assertEqual(captured[0], {"TOKENHARBOR_NO_PROXY": "1"})
+
     def test_thk_batch_auto_inherits_through_env(self) -> None:
         _, (cmd, env), mode = self._capture(
             ["thk", "batch", "2"],
