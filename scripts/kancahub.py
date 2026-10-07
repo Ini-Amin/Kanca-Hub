@@ -819,6 +819,9 @@ MENU_BACKGROUND_CMD: dict[str, list[str]] = {
 }
 
 
+_LAST_RUN_OUT: dict[str, str] = {}  # text of the last captured farm run, for failure classification
+
+
 def _run_capture(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> tuple[int, str]:
     print(col("dim", f"$ {' '.join(str(c) for c in cmd)}" + (f"   (cwd={cwd})" if cwd else "")))
     e = os.environ.copy()
@@ -841,7 +844,8 @@ def _run_capture(cmd: list[str], cwd: Path | None = None, env: dict | None = Non
                 sys.stdout.flush()
                 output_lines.append(line)
         ret = proc.wait()
-        return ret, "".join(output_lines)
+        _LAST_RUN_OUT["text"] = "".join(output_lines)
+        return ret, _LAST_RUN_OUT["text"]
     except FileNotFoundError as ex:
         print(col("red", f"✗ {ex}"))
         return 127, str(ex)
@@ -897,6 +901,10 @@ def run_with_mobile_retry(
 
     try:
         if not mobile_rotate:
+            if account and account.startswith("thk"):
+                # thk needs the output to tell a network cap from a burst throttle;
+                # other farms keep the plain streaming run() (tests patch it).
+                return _run_capture(cmd, cwd=cwd, env=env)[0]
             return run(cmd, cwd=cwd, env=env)
 
         # Rotation 1: before the run
@@ -915,7 +923,7 @@ def run_with_mobile_retry(
             # Rotation 2: retry rotation (cap: 2 per account/run)
             _mobile_rotate_once(wait=wait)
             print(col("cyan", "  [mobile] Retrying farm command with fresh mobile egress…"))
-            code, _ = _run_capture(cmd, cwd=cwd, env=env)
+            code, _ = _run_capture(cmd, cwd=cwd, env=env)  # also refreshes _LAST_RUN_OUT
 
         return code
     finally:
@@ -2025,10 +2033,25 @@ def _stack_manage(a, py) -> int:
 
 # TokenHarbor tolerates only a few signups per exit IP before it throttles
 # ("take a breath"); rotate the carrier IP between chunks of this size.
-THK_PER_IP_DEFAULT = 3
+THK_PER_IP_DEFAULT = 2  # measured: 2 signups then "Too many sign-ups from this network" (1h)
 THK_PER_IP_MAX = 5
 # seconds between TokenHarbor accounts (harbor itself only slept 2s)
 THK_PACE = {"fast": (20.0, 45.0), "normal": (45.0, 60.0), "safe": (90.0, 120.0)}
+
+
+def thk_classify(out: str) -> str:
+    """Why a harbor batch failed: netcap | throttled | blocked | other. Pure.
+
+    Success is NOT decided here: it comes from harbor/account.json (_thk_account_count).
+    """
+    o = (out or "").lower()
+    if "too many sign-ups from this network" in o:
+        return "netcap"      # per-network cap (~1h): only a NEW IP helps; waiting a minute does not
+    if "a bit fast" in o or "take a breath" in o:
+        return "throttled"   # burst throttle: waiting a minute or two helps
+    if "not supported" in o:
+        return "blocked"     # IP / email provider rejected outright
+    return "other"
 
 
 def _thk_account_count() -> int:
@@ -2125,11 +2148,19 @@ def cmd_thk(a) -> int:
                 crc = run_with_mobile_retry(cmd, cwd=HARBOR, env=env, mobile_rotate=mobile,
                                             account=f"thk:{n or 1}x")
                 made = _thk_account_count() - before  # real accounts, not the chunk size
-                if crc != 0:
+                why = thk_classify(_LAST_RUN_OUT.get("text", ""))
+                short = n is not None and made < sum(chunks[:i])
+                if why == "netcap" or why == "blocked":
+                    print(col("red", f"  [thk] {why}: this IP is capped"
+                                     + (" for ~1h — rotate to a NEW IP" if why == "netcap" else "")))
+                    rc = rc or 1
+                    if n is not None:
+                        break  # retrying a capped IP only extends the lockout
+                elif crc != 0:
                     rc = crc
                     if n is not None:
                         break  # a failed chunk means this IP/egress is burnt: stop, don't hammer
-                elif n is not None and made < sum(chunks[:i]):
+                elif short:
                     rc = rc or 1  # chunk "succeeded" but short: some signups were throttled
                 if n is not None and i < len(chunks):
                     if not mobile:
