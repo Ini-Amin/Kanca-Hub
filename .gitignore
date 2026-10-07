@@ -122,3 +122,12 @@ results/
 background/
 egress_nodes.json
 session_guard.json
+
+# harbor (vendored TokenHarbor) - never commit credentials / output
+harbor/tools/.capsolver_key
+harbor/tools/proxies.txt
+harbor/tools/tess.txt
+harbor/tools/proxyscrape_premium_http_proxies.txt
+harbor/tools/tokenharbor/config.toml
+harbor/account.json
+harbor/*.account.json
