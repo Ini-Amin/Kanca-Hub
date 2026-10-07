@@ -1246,9 +1246,39 @@ def cmd_9router(a) -> int:
         print(col("yellow", f"unknown mitm action '{action}'"))
         return 1
 
+    if sub == "combo":
+        action = getattr(a, "action", "list") or "list"
+        if action == "list":
+            code, resp = _r9_api("GET", "/api/combos", base=base)
+            if code != 200:
+                print(col("red", f"✗ combo list failed (HTTP {code}): {resp[:150]}"))
+                return 1
+            try:
+                combos = json.loads(resp).get("combos", [])
+            except Exception:  # noqa: BLE001
+                combos = []
+            print(col("bold", f"\n  9Router combos ({len(combos)}):\n"))
+            for c in combos:
+                print(f"   • {c.get('name'):<20} {len(c.get('models', []))} models  id={c.get('id','')[:8]}")
+            return 0
+        if action == "make-thk-fallback":
+            models = getattr(a, "models", None)
+            if not models:
+                models = "THK/deepseek-v4.1-flash:free,THK/qwen3.8-flash:free,THK/mimo-v2.6-flash:free,THK/mimo-v2.5:free"
+            body = {"name": getattr(a, "name", "thk-fallback"), "models": [m.strip() for m in models.split(",") if m.strip()], "kind": "chat"}
+            code, resp = _r9_api("POST", "/api/combos", body=body, base=base)
+            ok = 200 <= code < 300
+            print(col("green" if ok else "red", f"  {'✓' if ok else '✗'} combo {body['name']} -> HTTP {code}"))
+            if not ok:
+                print(col("dim", f"  {resp[:200]}"))
+            return 0 if ok else 1
+        print(col("yellow", f"unknown combo action '{action}' (list|make-thk-fallback)"))
+        return 1
+
     print(col("bold", "\n  9Router CLI\n"))
     print("   [status] 9Router health")
     print("   mitm status|enable|disable|trust-cert   (route IDE traffic through 9Router)")
+    print("   combo list|make-thk-fallback             (fallback model groups)")
     return 0
 
 
@@ -3260,6 +3290,11 @@ def build_parser() -> argparse.ArgumentParser:
     r9m.add_argument("--tool", default="antigravity", help="IDE tool: antigravity|copilot|kiro|cursor (default antigravity)")
     r9m.add_argument("--sudo-password", default=None, help="sudo password (mitm binds :443 + installs a CA)")
     r9m.add_argument("--api-key", default=None, help="9Router API key for the mitm enable step (auto-fetched if omitted)")
+    r9c = r9s.add_parser("combo", help="9Router combos (fallback model groups)")
+    r9c.add_argument("action", nargs="?", default="list", choices=["list", "make-thk-fallback"])
+    r9c.add_argument("--name", default="thk-fallback", help="combo name (default thk-fallback)")
+    r9c.add_argument("--models", default=None, help="comma list of models (default: free THK models)")
+    r9c.add_argument("--base", default="http://localhost:20128")
     r9m.add_argument("--base", default="http://localhost:20128", help="9Router base URL (default :20128)")
     ipr = sub.add_parser("ip-reuse", help="CGNAT session guard: exit-IP reuse per IP + mid-session IP changes")
     ipr.add_argument("--clear", action="store_true", help="clear the recorded session history")
