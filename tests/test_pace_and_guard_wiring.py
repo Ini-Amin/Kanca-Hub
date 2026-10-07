@@ -81,7 +81,7 @@ class TestMenuFarmOptions(unittest.TestCase):
         finally:
             builtins.input = orig
         self.assertEqual(out, ["thk", "batch", "3", "--per-ip", "3", "--inject",
-                               "--store", "both", "--proxy", "none"])
+                               "--store", "both", "--pace", "normal", "--proxy", "none"])
 
     def test_thk_defaults_inject_and_store_both(self):
         import builtins
@@ -92,7 +92,7 @@ class TestMenuFarmOptions(unittest.TestCase):
         finally:
             builtins.input = orig
         self.assertEqual(out, ["thk", "batch", "1", "--per-ip", "3", "--inject",
-                               "--store", "both", "--proxy", "auto"])
+                               "--store", "both", "--pace", "normal", "--proxy", "auto"])
 
     def test_thk_per_ip_is_capped_at_five(self):
         import builtins
@@ -133,13 +133,22 @@ class TestThkBatchLoop(unittest.TestCase):
         from unittest.mock import patch
         calls, injected = [], []
         it = iter(rcs)
+        saved = [0]  # pretend harbor saves each chunk's accounts when its rc is 0
+        def counter():
+            return saved[0]
+        def fake(cmd, **kw):
+            calls.append(cmd[-1]); rc = next(it)
+            if rc == 0:
+                saved[0] += int(cmd[-1])
+            return rc
         a = kancahub.build_parser().parse_args(argv)
         with patch.object(kancahub, "_choose_egress",
                           return_value=kancahub.EgressChoice(None, "none", direct=True)), \
-                patch.object(kancahub, "run_with_mobile_retry",
-                             lambda cmd, **kw: calls.append(cmd[-1]) or next(it)), \
+                patch.object(kancahub, "run_with_mobile_retry", fake), \
                 patch.object(kancahub, "run", lambda cmd, **kw: injected.append(cmd) or 0), \
                 patch.object(kancahub, "_ledger_record"), \
+                patch.object(kancahub.time, "sleep", lambda s: None), \
+                patch.object(kancahub, "_thk_account_count", counter), \
                 patch.object(kancahub, "_stop_auto_gateways"):
             rc = kancahub.cmd_thk(a)
         return rc, calls, injected
@@ -158,3 +167,29 @@ class TestThkBatchLoop(unittest.TestCase):
     def test_no_rotate_stops_at_cap(self):
         rc, calls, _ = self._run(["thk", "batch", "6", "--per-ip", "3"], [0])
         self.assertEqual(calls, ["3"])  # without --mobile-rotate it won't reuse the same IP
+
+    def test_short_chunk_is_reported_not_claimed(self):
+        # chunk returns rc 0 but harbor saved fewer accounts (throttled signups)
+        from unittest.mock import patch
+        a = kancahub.build_parser().parse_args(["thk", "batch", "4", "--per-ip", "2", "--mobile-rotate"])
+        saved = [0]
+        def fake(cmd, **kw):
+            saved[0] += 1  # only 1 of 2 really created
+            return 0
+        with patch.object(kancahub, "_choose_egress",
+                          return_value=kancahub.EgressChoice(None, "none", direct=True)), \
+                patch.object(kancahub, "run_with_mobile_retry", fake), \
+                patch.object(kancahub, "run", lambda *a, **k: 0), \
+                patch.object(kancahub, "_ledger_record"), \
+                patch.object(kancahub.time, "sleep", lambda s: None), \
+                patch.object(kancahub, "_thk_account_count", lambda: saved[0]), \
+                patch.object(kancahub, "_stop_auto_gateways"):
+            rc = kancahub.cmd_thk(a)
+        # partial success: accounts exist so exit 0, but the count is the REAL one (2 saved, not 4)
+        self.assertEqual(rc, 0)
+        self.assertEqual(saved[0], 2)
+
+    def test_pace_presets(self):
+        self.assertEqual(kancahub.THK_PACE["normal"], (45.0, 60.0))
+        a = kancahub.build_parser().parse_args(["thk", "batch", "2"])
+        self.assertEqual(a.pace, "normal")

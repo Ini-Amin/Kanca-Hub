@@ -437,9 +437,13 @@ def _run_batch(count: int) -> int:
                 _save_account(account)
                 progress.update(task, completed=6, description="[green]✓ Done[/green]")
 
-        # small delay between accounts to avoid rate limiting
+        # pace between accounts: TokenHarbor throttles bursts ("take a breath")
         if i < count:
-            time.sleep(2)
+            lo = float(os.environ.get("TOKENHARBOR_DELAY_MIN", "45"))
+            hi = float(os.environ.get("TOKENHARBOR_DELAY_MAX", "60"))
+            wait = random.uniform(lo, max(lo, hi))
+            console.print(f"  [dim]pacing {wait:.0f}s before next account...[/dim]")
+            time.sleep(wait)
 
     # ── summary ─────────────────────────────────────────────────────────
     console.print()
