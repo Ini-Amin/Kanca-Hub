@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import time
@@ -76,6 +77,58 @@ def airplane(serial: str, enable: bool) -> bool:
     return True
 
 
+
+def _setting(serial: str, name: str) -> str:
+    return _adb("shell", "settings", "get", "global", name, serial=serial).strip()
+
+
+def classify_phone(*, airplane: str, mobile_data: str, sim: str, data_reg_state: str,
+                   default_transport: str) -> tuple[str, str]:
+    """(verdict, advice) from raw phone facts. Pure - no I/O.
+
+    verdict: ok | wifi | no_data | no_sim | airplane | data_off | unknown
+    `no_data` = SIM attached but the data bearer is down (typically an exhausted quota).
+    """
+    if airplane == "1":
+        return "airplane", "airplane mode is ON - turn it off."
+    if sim and "ABSENT" in sim.upper():
+        return "no_sim", "no SIM detected."
+    if mobile_data == "0":
+        return "data_off", "mobile data is switched OFF - turn it on."
+    if default_transport == "CELLULAR":
+        return "ok", "phone is on mobile data: the carrier IP is the egress."
+    if data_reg_state in ("1", "-1") or data_reg_state.startswith("OUT_OF_SERVICE"):
+        return "no_data", ("mobile data has no service (often an empty data quota) and the phone is on "
+                           "Wi-Fi. Rotating will NOT change the IP. Top up / fix data first.")
+    if default_transport == "WIFI":
+        return "wifi", "phone is using Wi-Fi, not mobile data - turn Wi-Fi off so the carrier IP is used."
+    return "unknown", "could not tell which network the phone uses."
+
+
+def phone_state(serial: str) -> dict:
+    """Read-only probe of the phone's connectivity. Never changes any setting."""
+    conn = _adb("shell", "dumpsys", "connectivity", serial=serial, timeout=30)
+    m = re.search(r"Active default network:\s*(\d+)", conn)
+    transport = "NONE"
+    if m:
+        # the NetworkAgentInfo line for that network id names its type: ni{WIFI ...} / ni{MOBILE ...}
+        n = re.search(r"NetworkAgentInfo\{network\{%s\}.*?ni\{([A-Z_]+)" % m.group(1), conn)
+        kind = n.group(1) if n else ""
+        transport = {"WIFI": "WIFI", "MOBILE": "CELLULAR", "ETHERNET": "ETHERNET"}.get(kind, kind or "UNKNOWN")
+    reg = _adb("shell", "dumpsys", "telephony.registry", serial=serial, timeout=30)
+    d = re.search(r"mDataRegState=(-?\d+)", reg)
+    facts = dict(
+        airplane=_setting(serial, "airplane_mode_on"),
+        mobile_data=_setting(serial, "mobile_data"),
+        sim=_adb("shell", "getprop", "gsm.sim.state", serial=serial).split(",")[0].strip(),
+        data_reg_state=d.group(1) if d else "",
+        default_transport=transport,
+    )
+    verdict, advice = classify_phone(**facts)
+    return {**facts, "verdict": verdict, "advice": advice,
+            "operator": _adb("shell", "getprop", "gsm.operator.alpha", serial=serial).strip(" ,")}
+
+
 def rotate(serial: str, wait: float = 20.0, verbose: bool = True) -> str | None:
     """Rotate the mobile IP once; return the new IP (or None)."""
     before = get_ip()
@@ -108,6 +161,7 @@ def main() -> int:
     ap.add_argument("--tries", type=int, default=1, help="number of rotations (default 1)")
     ap.add_argument("--rotate-until", default=None, help="rotate until the new IP startswith this prefix")
     ap.add_argument("--max-rotates", type=int, default=5, help="cap for --rotate-until")
+    ap.add_argument("--force", action="store_true", help="rotate even if the phone is not on mobile data")
     args = ap.parse_args()
 
     serial = args.serial or first_device()
@@ -116,10 +170,22 @@ def main() -> int:
         return 2
 
     if args.status or not (args.rotate or args.rotate_until):
-        print(f"  device    : {serial}")
+        st = phone_state(serial)
+        mark = {"ok": "OK ", "wifi": "!! ", "no_data": "XX ", "data_off": "XX ", "airplane": "XX ",
+                "no_sim": "XX "}.get(st["verdict"], "?? ")
+        print(f"  device    : {serial}   operator: {st['operator'] or '?'}   SIM: {st['sim'] or '?'}")
         print(f"  egress IP : {get_ip() or '?'}")
-        print("  tip       : if this IP is your campus/Wi-Fi, the phone is sharing Wi-Fi, not mobile data.")
-        return 0
+        print(f"  phone net : {st['default_transport']}  (data service state {st['data_reg_state'] or '?'}, "
+              f"mobile_data={st['mobile_data']}, airplane={st['airplane']})")
+        print(f"  verdict   : {mark}{st['verdict']} - {st['advice']}")
+        return 0 if st["verdict"] == "ok" else 3
+
+    if not args.force:
+        st = phone_state(serial)
+        if st["verdict"] != "ok":
+            print(f"  [mobile] not rotating: {st['advice']}\n"
+                  f"           (override with --force)", file=sys.stderr)
+            return 3
 
     if args.rotate_until:
         for i in range(args.max_rotates):

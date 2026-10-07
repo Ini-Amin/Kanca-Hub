@@ -455,7 +455,21 @@ def cmd_mobile(a) -> int:
             cmd += ["--rotate-until", a.until]
         if getattr(a, "wait", None):
             cmd += ["--wait", str(a.wait)]
+        if getattr(a, "force", False):
+            cmd.append("--force")
     return run(cmd, cwd=AUTO_FREECF)
+
+
+def _phone_not_on_mobile() -> bool:
+    """True only when the phone is reachable AND confirmed not on mobile data (no device => False)."""
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import mobile_rotate
+        serial = mobile_rotate.first_device()
+        return bool(serial) and mobile_rotate.phone_state(serial)["verdict"] != "ok"
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _mobile_rotate_once(wait: float = 25.0) -> str | None:
@@ -909,7 +923,12 @@ def run_with_mobile_retry(
 
         # Rotation 1: before the run
         print(col("cyan", "  [mobile] Rotating carrier IP before run (--mobile-rotate enabled)…"))
-        _mobile_rotate_once(wait=wait)
+        if _mobile_rotate_once(wait=wait) is None and _phone_not_on_mobile():
+            # No new IP AND the phone is on Wi-Fi / out of data: running would burn signups on a
+            # flagged Wi-Fi IP. Stop here instead of farming.
+            print(col("red", "  [mobile] ✗ phone is not on mobile data — refusing to farm. "
+                             "Check: kancahub mobile status"))
+            return 3
 
         code, out = _run_capture(cmd, cwd=cwd, env=env)
         if code == 0:
@@ -3476,10 +3495,11 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- mobile (rotate the tethered phone's carrier IP = a "free residential" hop) ----
     mop = sub.add_parser("mobile", help="rotate the tethered phone's MOBILE carrier IP (real mobile IP bypasses datacenter blocks)")
     mos = mop.add_subparsers(dest="mobile_cmd")
-    mos.add_parser("status", help="show the phone + current egress IP (default)")
+    mos.add_parser("status", help="show the phone, its network (Wi-Fi vs mobile data), egress IP and a verdict (default)")
     mor = mos.add_parser("rotate", help="toggle airplane mode to get a fresh carrier IP")
     mor.add_argument("--until", default=None, help="keep rotating until the new IP starts with this prefix")
     mor.add_argument("--wait", type=float, default=20.0, help="max seconds to wait for the new IP (default 20)")
+    mor.add_argument("--force", action="store_true", help="rotate even if the phone is not on mobile data")
     sub.add_parser("menu", help="classic numbered command menu (advanced users)")
 
     # ---- warp ----
