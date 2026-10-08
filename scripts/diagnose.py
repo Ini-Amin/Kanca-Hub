@@ -13,6 +13,7 @@ optional live probes are separate and opt-in.
 Usage:
   python scripts/diagnose.py            # fast (local only)
   python scripts/diagnose.py --live     # + egress/DataDome/API probes
+  python scripts/diagnose.py --json     # JSON output {name: {status, note}}
 """
 from __future__ import annotations
 
@@ -84,6 +85,11 @@ def summarize(checks: dict) -> tuple[int, list[str]]:
     return blocked, lines
 
 
+def to_json(checks: dict) -> dict[str, dict[str, str]]:
+    """Format checks dict as {name: {"status": status, "note": note}}."""
+    return {name: {"status": status, "note": note} for name, (status, note) in checks.items()}
+
+
 # ── local probes ─────────────────────────────────────────────────────
 def check_env() -> dict:
     return {
@@ -141,8 +147,7 @@ def check_tools() -> dict:
     }
 
 
-def run(*, live: bool) -> int:
-    print("  ── diagnose: where each tool breaks ──\n")
+def collect_checks(*, live: bool = False) -> dict[str, tuple[str, str]]:
     checks: dict[str, tuple[str, str]] = {}
 
     env = check_env()
@@ -180,6 +185,18 @@ def run(*, live: bool) -> int:
         except Exception as e:
             checks["github-signup"] = ("UNKNOWN", str(e)[:50])
 
+    return checks
+
+
+def run(*, live: bool = False, as_json: bool = False, **kwargs) -> int:
+    if kwargs.get("json"):
+        as_json = True
+    checks = collect_checks(live=live)
+    if as_json:
+        print(json.dumps(to_json(checks), indent=2))
+        return 0
+
+    print("  ── diagnose: where each tool breaks ──\n")
     blocked, lines = summarize(checks)
     print("\n".join(lines))
     print(f"\n  {blocked} blocking issue(s). Fix the FLAGGED/EMPTY/MISSING ones top-down.")
@@ -190,8 +207,9 @@ def run(*, live: bool) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Where each tool breaks (one-line verdicts)")
     ap.add_argument("--live", action="store_true", help="also probe egress IP + github.com/signup")
+    ap.add_argument("--json", action="store_true", help="output as JSON object {name: {status, note}}")
     a = ap.parse_args(argv)
-    return run(live=a.live)
+    return run(live=a.live, as_json=a.json)
 
 
 if __name__ == "__main__":
