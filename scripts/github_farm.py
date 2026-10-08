@@ -136,11 +136,13 @@ except ImportError:
 
 # Shared Playwright page helpers (single home: scripts/camoufox_helpers.py)
 try:
-    from camoufox_helpers import (fill_first_input, has, js, live_url, type_into,
-                                  visible_first)
+    import camoufox_helpers
+    from camoufox_helpers import (fill_first_input, has, js, live_url, to_camoufox_proxy,
+                                  type_into, visible_first)
 except ImportError:
-    from scripts.camoufox_helpers import (fill_first_input, has, js, live_url, type_into,
-                                          visible_first)
+    from scripts import camoufox_helpers
+    from scripts.camoufox_helpers import (fill_first_input, has, js, live_url, to_camoufox_proxy,
+                                          type_into, visible_first)
 
 # Proxy & clean egress helpers (defensive import)
 try:
@@ -400,16 +402,7 @@ def gen_password() -> str:
 
 def _proxy_dict(proxy: str | None) -> dict | None:
     """Build a Camoufox/Playwright-style proxy dict from a URL string."""
-    if not proxy:
-        return None
-    u = urlparse(proxy if "://" in proxy else f"http://{proxy}")
-    server = f"{u.scheme}://{u.hostname}:{u.port}" if u.port else f"{u.scheme}://{u.hostname}"
-    d: dict = {"server": server}
-    if u.username:
-        d["username"] = u.username
-    if u.password:
-        d["password"] = u.password
-    return d
+    return camoufox_helpers.to_camoufox_proxy(proxy)
 
 
 def _load_pool(path: str | None) -> list[str]:

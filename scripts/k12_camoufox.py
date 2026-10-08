@@ -58,9 +58,22 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from camoufox.async_api import AsyncCamoufox
-from playwright.async_api import Error as PWError
-from playwright.async_api import TimeoutError as PWTimeout
+try:
+    from camoufox.async_api import AsyncCamoufox
+except Exception as _e:
+    AsyncCamoufox = None
+    _CAMOUFOX_IMPORT_ERROR = _e
+else:
+    _CAMOUFOX_IMPORT_ERROR = None
+
+try:
+    from playwright.async_api import Error as PWError
+    from playwright.async_api import TimeoutError as PWTimeout
+except Exception:
+    class PWError(Exception):
+        ...
+    class PWTimeout(Exception):
+        ...
 
 try:
     from gateway_session import apply_gateway_session, is_gateway
@@ -73,11 +86,13 @@ except ImportError:
 
 # Shared Playwright page helpers (single home: scripts/camoufox_helpers.py)
 try:
-    from camoufox_helpers import (fill_first_input, has, js, live_url, type_into,
-                                  visible_first)
+    import camoufox_helpers
+    from camoufox_helpers import (fill_first_input, has, js, live_url, to_camoufox_proxy,
+                                  type_into, visible_first)
 except ImportError:
-    from scripts.camoufox_helpers import (fill_first_input, has, js, live_url, type_into,
-                                          visible_first)
+    from scripts import camoufox_helpers
+    from scripts.camoufox_helpers import (fill_first_input, has, js, live_url, to_camoufox_proxy,
+                                          type_into, visible_first)
 
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
@@ -717,15 +732,7 @@ def _dump_pages(context) -> str:
 
 
 def _proxy_dict(proxy: str | None) -> dict | None:
-    if not proxy:
-        return None
-    u = urlparse(proxy if "://" in proxy else f"http://{proxy}")
-    d = {"server": f"{u.scheme}://{u.hostname}:{u.port}" if u.port else f"{u.scheme}://{u.hostname}"}
-    if u.username:
-        d["username"] = u.username
-    if u.password:
-        d["password"] = u.password
-    return d
+    return camoufox_helpers.to_camoufox_proxy(proxy)
 
 
 # ───────────────────────────────────────────── main
@@ -788,6 +795,10 @@ async def run_flow(
     pd = _proxy_dict(proxy)
     if pd:
         kwargs["proxy"] = pd
+
+    if AsyncCamoufox is None:
+        result["error"] = f"camoufox unavailable: {_CAMOUFOX_IMPORT_ERROR}"
+        return result
 
     async with AsyncCamoufox(**kwargs) as browser:
         page = await browser.new_page()
