@@ -84,7 +84,80 @@ async def _pick_combobox(page, label: str, option_text: str) -> bool:
     return False
 
 
-async def run(ws: str, *, dry_run: bool) -> dict:
+async def _solve_phone_gate(page, first: str, last: str, uname: str, password: str) -> dict:
+    """At Google's phone gate: order a Litensi number, enter it, read the SMS
+    from the webhook (sms_latest.json), enter the code, and continue."""
+    import subprocess, json as _json
+    from pathlib import Path as _P
+    latest = _P.home() / ".config" / "auto-freecf" / "sms_latest.json"
+    scripts = _P(__file__).resolve().parent
+    # order a number (browser-driven; Litensi has no REST for phone activations)
+    print("  → ordering a Litensi number …")
+    try:
+        out = subprocess.run([sys.executable, str(scripts / "otp_litensi_sms.py"),
+                              "--country", "Indonesia", "--service", "Google,youtube,Gmail"],
+                             capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        return {"status": "phone_order_failed", "error": str(e)[:120]}
+    import re as _re
+    m = _re.search(r"LITENSI NUMBER:\s*(\d+)", out.stdout) or _re.search(r"'number': '(\d+)'", out.stdout) \
+        or _re.search(r"\b(62\d{9,13})\b", out.stdout)
+    if not m:
+        return {"status": "phone_order_failed", "stdout": out.stdout[-300:]}
+    number = m.group(1)
+    print(f"  → number {number}; entering it")
+    tel = page.locator("input[type='tel'], input[name='phoneNumber'], input#phoneNumberId").first
+    try:
+        if await tel.count():
+            await tel.fill(number)
+        else:
+            await page.evaluate("""(n)=>{const i=document.querySelector("input[type='tel'],input#phoneNumberId");
+                if(i){i.focus();i.value=n;i.dispatchEvent(new Event('input',{bubbles:true}));}}""", number)
+    except Exception:
+        pass
+    await asyncio.sleep(1)
+    await _click_next(page)
+    await asyncio.sleep(6)
+    # wait for the SMS code via the webhook
+    print("  → waiting for SMS via webhook …")
+    code = None
+    if latest.exists():
+        try:
+            latest.unlink()  # only accept a NEW code
+        except Exception:
+            pass
+    end = time.time() + 240
+    while time.time() < end and not code:
+        if latest.exists():
+            try:
+                code = _json.loads(latest.read_text()).get("code")
+            except Exception:
+                code = None
+        if not code:
+            await asyncio.sleep(4)
+    if not code:
+        return {"status": "no_sms", "number": number}
+    print(f"  → SMS code {code}; entering it")
+    gc = page.locator("input[name='code'], input#code").first
+    try:
+        if await gc.count():
+            await gc.fill(code)
+        else:
+            await page.evaluate("""(c)=>{const i=document.querySelector("input[name='code'],input#code");
+                if(i){i.focus();i.value=c;i.dispatchEvent(new Event('input',{bubbles:true}));}}""", code)
+    except Exception:
+        pass
+    await asyncio.sleep(1)
+    await _click_next(page)
+    await asyncio.sleep(8)
+    url = page.url
+    ok = "signup" not in url or "mophoneverification" not in url
+    print(f"  → after SMS code: {url[:70]}  ok={ok}")
+    return {"status": "created" if ok else "sms_rejected", "url": url,
+            "email": f"{uname}@gmail.com", "password": password, "number": number}
+
+
+async def run(ws: str, *, dry_run: bool, sms_webhook: bool = False) -> dict:
     from playwright.async_api import async_playwright
     first, last, uname = _nm()
     password = _pw()
@@ -180,6 +253,10 @@ async def run(ws: str, *, dry_run: bool) -> dict:
         print(f"  final url: {page.url[:80]}")
         print(f"  page text: {txt[:200]!r}")
         print(f"  PHONE GATE: {phone}")
+        if phone and sms_webhook:
+            res = await _solve_phone_gate(page, first, last, uname, password)
+            await browser.close()
+            return res
         await browser.close()
         return {"status": "phone_gate" if phone else "reached",
                 "url": page.url, "email": f"{uname}@gmail.com", "password": password}
@@ -190,6 +267,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--ws", default=None, help="CDP wss:// endpoint (default: TinyFish session)")
     ap.add_argument("--country", default="US", help="TinyFish residential country")
+    ap.add_argument("--sms-webhook", action="store_true",
+                    help="on the phone gate, order a Litensi number and read the SMS via the webhook")
     return ap
 
 
@@ -200,9 +279,9 @@ def main(argv: list[str] | None = None) -> int:
         import github_bd_signup as G
         ws = G._tinyfish_session(a.country)
         print(f"  tinyfish session: {ws[:50]}...")
-    res = asyncio.run(run(ws, dry_run=a.dry_run))
+    res = asyncio.run(run(ws, dry_run=a.dry_run, sms_webhook=a.sms_webhook))
     print("  result:", json.dumps(res)[:200])
-    return 0 if res.get("status") in ("dry_run", "reached", "phone_gate") else 2
+    return 0 if res.get("status") in ("dry_run", "reached", "phone_gate", "created") else 2
 
 
 if __name__ == "__main__":
