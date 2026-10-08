@@ -150,11 +150,34 @@ def open_mailbox(provider: str = "tempik", *, domain: str = "", local_part: str 
 
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="Probe a disposable-mail provider")
+    ap = argparse.ArgumentParser(description="Create/read a disposable mailbox")
     ap.add_argument("provider", nargs="?", default="tempik", choices=sorted(_PROVIDERS))
     ap.add_argument("--domain", default="")
     ap.add_argument("--site", default="github.com")
+    ap.add_argument("--local-part", default="", help="pick the name (tempik/static)")
+    ap.add_argument("--watch", action="store_true", help="keep printing new mail until Ctrl-C")
+    ap.add_argument("--timeout", type=float, default=180.0)
     a = ap.parse_args()
-    mb = open_mailbox(a.provider, domain=a.domain, site=a.site)
-    print("address:", mb.address)
-    print("mail:", mb.read())
+    mb = open_mailbox(a.provider, domain=a.domain, local_part=a.local_part, site=a.site)
+    print(f"  address : {mb.address}")
+    print(f"  inbox   : https://tempik.kancalabs.workers.dev/  (this session only)\n")
+    if not a.watch:
+        for m in mb.read():
+            print(f"  - {m.get('subject','')} :: {m.get('body','')[:120]}")
+        raise SystemExit(0)
+    print("  watching for mail (Ctrl-C to stop)...")
+    seen: set[str] = set()
+    import time as _t
+    end = _t.time() + a.timeout
+    try:
+        while _t.time() < end:
+            for m in mb.read():
+                key = f"{m.get('subject','')}|{m.get('received_at','')}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                print(f"\n  ✉ {m.get('from_address','?')} — {m.get('subject','')}")
+                print(f"    {str(m.get('body',''))[:400]}")
+            _t.sleep(3)
+    except KeyboardInterrupt:
+        pass
