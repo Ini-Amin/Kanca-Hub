@@ -46,6 +46,11 @@ except Exception as _camoufox_err:  # pragma: no cover
 else:
     _CAMOUFOX_IMPORT_ERROR = None
 
+try:
+    import camoufox_helpers
+except ImportError:
+    from scripts import camoufox_helpers
+
 # Paths & Defaults
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
@@ -249,16 +254,7 @@ def get_account_delay(
 
 def _proxy_dict(proxy: str | None) -> dict | None:
     """Build a Camoufox/Playwright-style proxy dict from URL string."""
-    if not proxy:
-        return None
-    u = urllib.parse.urlparse(proxy if "://" in proxy else f"http://{proxy}")
-    server = f"{u.scheme}://{u.hostname}:{u.port}" if u.port else f"{u.scheme}://{u.hostname}"
-    d: dict = {"server": server}
-    if u.username:
-        d["username"] = u.username
-    if u.password:
-        d["password"] = u.password
-    return d
+    return camoufox_helpers.to_camoufox_proxy(proxy)
 
 
 # ─────────────────────────────────────────────────────────── Challenge Detector
