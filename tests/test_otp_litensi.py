@@ -30,10 +30,13 @@ class TestExtractCode(unittest.TestCase):
 class TestRequiresCreds(unittest.TestCase):
     def test_missing_credentials_raises(self):
         import os
+        from unittest.mock import patch
         for k in ("LITENSI_API_ID", "LITENSI_API_KEY", "LITENSI_SITE"):
             os.environ.pop(k, None)
-        with self.assertRaises(L.LitensiError):
-            L.LitensiClient(api_id="", api_key="")
+        # ignore the real ~/.config/auto-freecf/.env in the isolated test
+        with patch.object(L, "_env", return_value={}):
+            with self.assertRaises(L.LitensiError):
+                L.LitensiClient(api_id="", api_key="")
 
 
 if __name__ == "__main__":

@@ -265,8 +265,17 @@ def wizard_gmail() -> int:
     print(f"   {c('green', '1')}  Physical Phone via ADB  " + c("dim", "(Best — real device skips phone gate)"))
     print(f"   {c('green', '2')}  Android Studio / Emulator" + c("dim", "(Virtual device via ADB)"))
     print(f"   {c('green', '3')}  Desktop Browser          " + c("dim", "(Standard Chrome — may ask for phone)"))
+    print(f"   {c('green', '4')}  Slow drip (1 per few days)" + c("dim", " — safest; avoids abuse detection"))
     print()
     mode = ask("Pick method", "1")
+    if mode == "4":
+        run_script("gmail_slow.py", ["check"])
+        if yesno("  Create one now if due", True):
+            run_script("gmail_slow.py", ["run"])
+        print(c("dim", "  Set a daily timer to drip automatically:"))
+        print(c("dim", "    0 10 * * *  " + str(VENV_PY) + " " + str(SCRIPTS / "gmail_slow.py") + " run"))
+        ask("\nPress Enter to go back")
+        return 0
     if mode == "1":
         run_script("adb_tool.py", ["phone"])
         print()
