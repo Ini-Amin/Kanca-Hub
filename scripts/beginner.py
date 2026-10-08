@@ -307,11 +307,14 @@ def wizard_autofarm() -> int:
         ask("\nPress Enter to go back")
         return 0
 
-    print(c("dim", "\n  Choose disposable email domain:"))
-    print(f"   {c('green', '1')}  kancalabs.biz.id (Cloudflare Email Routing)")
-    print(f"   {c('green', '2')}  kancalabs.my.id  (Tempik D1 Worker Catch-all)")
-    d_choice = ask("Pick domain", "1")
-    domain = "kancalabs.my.id" if d_choice == "2" else "kancalabs.biz.id"
+    print(c("dim", "\n  Choose a mailbox (where the verification email arrives):"))
+    print(f"   {c('green', '1')}  Tempik kancalabs.my.id  (free, readable — default)")
+    print(f"   {c('green', '2')}  KancaHub relay kancalabs.biz.id")
+    print(f"   {c('green', '3')}  Litensi paid activation (cheap; needs balance)")
+    print(f"   {c('green', '4')}  Static address (no inbox)")
+    d_choice = ask("Pick mailbox", "1")
+    mail = {"2": "relay", "3": "litensi", "4": "static"}.get(d_choice, "tempik")
+    domain = "kancalabs.biz.id" if mail == "relay" else "kancalabs.my.id"
 
     print(c("dim", "\n  Destination options:"))
     print(f"   {c('green', '1')}  Save to results/autofarm_accounts.json only")
@@ -319,7 +322,7 @@ def wizard_autofarm() -> int:
     s_choice = ask("Pick destination", "1")
     inject = (s_choice == "2")
 
-    args = [url, "--domain", domain]
+    args = [url, "--domain", domain, "--mail", mail]
     if inject:
         args.append("--inject-9router")
 
