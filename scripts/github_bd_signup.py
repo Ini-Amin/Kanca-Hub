@@ -51,6 +51,30 @@ def _env(key: str, default: str = "") -> str:
     return default
 
 
+def _tinyfish_session(country: str = "US", api_key: str = "") -> str:
+    """Create a TinyFish Browser API session; return its cdp_url (wss).
+
+    TinyFish gives a remote Chromium over CDP with a STEALTH profile and a
+    residential sticky exit IP (US by default) — the combo DataDome wants, and
+    unlike Bright Data it does not forbid password typing.
+    """
+    import urllib.request
+    key = api_key or _env("TINYFISH_API_KEY")
+    if not key:
+        raise RuntimeError("TINYFISH_API_KEY not set (agent.tinyfish.ai/api-keys)")
+    body = json.dumps({"url": "https://github.com/signup",
+                       "browser_profile": "stealth",
+                       "proxy_config": {"enabled": True, "country_code": country}}).encode()
+    req = urllib.request.Request("https://api.browser.tinyfish.ai", data=body, method="POST",
+                                 headers={"X-API-Key": key, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=90) as r:
+        data = json.loads(r.read().decode() or "{}")
+    cdp = data.get("cdp_url") or (data.get("data") or {}).get("cdp_url")
+    if not cdp:
+        raise RuntimeError(f"tinyfish: no cdp_url in response ({str(data)[:160]})")
+    return cdp
+
+
 def _username() -> str:
     return "kanca" + "".join(random.choices(string.ascii_lowercase + string.digits, k=7))
 
@@ -227,17 +251,28 @@ def _save_account(email: str, password: str, username: str) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="GitHub signup via Bright Data Scraping Browser")
+    ap = argparse.ArgumentParser(description="GitHub signup via a CDP cloud browser (TinyFish or Bright Data)")
     ap.add_argument("--dry-run", action="store_true", help="reach the form, create nothing")
     ap.add_argument("--ws", default=None, help="override the CDP wss:// endpoint")
+    ap.add_argument("--tinyfish", action="store_true",
+                    help="create a TinyFish Browser session (stealth + residential); needs TINYFISH_API_KEY")
+    ap.add_argument("--tinyfish-country", default="US", help="TinyFish residential country (default US)")
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
-    ws = a.ws or _env("BRIGHTDATA_SCRAPING_BROWSER")
+    if a.tinyfish:
+        try:
+            ws = _tinyfish_session(a.tinyfish_country)
+            print(f"  tinyfish session cdp_url: {ws[:60]}...")
+        except Exception as e:
+            print(f"  ✗ TinyFish session failed: {e}")
+            return 1
+    else:
+        ws = a.ws or _env("BRIGHTDATA_SCRAPING_BROWSER")
     if not ws:
-        print("  ✗ BRIGHTDATA_SCRAPING_BROWSER not set (env or ~/.config/auto-freecf/.env)")
+        print("  ✗ no endpoint: pass --tinyfish, --ws, or set BRIGHTDATA_SCRAPING_BROWSER")
         return 1
     res = asyncio.run(run_bd(ws, dry_run=a.dry_run))
     print("  result:", res.get("status"))
