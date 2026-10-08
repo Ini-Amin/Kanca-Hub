@@ -5,6 +5,8 @@ and the shared Playwright page helpers (js/has/visible_first/type_into/...).
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import os
 import random
@@ -12,7 +14,6 @@ import sys
 import urllib.parse
 from pathlib import Path
 from typing import Optional
-
 # Ensure scripts dir is on sys.path for gateway_session
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
@@ -207,3 +208,108 @@ async def fill_first_input(page, selectors: list[str], value: str) -> bool:
     except Exception:
         pass
     return False
+
+
+async def detect_challenge(page) -> str | None:
+    """Detect bot detection or interactive security challenges on the current page.
+
+    Unifies markers across DataDome, Arkose/FunCaptcha, hCaptcha, reCAPTCHA,
+    Cloudflare/Turnstile, 2FA/OTP, and waiting-room interstitials.
+    """
+    try:
+        url = getattr(page, "url", "") or ""
+        if callable(url):
+            url = url()
+        url = str(url).lower()
+
+        title = ""
+        if hasattr(page, "title"):
+            try:
+                t = page.title()
+                if inspect.isawaitable(t):
+                    title = ((await t) or "").lower()
+                else:
+                    title = (str(t) or "").lower()
+            except Exception:
+                pass
+        # 1. Cloudflare / DataDome / 2FA in URL
+        if "cf-challenge" in url or "turnstile" in url:
+            return "Cloudflare Turnstile / Challenge detected in URL"
+        if "datadome" in url:
+            return "DataDome challenge detected in URL"
+        if "/sessions/two-factor" in url:
+            return "GitHub Two-Factor Authentication (2FA) prompt required"
+        if "/sessions/verified-device" in url:
+            return "GitHub Device Verification email prompt required"
+
+        # 2. Page title markers (Cloudflare / waiting room)
+        if "just a moment..." in title or "attention required" in title:
+            return "Cloudflare waiting room / challenge detected in page title"
+        if "waiting room" in title:
+            return "Cloudflare waiting room / challenge detected in page title"
+
+        # 3. Locators: Cloudflare, Arkose, 2FA, hCaptcha, reCAPTCHA
+        if hasattr(page, "locator"):
+            try:
+                if await page.locator("iframe[src*='challenges.cloudflare.com']").count() > 0:
+                    return "Cloudflare Turnstile iframe present"
+            except Exception:
+                pass
+
+            try:
+                if await page.locator("iframe[src*='arkose'], #octocaptcha, iframe[src*='funcaptcha']").count() > 0:
+                    return "Arkose Labs / Octocaptcha challenge present"
+            except Exception:
+                pass
+
+            try:
+                if await page.locator("input[name='otp'], #app_totp, #sms_totp").count() > 0:
+                    return "GitHub OTP/2FA input field detected"
+            except Exception:
+                pass
+
+            try:
+                if await page.locator("iframe[src*='hcaptcha'], .h-captcha").count() > 0:
+                    return "hCaptcha"
+            except Exception:
+                pass
+
+            try:
+                if await page.locator("iframe[src*='recaptcha'], .g-recaptcha").count() > 0:
+                    return "reCAPTCHA"
+            except Exception:
+                pass
+
+        # 4. DOM / HTML string markers
+        html = await js(page, "document.documentElement ? document.documentElement.outerHTML : ''", "")
+        low = (html or "").lower()
+        if low:
+            for needle, label in (
+                ("arkoselabs", "Arkose / FunCaptcha"),
+                ("funcaptcha", "Arkose / FunCaptcha"),
+                ("hcaptcha", "hCaptcha"),
+                ("recaptcha", "reCAPTCHA"),
+                ("datadome", "DataDome challenge detected in page"),
+                ("cf-chl", "Cloudflare challenge present"),
+                ("challenge-platform", "Cloudflare challenge present"),
+                ("challenge-container", "GitHub challenge iframe"),
+                ("verify you are human", "human-verification prompt"),
+                ("enable javascript", "GitHub anti-bot page (enable JavaScript)"),
+                ("disable your ad blocker", "GitHub anti-bot page (disable adblocker)"),
+                ("disable adblocker", "GitHub anti-bot page (disable adblocker)"),
+                ("unusual activity", "GitHub anti-bot page (unusual activity)"),
+            ):
+                if needle in low:
+                    return label
+
+        # 5. Visible body text markers
+        txt = (await js(page, "document.body ? document.body.innerText : ''", "") or "").lower()
+        if "verify" in txt and "human" in txt:
+            return "human-verification prompt (text)"
+        if "waiting room" in txt:
+            return "waiting room detected in page"
+
+    except Exception:
+        pass
+
+    return None

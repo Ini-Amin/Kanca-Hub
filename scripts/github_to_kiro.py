@@ -86,6 +86,13 @@ except Exception as _camoufox_err:  # pragma: no cover
 else:
     _CAMOUFOX_IMPORT_ERROR = None
 
+try:
+    import camoufox_helpers
+    from camoufox_helpers import detect_challenge
+except ImportError:
+    from scripts import camoufox_helpers
+    from scripts.camoufox_helpers import detect_challenge
+
 # Paths & Defaults
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
@@ -489,47 +496,8 @@ def inject_sqlite_connection(db_path: Path, record: dict[str, Any]) -> str:
 
 # ─────────────────────────────────────────────────────────── Challenge Detection
 async def detect_challenge(page: Any) -> str | None:
-    """Detect bot detection or interactive security challenges on the current page.
-
-    Returns:
-        Challenge description string if detected, otherwise None.
-    """
-    try:
-        url = page.url.lower()
-        title = (await page.title()).lower()
-
-        # 1. Cloudflare / DataDome challenges
-        if "cf-challenge" in url or "turnstile" in url:
-            return "Cloudflare Turnstile / Challenge detected in URL"
-        if "datadome" in url:
-            return "DataDome challenge detected in URL"
-        if "just a moment..." in title or "attention required" in title:
-            return "Cloudflare waiting room / challenge detected in page title"
-
-        # Check for Cloudflare Turnstile iframe
-        turnstile = await page.locator("iframe[src*='challenges.cloudflare.com']").count()
-        if turnstile > 0:
-            return "Cloudflare Turnstile iframe present"
-
-        # 2. Arkose Labs / Octocaptcha
-        arkose = await page.locator("iframe[src*='arkose'], #octocaptcha, iframe[src*='funcaptcha']").count()
-        if arkose > 0:
-            return "Arkose Labs / Octocaptcha challenge present"
-
-        # 3. GitHub 2FA / Device Verification
-        if "/sessions/two-factor" in url:
-            return "GitHub Two-Factor Authentication (2FA) prompt required"
-        if "/sessions/verified-device" in url:
-            return "GitHub Device Verification email prompt required"
-
-        otp_input = await page.locator("input[name='otp'], #app_totp, #sms_totp").count()
-        if otp_input > 0:
-            return "GitHub OTP/2FA input field detected"
-
-    except Exception:
-        pass
-
-    return None
+    """Detect bot detection or interactive security challenges on the current page."""
+    return await camoufox_helpers.detect_challenge(page)
 
 
 # ─────────────────────────────────────────────────────────── Browser OAuth Flow

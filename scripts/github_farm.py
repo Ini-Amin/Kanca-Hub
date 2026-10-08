@@ -137,12 +137,12 @@ except ImportError:
 # Shared Playwright page helpers (single home: scripts/camoufox_helpers.py)
 try:
     import camoufox_helpers
-    from camoufox_helpers import (fill_first_input, has, js, live_url, to_camoufox_proxy,
-                                  type_into, visible_first)
+    from camoufox_helpers import (detect_challenge, fill_first_input, has, js, live_url,
+                                  to_camoufox_proxy, type_into, visible_first)
 except ImportError:
     from scripts import camoufox_helpers
-    from scripts.camoufox_helpers import (fill_first_input, has, js, live_url, to_camoufox_proxy,
-                                          type_into, visible_first)
+    from scripts.camoufox_helpers import (detect_challenge, fill_first_input, has, js, live_url,
+                                          to_camoufox_proxy, type_into, visible_first)
 
 # Proxy & clean egress helpers (defensive import)
 try:
@@ -500,26 +500,7 @@ def _page_text(page):
 
 async def detect_captcha(page) -> str | None:
     """Return a description if a human-verification puzzle is present."""
-    html = await js(page, "document.documentElement ? document.documentElement.outerHTML : ''", "")
-    low = (html or "").lower()
-    for needle, label in (
-        ("arkoselabs", "Arkose / FunCaptcha"),
-        ("funcaptcha", "Arkose / FunCaptcha"),
-        ("hcaptcha", "hCaptcha"),
-        ("recaptcha", "reCAPTCHA"),
-        ("challenge-container", "GitHub challenge iframe"),
-        ("verify you are human", "human-verification prompt"),
-        ("enable javascript", "GitHub anti-bot page (enable JavaScript)"),
-        ("disable your ad blocker", "GitHub anti-bot page (disable adblocker)"),
-        ("disable adblocker", "GitHub anti-bot page (disable adblocker)"),
-        ("unusual activity", "GitHub anti-bot page (unusual activity)"),
-    ):
-        if needle in low:
-            return label
-    txt = (await _page_text(page) or "").lower()
-    if "verify" in txt and "human" in txt:
-        return "human-verification prompt (text)"
-    return None
+    return await detect_challenge(page)
 
 
 async def detect_access_restriction(page) -> str | None:
