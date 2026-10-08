@@ -134,6 +134,14 @@ except ImportError:
         async def apply_gateway_session(page_or_ctx, s=None):  # type: ignore
             return False
 
+# Shared Playwright page helpers (single home: scripts/camoufox_helpers.py)
+try:
+    from camoufox_helpers import (fill_first_input, has, js, live_url, type_into,
+                                  visible_first)
+except ImportError:
+    from scripts.camoufox_helpers import (fill_first_input, has, js, live_url, type_into,
+                                          visible_first)
+
 # Proxy & clean egress helpers (defensive import)
 try:
     from proxy_lib import check_gateway_egress, ensure_clean_egress, get_my_ip, stop_gateway
@@ -454,109 +462,8 @@ def next_pool_proxy(pool: list[str], used: list[str], index: int) -> str | None:
     return remaining[(max(index, 1) - 1) % len(remaining)]
 
 
-# ─────────────────────────────────────────────────────────── playwright helpers
-
-async def js(page, expr: str, default=None):
-    """page.evaluate that never raises (navigation races) and returns a default."""
-    try:
-        r = await page.evaluate(expr)
-    except Exception:
-        return default
-    return default if r is None else r
-
-
-async def live_url(page) -> str:
-    """Current URL (page.url is cached by Playwright; evaluate reads the live one)."""
-    return await js(page, "location.href", "") or page.url or ""
-
-
-async def has(page, selector: str) -> bool:
-    try:
-        return await page.locator(selector).count() > 0
-    except Exception:
-        return False
-
-
-async def visible_first(page, selector: str):
-    """First visible element matching selector (as a Locator), else None."""
-    try:
-        loc = page.locator(selector)
-        for i in range(await loc.count()):
-            el = loc.nth(i)
-            if await el.is_visible():
-                return el
-    except Exception:
-        pass
-    return None
-
-
-async def type_into(page, selector: str, value: str, label: str | None = None) -> bool:
-    """Fill an input (React-safe) and VERIFY it holds the value.
-
-    1. locator.fill()  -> clears + sets value with trusted input events
-    2. fallback: click, Ctrl+A, Delete, press_sequentially (real per-key events)
-    3. last resort: native value setter + InputEvent
-    """
-    el = await visible_first(page, selector) or page.locator(selector).first
-    got = ""
-    try:
-        await el.click(timeout=4000)
-        await el.fill(str(value), timeout=4000)
-        got = await el.input_value(timeout=2000)
-    except Exception:
-        got = ""
-    ok = got.strip() == str(value).strip()
-    if not ok:
-        try:
-            await el.click(timeout=4000)
-            await page.keyboard.press("Control+A")
-            await page.keyboard.press("Delete")
-            await el.press_sequentially(str(value), delay=random.randint(45, 90), timeout=15000)
-            got = await el.input_value(timeout=2000)
-        except Exception:
-            pass
-        ok = got.strip() == str(value).strip()
-    if not ok:
-        try:
-            await js(page, """(()=>{const e=document.querySelector(%s); if(!e) return '';
-                e.focus();
-                const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
-                if(s) s.call(e,%s); else e.value=%s;
-                e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s,inputType:'insertText'}));
-                e.dispatchEvent(new Event('change',{bubbles:true}));
-                return e.value;})()""" % (json.dumps(selector), json.dumps(str(value)),
-                                          json.dumps(str(value)), json.dumps(str(value))), "")
-            try:
-                got = await el.input_value(timeout=2000)
-            except Exception:
-                got = await js(page, f"(()=>{{const e=document.querySelector({json.dumps(selector)});return e?e.value:'';}})()", "") or ""
-        except Exception:
-            pass
-        ok = got.strip() == str(value).strip()
-    shown = "*" * len(got) if "password" in selector else got
-    print(f"      [type] {label or selector} <- {'*' * len(value) if 'password' in selector else value!r} "
-          f"=> {shown!r} ok={ok}", flush=True)
-    return ok
-
-
-async def fill_first_input(page, selectors: list[str], value: str) -> bool:
-    for sel in selectors:
-        if await visible_first(page, sel) is not None and await type_into(page, sel, value):
-            return True
-    # fallback: first visible plain text input
-    loc = page.locator("input:not([type=hidden]):not([type=submit]):not([type=checkbox])"
-                       ":not([type=radio]):not([type=file]):not([type=search])")
-    try:
-        for i in range(await loc.count()):
-            el = loc.nth(i)
-            if await el.is_visible():
-                await el.click(timeout=4000)
-                await el.fill(value, timeout=4000)
-                return (await el.input_value()).strip() == value.strip()
-    except Exception:
-        pass
-    return False
-
+# playwright helpers (js/has/visible_first/type_into/fill_first_input) live in
+# scripts/camoufox_helpers.py and are imported above.
 
 async def click_button(page, labels: tuple[str, ...], timeout: float = 6.0) -> bool:
     """Click the button whose EXACT label is in `labels` (prefers submit buttons)."""
