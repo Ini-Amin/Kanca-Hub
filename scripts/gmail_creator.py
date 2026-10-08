@@ -540,6 +540,45 @@ async def handle_phone_step(tab, st: Settings, args: argparse.Namespace) -> str:
     if cur not in ("phone", "code"):
         return "success" if cur in ("success", "post") else cur
 
+    # 2b) Auto-solve via a phone provider (Litensi activation), if requested.
+    provider = getattr(args, "phone_provider", None)
+    if provider == "litensi" and cur in ("phone", "code"):
+        try:
+            from otp_litensi_sms import LitensiSms
+            log("  phone gate forced — ordering a Litensi number…")
+            sms = LitensiSms(country="Indonesia", service="Google,youtube,Gmail",
+                             headless=args.headless)
+            number = sms.get_number()
+            log(f"  Litensi number: {number} — entering it…")
+            # type the number into the phone field
+            await tab.evaluate("""(n) => {
+                const i = document.querySelector("input[type='tel'], input#phoneNumberId, input[name='phoneNumber']");
+                if (i) { i.focus(); i.value = n;
+                    i.dispatchEvent(new Event('input', {bubbles:true}));
+                    i.dispatchEvent(new Event('change', {bubbles:true})); }
+            }""", number)
+            await sleep(1, 2)
+            await click_button(tab, NEXT_LABELS)
+            await sleep(3, 5)
+            code = sms.wait_code(timeout=min(args.verify_timeout, 180))
+            log(f"  SMS code: {code} — entering it…")
+            await tab.evaluate("""(c) => {
+                const i = document.querySelector("input[name='code'], input#code, input[type='tel']");
+                if (i) { i.focus(); i.value = c;
+                    i.dispatchEvent(new Event('input', {bubbles:true}));
+                    i.dispatchEvent(new Event('change', {bubbles:true})); }
+            }""", code)
+            await sleep(1, 2)
+            await click_button(tab, NEXT_LABELS)
+            await sleep(3, 5)
+            cur = await state(tab)
+            if cur in ("success", "post"):
+                await finish_post_screens(tab)
+                return "success"
+            log(f"  after Litensi code, state={cur}")
+        except Exception as e:  # noqa: BLE001
+            log(f"  (Litensi phone step failed: {e})")
+
     # 3) Truly forced -> only a human / SMS provider can finish.
     if args.headless:
         log("  phone verification is FORCED by Google; headless cannot finish it")
@@ -788,6 +827,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reuse-profile", metavar="DIR", default=None,
                    help="use (and keep) a persistent Chrome profile at DIR instead of a "
                         "throw-away one; a warmed profile lowers the phone gate")
+    p.add_argument("--phone-provider", choices=["none", "litensi"], default="none",
+                   help="auto-solve Google's phone gate with a rented number (default: none=manual)")
     p.add_argument("--verify-timeout", type=int, default=600, metavar="SEC",
                    help="seconds to wait for manual phone verification (default 600)")
     p.add_argument("--delay", type=float, default=30.0, metavar="SEC", help="pause between accounts (default 30)")
