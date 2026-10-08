@@ -439,8 +439,21 @@ if __name__ == "__main__":
         print(f"  address : {mb.address}")
         print(f"  inbox   : https://tempik.kancalabs.workers.dev/  (this session only)\n")
     if not a.watch:
+        seen = set()
+        n = 0
         for m in mb.read():
-            print(f"  - {m.get('subject','')} :: {m.get('body','')[:120]}")
+            text = " ".join(str(m.get(k) or "") for k in ("subject", "text", "body", "html", "source", "message"))
+            code = _code_from(text)
+            key = (m.get("subject") or "", code or "", text[:160])
+            if key in seen:
+                continue
+            seen.add(key)
+            n += 1
+            body = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)).strip()
+            print(f"  - {m.get('subject','')}  [code={code or '-'}]")
+            print(f"      {body[:200]}")
+        if not n:
+            print("  (no messages)")
         raise SystemExit(0)
     print("  watching for mail (Ctrl-C to stop)...")
     seen: set[str] = set()
