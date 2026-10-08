@@ -4014,6 +4014,16 @@ def build_parser() -> argparse.ArgumentParser:
     ys.add_parser("gui", help="launch the legacy desktop GUI")
     ys.add_parser("mcp", help="run the yowes MCP server (stdio)")
 
+    # ---- scrape (Firecrawl, using the keys already in 9Router) ----
+    sc = sub.add_parser("scrape", help="Firecrawl: clean-markdown scrape / web search (uses 9Router's firecrawl keys)")
+    scs = sc.add_subparsers(dest="scrape_cmd")
+    sc_scr = scs.add_parser("url", help="scrape a URL to clean markdown")
+    sc_scr.add_argument("url")
+    sc_ser = scs.add_parser("search", help="web search")
+    sc_ser.add_argument("query")
+    sc_ser.add_argument("--limit", type=int, default=5)
+    scs.add_parser("key", help="show which firecrawl key is used (masked)")
+
     # ---- autofarm ----
     af = sub.add_parser("autofarm", help="paste any website URL to adapt and autofarm with clean proxies")
     af.add_argument("url", nargs="?", default=None, help="website signup/login URL")
@@ -4113,6 +4123,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             p.parse_args(["otp", "--help"])
             return 1
         return cmd_otp(args)
+    if g == "scrape":
+        return cmd_scrape(args)
 
     p.print_help()
     return 0
@@ -4147,6 +4159,21 @@ def cmd_otp(a) -> int:
     elif sub == "done":
         cmd += ["--order-id", a.order_id]
     return run(cmd, cwd=AUTO_FREECF)
+
+
+def cmd_scrape(a) -> int:
+    """Firecrawl scrape/search using the keys already configured in 9Router."""
+    py = pick_python()
+    tool = AUTO_FREECF / "scripts" / "firecrawl.py"
+    if not tool.exists():
+        print(col("red", f"✗ firecrawl.py not found at {tool}"))
+        return 1
+    sub = getattr(a, "scrape_cmd", None) or "key"
+    if sub == "url":
+        return run([py, str(tool), "scrape", a.url], cwd=AUTO_FREECF)
+    if sub == "search":
+        return run([py, str(tool), "search", a.query, "--limit", str(getattr(a, "limit", 5))], cwd=AUTO_FREECF)
+    return run([py, str(tool), "key"], cwd=AUTO_FREECF)
 
 
 def cmd_autofarm(a) -> int:
