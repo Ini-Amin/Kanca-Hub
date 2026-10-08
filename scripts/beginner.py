@@ -317,13 +317,19 @@ def wizard_autofarm() -> int:
         return 0
 
     print(c("dim", "\n  Choose a mailbox (where the verification email arrives):"))
-    print(f"   {c('green', '1')}  Tempik kancalabs.my.id  (free, readable — default)")
-    print(f"   {c('green', '2')}  KancaHub relay kancalabs.biz.id")
+    print(f"   {c('green', '1')}  kancalabs.my.id  (free, readable — default)")
+    print(f"   {c('green', '2')}  kancalabs.biz.id (relay)")
     print(f"   {c('green', '3')}  Litensi paid activation (cheap; needs balance)")
     print(f"   {c('green', '4')}  Static address (no inbox)")
     d_choice = ask("Pick mailbox", "1")
-    mail = {"2": "relay", "3": "litensi", "4": "static"}.get(d_choice, "tempik")
-    domain = "kancalabs.biz.id" if mail == "relay" else "kancalabs.my.id"
+    if d_choice == "2":
+        domain, mail = "kancalabs.biz.id", "auto"
+    elif d_choice == "3":
+        domain, mail = "kancalabs.my.id", "litensi"
+    elif d_choice == "4":
+        domain, mail = "kancalabs.my.id", "static"
+    else:
+        domain, mail = "kancalabs.my.id", "auto"
 
     print(c("dim", "\n  Destination options:"))
     print(f"   {c('green', '1')}  Save to results/autofarm_accounts.json only")

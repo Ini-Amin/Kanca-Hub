@@ -54,5 +54,16 @@ class TestOpenMailboxFallback(unittest.TestCase):
         self.assertTrue(mb.address.endswith("@kancalabs.my.id"))
 
 
+class TestDomainRouting(unittest.TestCase):
+    def test_my_id_routes_to_tempik(self):
+        self.assertEqual(M.route_for("kancalabs.my.id"), "tempik")
+
+    def test_biz_id_routes_to_relay(self):
+        self.assertEqual(M.route_for("kancalabs.biz.id"), "relay")
+
+    def test_unknown_domain_routes_to_relay(self):
+        self.assertEqual(M.route_for("some.other.domain"), "relay")
+
+
 if __name__ == "__main__":
     unittest.main()
