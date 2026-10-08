@@ -72,33 +72,68 @@ class Mailbox:
 
 
 # ── provider: tempik ─────────────────────────────────────────────
-def _tempik(domain: str = "kancalabs.my.id", local_part: str = "", log=print) -> Mailbox:
+TEMPIK_SESSION_FILE = Path.home() / ".config" / "auto-freecf" / "tempik_session.json"
+
+
+def _tempik_req(path: str, method: str = "GET", body: dict | None = None, sid: str = ""):
     import json
-    import urllib.parse
     import urllib.request
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"{TEMPIK_BASE}{path}", data=data, method=method,
+                                 headers={"Content-Type": "application/json",
+                                          "User-Agent": "Mozilla/5.0 (compatible; KancaHub/1.0)",
+                                          "Origin": TEMPIK_BASE, "Referer": TEMPIK_BASE + "/"})
+    if sid:
+        req.add_header("x-session-id", sid)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode() or "{}")
 
-    def _req(path: str, method: str = "GET", body: dict | None = None, sid: str = "") -> dict | list:
-        data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(f"{TEMPIK_BASE}{path}", data=data, method=method,
-                                     headers={"Content-Type": "application/json",
-                                              "User-Agent": "Mozilla/5.0 (compatible; KancaHub/1.0)",
-                                              "Origin": TEMPIK_BASE, "Referer": TEMPIK_BASE + "/"})
-        if sid:
-            req.add_header("x-session-id", sid)
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return json.loads(r.read().decode() or "{}")
 
-    sid = (_req("/api/session") or {}).get("sessionId", "")
-    created = _req("/api/inboxes", "POST", {"localPart": local_part, "domain": domain}, sid)
+def tempik_session_id(*, fresh: bool = False) -> str:
+    """A PERSISTED Tempik session so every CLI inbox lands in one list.
+
+    The website keeps its session in localStorage and makes a new one per
+    browser; the CLI used to do the same per run, so inboxes never accumulated.
+    Reusing one saved id here means all CLI-created inboxes show together — and
+    can be viewed on the website by pasting this id into localStorage.
+    """
+    import json
+    if not fresh and TEMPIK_SESSION_FILE.exists():
+        try:
+            sid = json.loads(TEMPIK_SESSION_FILE.read_text()).get("sessionId", "")
+            if sid:
+                return sid
+        except Exception:
+            pass
+    sid = (_tempik_req("/api/session") or {}).get("sessionId", "")
+    if sid:
+        TEMPIK_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TEMPIK_SESSION_FILE.write_text(json.dumps({"sessionId": sid}))
+    return sid
+
+
+def _tempik(domain: str = "kancalabs.my.id", local_part: str = "", log=print) -> Mailbox:
+    import urllib.parse
+    sid = tempik_session_id()
+    created = _tempik_req("/api/inboxes", "POST", {"localPart": local_part, "domain": domain}, sid)
     address = created.get("address") or f"{local_part}@{domain}"
 
     def read() -> list[dict]:
         try:
-            return _req(f"/api/inboxes/{urllib.parse.quote(address, safe='')}/messages", sid=sid) or []
+            return _tempik_req(f"/api/inboxes/{urllib.parse.quote(address, safe='')}/messages", sid=sid) or []
         except Exception:
             return []
 
     return Mailbox(address, read)
+
+
+def tempik_list() -> list[dict]:
+    """All inboxes in the persisted CLI session (so nothing is 'lost')."""
+    sid = tempik_session_id()
+    try:
+        return _tempik_req("/api/inboxes", sid=sid) or []
+    except Exception:
+        return []
 
 
 # ── provider: relay (KancaHub Supabase) ─────────────────────────
@@ -191,7 +226,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Create/read a disposable mailbox")
     ap.add_argument("provider", nargs="?", default="tempik",
-                    choices=sorted(_PROVIDERS) + ["relay-account", "list-providers"],
+                    choices=sorted(_PROVIDERS) + ["relay-account", "list-providers", "list-inboxes"],
                     help="tempik|relay|litensi|static, or relay-account (the saved Litensi inbox)")
     ap.add_argument("--domain", default="")
     ap.add_argument("--site", default="github.com")
@@ -207,6 +242,18 @@ if __name__ == "__main__":
         print("  litensi paid email activation (needs keys/balance)")
         print("  static  no inbox")
         print("  relay-account  read the saved Litensi account inbox directly")
+        raise SystemExit(0)
+
+    if a.provider == "list-inboxes":
+        sid = tempik_session_id()
+        inboxes = tempik_list()
+        print(f"  Tempik session : {sid}")
+        print(f"  inboxes        : {len(inboxes)}")
+        for ib in inboxes:
+            print(f"    - {ib.get('address')}   (created {ib.get('created_at','?')})")
+        print("\n  To see these on the Tempik website, open DevTools (F12) → Console:")
+        print(f"    localStorage.setItem('tempik_session_id','{sid}'); location.reload()")
+        print("  (or: localStorage.removeItem('tempik_session_id') to get a fresh list)")
         raise SystemExit(0)
 
     if a.provider == "relay-account":
