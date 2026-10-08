@@ -51,3 +51,20 @@ python -m unittest tests.test_cli_surface            # 134-command surface
 - [ ] kancahub_base.py
 - [ ] commands_* extraction (steps 2–9)
 - [ ] menu.py
+
+## Dispatch via Luvus (the prepared harness)
+
+Delegate with **Luvus**, not opencode's Task tool:
+```
+luvus agent list                                   # workers: worker1/2/3/4
+luvus agent prompt worker1 "<brief>" --wait --timeout N   # submit + wait
+luvus agent read  worker1 --lines 120              # read the result
+```
+Workers now: worker1=pane10, worker2=pane11, worker3=pane13, worker4=pane14
+(all omp, cwd=/home/amen/Auto-FreeCF).
+
+### worker1 finding (kancahub_base extraction)
+No import-time side effects except `colorama.init()`; `sys.path.insert`/`mkdir`/
+log-open are all inside functions. IMPORTANT: `get_ascii_banner`/`KancaHubParser`
+are used by `build_parser` (3515) and menus via lazy `kancahub.` access — base
+MUST re-export them and callers keep module-qualified refs (H1).
