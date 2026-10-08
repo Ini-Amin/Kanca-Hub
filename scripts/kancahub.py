@@ -1210,6 +1210,25 @@ def cmd_9router(a) -> int:
     sub = getattr(a, "r9_cmd", None) or "status"
     base = getattr(a, "base", None) or "http://localhost:20128"
 
+    if sub == "proxy":
+        tool = AUTO_FREECF / "scripts" / "inject_9router_proxy.py"
+        if not tool.exists():
+            print(col("red", "✗ inject_9router_proxy.py not found"))
+            return 1
+        action = getattr(a, "action", "list")
+        cmd = [pick_python(), str(tool), action]
+        if action == "add" and getattr(a, "proxy_url", None):
+            cmd.append(a.proxy_url)
+            if getattr(a, "name", ""):
+                cmd += ["--name", a.name]
+            cmd += ["--type", getattr(a, "type", "http")]
+        elif action == "add-file" and getattr(a, "proxy_url", None):
+            cmd.append(a.proxy_url)
+            if getattr(a, "name", ""):
+                cmd += ["--name", a.name]
+            cmd += ["--type", getattr(a, "type", "http")]
+        return run(cmd, cwd=AUTO_FREECF)
+
     if sub == "mitm":
         action = getattr(a, "action", "status")
         tool = getattr(a, "tool", "antigravity")
@@ -2149,6 +2168,8 @@ def cmd_thk(a) -> int:
                 cmd += [flag, val]
         if sub == "batch" and getattr(a, "count", None):
             cmd = [py, "-m", "tools.tokenharbor.cli", "batch", str(a.count)]
+            if getattr(a, "concurrency", None):
+                cmd += ["--concurrency", str(a.concurrency)]
         if sub == "test-key" and getattr(a, "key", None):
             cmd = [py, "-m", "tools.tokenharbor.cli", "test-key", a.key]
         # Farm commands (setup/batch/create-key): auto-wire a verified egress.
@@ -2195,6 +2216,8 @@ def cmd_thk(a) -> int:
             for i, n in enumerate(chunks, 1):
                 if n is not None:
                     cmd = [py, "-m", "tools.tokenharbor.cli", "batch", str(n)]
+                    if getattr(a, "concurrency", None):
+                        cmd += ["--concurrency", str(a.concurrency)]
                     if len(chunks) > 1:
                         print(col("cyan", f"\n  [thk] chunk {i}/{len(chunks)}: {n} account(s) on this IP"))
                 # chunk 1 rotates inside run_with_mobile_retry; later chunks were already rotated
@@ -3495,6 +3518,11 @@ def build_parser() -> argparse.ArgumentParser:
     r9m.add_argument("--tool", default="antigravity", help="IDE tool: antigravity|copilot|kiro|cursor (default antigravity)")
     r9m.add_argument("--sudo-password", default=None, help="sudo password (mitm binds :443 + installs a CA)")
     r9m.add_argument("--api-key", default=None, help="9Router API key for the mitm enable step (auto-fetched if omitted)")
+    r9p = r9s.add_parser("proxy", help="9Router outbound proxy pool (add/list)")
+    r9p.add_argument("action", nargs="?", default="list", choices=["list", "add", "add-file"])
+    r9p.add_argument("proxy_url", nargs="?", default=None, help="proxy URL, or a file path for add-file")
+    r9p.add_argument("--name", default="", help="pool name")
+    r9p.add_argument("--type", default="http", choices=["http", "vercel", "cloudflare", "deno"])
     r9c = r9s.add_parser("combo", help="9Router combos (fallback model groups)")
     r9c.add_argument("action", nargs="?", default="list", choices=["list", "make-thk-fallback"])
     r9c.add_argument("--name", default="thk-fallback", help="combo name (default thk-fallback)")
@@ -3570,6 +3598,8 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("count", nargs="?", type=int, default=1)
     tb.add_argument("--per-ip", type=int, default=THK_PER_IP_DEFAULT, metavar="N",
                     help=f"accounts per egress IP before rotating (default {THK_PER_IP_DEFAULT}, max {THK_PER_IP_MAX})")
+    tb.add_argument("--concurrency", type=int, default=None, metavar="N",
+                    help="parallel workers within a chunk (default: harbor's; each uses its own proxy/browser)")
     tb.add_argument("--inject", action="store_true", help="inject new keys into 9Router when the batch ends")
     tb.add_argument("--store", choices=["9router", "ledger", "both"], default=None,
                     help="where to record results: 9router (SQLite via inject), ledger (jsonl), both")
