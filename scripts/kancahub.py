@@ -3717,6 +3717,9 @@ def build_parser() -> argparse.ArgumentParser:
     op_wait.add_argument("--timeout", type=int, default=240)
     op_done = os_.add_parser("done", help="mark an order SUCCESS (code used)")
     op_done.add_argument("--order-id", required=True)
+    opw = os_.add_parser("webhook", help="Litensi SMS webhook + public tunnel (up/down/url/status)")
+    opw.add_argument("action", nargs="?", default="up", choices=["up", "down", "url", "status"])
+    opw.add_argument("--latest", action="store_true", help="print the newest received SMS code")
 
     # ---- gmail (Gmail account farm) ----
     gmp = sub.add_parser(
@@ -4118,11 +4121,21 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 def cmd_otp(a) -> int:
     """Litensi email-activation client (scripts/otp_litensi.py)."""
     py = pick_python()  # requests only — no browser
+    sub = a.otp_cmd
+
+    if sub == "webhook":
+        tool = AUTO_FREECF / "scripts" / "otp_webhook_up.py"
+        if not tool.exists():
+            print(col("red", "✗ otp_webhook_up.py not found"))
+            return 1
+        if getattr(a, "latest", False):
+            return run([py, str(AUTO_FREECF / "scripts" / "sms_webhook.py"), "--latest"], cwd=AUTO_FREECF)
+        return run([py, str(tool), getattr(a, "action", "up")], cwd=AUTO_FREECF)
+
     tool = AUTO_FREECF / "scripts" / "otp_litensi.py"
     if not tool.exists():
         print(col("red", f"✗ otp_litensi.py not found at {tool}"))
         return 1
-    sub = a.otp_cmd
     cmd = [py, str(tool), sub]
     if sub == "prices" and getattr(a, "site", None):
         cmd += ["--site", a.site]
