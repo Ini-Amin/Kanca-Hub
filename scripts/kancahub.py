@@ -3986,7 +3986,7 @@ def build_parser() -> argparse.ArgumentParser:
     af.add_argument("url", nargs="?", default=None, help="website signup/login URL")
     af.add_argument("--domain", choices=["kancalabs.biz.id", "kancalabs.my.id", "biz.id", "my.id"], default="kancalabs.my.id",
                     help="disposable email domain (default: kancalabs.my.id — Tempik, readable)")
-    af.add_argument("--mail", choices=["auto", "tempik", "relay", "litensi", "static"], default="auto",
+    af.add_argument("--mail", choices=["auto", "tempik", "relay", "litensi", "static", "gmail", "emailmux", "emailnator", "mailtm"], default="auto",
                     help="mailbox provider (default: auto by domain)")
     af.add_argument("--inject-9router", action="store_true", help="inject credentials into 9Router SQLite DB")
     af.add_argument("--out", default=None, help="output JSON path (default: results/autofarm_accounts.json)")
@@ -4499,13 +4499,15 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
                 continue
             if not url:
                 continue
-            dom = input(f" {C['bold']}Mailbox [1=kancalabs.my.id, 2=kancalabs.biz.id, 3=litensi, 4=static]: {C['reset']}").strip()
+            dom = input(f" {C['bold']}Mailbox [1=my.id, 2=biz.id, 3=litensi, 4=static, 5=real gmail]: {C['reset']}").strip()
             if dom == "2":
                 domain, mail = "kancalabs.biz.id", "auto"
             elif dom == "3":
                 domain, mail = "kancalabs.my.id", "litensi"
             elif dom == "4":
                 domain, mail = "kancalabs.my.id", "static"
+            elif dom == "5":
+                domain, mail = "kancalabs.my.id", "gmail"
             else:
                 domain, mail = "kancalabs.my.id", "auto"
             cmd_args = ["autofarm", url, "--domain", domain, "--mail", mail]

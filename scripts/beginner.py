@@ -321,6 +321,7 @@ def wizard_autofarm() -> int:
     print(f"   {c('green', '2')}  kancalabs.biz.id (relay)")
     print(f"   {c('green', '3')}  Litensi paid activation (cheap; needs balance)")
     print(f"   {c('green', '4')}  Static address (no inbox)")
+    print(f"   {c('green', '5')}  Real @gmail.com inbox" + c("dim", " (emailmux→emailnator→mail.tm)"))
     d_choice = ask("Pick mailbox", "1")
     if d_choice == "2":
         domain, mail = "kancalabs.biz.id", "auto"
@@ -328,6 +329,8 @@ def wizard_autofarm() -> int:
         domain, mail = "kancalabs.my.id", "litensi"
     elif d_choice == "4":
         domain, mail = "kancalabs.my.id", "static"
+    elif d_choice == "5":
+        domain, mail = "kancalabs.my.id", "gmail"
     else:
         domain, mail = "kancalabs.my.id", "auto"
 

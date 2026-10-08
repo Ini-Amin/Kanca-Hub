@@ -54,6 +54,12 @@ class TestOpenMailboxFallback(unittest.TestCase):
         self.assertTrue(mb.address.endswith("@kancalabs.my.id"))
 
 
+class TestNewProviders(unittest.TestCase):
+    def test_gmail_capable_providers_registered(self):
+        for name in ("emailmux", "emailnator", "mailtm", "gmail"):
+            self.assertIn(name, M._PROVIDERS, f"{name} provider not registered")
+
+
 class TestDomainRouting(unittest.TestCase):
     def test_my_id_routes_to_tempik(self):
         self.assertEqual(M.route_for("kancalabs.my.id"), "tempik")

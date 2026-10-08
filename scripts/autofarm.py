@@ -1188,7 +1188,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--inspect-only", action="store_true",
                     help="detect available auth methods (GitHub/Google/email) and exit — "
                          "no filling, no submit, nothing written")
-    ap.add_argument("--mail", default="auto", choices=["auto", "tempik", "relay", "litensi", "static"],
+    ap.add_argument("--mail", default="auto", choices=["auto", "tempik", "relay", "litensi", "static", "gmail", "emailmux", "emailnator", "mailtm"],
                     help="mailbox provider (default: tempik — a real readable inbox)")
     ap.add_argument("--mail-site", default=None,
                     help="site for litensi email activation (default: derived from the URL host)")
