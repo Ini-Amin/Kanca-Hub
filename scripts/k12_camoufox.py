@@ -129,8 +129,8 @@ _MAILTM_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 # (nodriver + persisted profile ~/.config/auto-freecf/school-profile).
 SCHOOL_MAIL_SCRIPT = AUTO_FREECF / "scripts" / "school_mail_browser.py"
 SCHOOL_PROFILE_DIR = HOME / ".config" / "auto-freecf" / "school-profile"
-# school_mail_browser.py needs nodriver, which is installed in the managed venv
-# but NOT in the camoufox venv this file runs under.
+# school_mail_browser.py needs nodriver. It is now installed in the camoufox venv
+# too, so re-use THIS interpreter; fall back to the managed venv for older setups.
 MANAGED_VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
 
 def school_email_default() -> str:
@@ -147,10 +147,20 @@ def school_address(base_email: str, index: int = 1) -> str:
     return f"{local}+oct{int(index)}@{dom}"
 
 def _school_mail_python() -> str:
-    """Interpreter that can import nodriver (managed venv preferred)."""
+    """Interpreter that can import nodriver (camoufox venv preferred)."""
+    if _can_import(sys.executable, "nodriver"):
+        return sys.executable
     if MANAGED_VENV_PY.exists() and os.access(str(MANAGED_VENV_PY), os.X_OK):
         return str(MANAGED_VENV_PY)
     return sys.executable
+
+
+def _can_import(python: str, module: str) -> bool:
+    try:
+        return subprocess.run([python, "-c", f"import {module}"],
+                              capture_output=True).returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _relay_create_mailbox(custom_domain: str | None = None) -> dict:

@@ -1206,6 +1206,7 @@ def _r9_api(method: str, path: str, *, body: dict | None = None, base: str = "ht
 def cmd_9router(a) -> int:
     """9Router helpers — including the MITM proxy (route Antigravity/Copilot/Kiro
     IDE traffic through 9Router). Mirrors the web /dashboard/mitm page in the CLI."""
+    py = pick_python(camoufox=True)  # browser helpers here use nodriver/CDP
     sub = getattr(a, "r9_cmd", None) or "status"
     base = getattr(a, "base", None) or "http://localhost:20128"
 
@@ -1627,6 +1628,19 @@ def cmd_proxy(a) -> int:
         except Exception:
             pass
         return rc
+
+    if sub == "ripool":
+        # RapidProxy/SwiftProxy free-trial signup + residential harvest. Drives a
+        # browser (camoufox), so it must run under the camoufox venv.
+        py_camo = pick_python(camoufox=True)
+        tool = AUTO_FREECF / "scripts" / "residential_proxy_signup.py"
+        if not tool.exists():
+            print(col("red", f"✗ residential_proxy_signup.py not found at {tool}"))
+            return 1
+        cmd = [py_camo, str(tool), a.vendor, "-n", str(a.accounts)]
+        if getattr(a, "headless", False):
+            cmd.append("--headless")
+        return run(cmd, cwd=AUTO_FREECF)
 
     if sub == "sync":
         from proxy_sync import sync_now
@@ -3034,7 +3048,8 @@ def cmd_github(a) -> int:
 
 def cmd_mail(a) -> int:
     """School mailbox (BINUS M365) via browser — wraps scripts/school_mail_browser.py."""
-    py = pick_python()
+    # school_mail_browser uses nodriver; run it under camoufox-venv.
+    py = pick_python(camoufox=True)
     smb = AUTO_FREECF / "scripts" / "school_mail_browser.py"
     if not smb.exists():
         print(col("red", f"✗ school_mail_browser.py not found at {smb}"))
@@ -3060,7 +3075,9 @@ def cmd_mail(a) -> int:
 
 def cmd_gmail(a) -> int:
     """Gmail account farm — wraps scripts/gmail_creator.py (and gmail_adb.py)."""
-    py = pick_python()
+    # gmail_creator drives the browser via nodriver; run it under camoufox-venv
+    # so ALL browser subcommands share one reliable interpreter.
+    py = pick_python(camoufox=True)
     gc = AUTO_FREECF / "scripts" / "gmail_creator.py"
     sub = getattr(a, "gmail_cmd", None)
 
@@ -3631,6 +3648,21 @@ def build_parser() -> argparse.ArgumentParser:
     mo.add_argument("--timeout", type=int, default=180, help="seconds to wait (default 180)")
     ms.add_parser("login", help="log in and leave the browser open for inspection")
 
+    # ---- otp (Litensi email activation — cheap pay-per-code mailboxes) ----
+    op = sub.add_parser("otp", help="Litensi email activation (pay-per-code OTP mailboxes)")
+    os_ = op.add_subparsers(dest="otp_cmd")
+    os_.add_parser("profile", help="show Litensi balance / account")
+    op_prices = os_.add_parser("prices", help="list zones + stock for a site")
+    op_prices.add_argument("--site", default=None)
+    op_order = os_.add_parser("order", help="order a mailbox")
+    op_order.add_argument("--site", default=None)
+    op_wait = os_.add_parser("wait", help="poll for the code")
+    op_wait.add_argument("--order-id", required=True)
+    op_wait.add_argument("--email", default="")
+    op_wait.add_argument("--timeout", type=int, default=240)
+    op_done = os_.add_parser("done", help="mark an order SUCCESS (code used)")
+    op_done.add_argument("--order-id", required=True)
+
     # ---- gmail (Gmail account farm) ----
     gmp = sub.add_parser(
         "gmail", help="Gmail account farm (nodriver, phone step stays manual)",
@@ -3728,6 +3760,11 @@ def build_parser() -> argparse.ArgumentParser:
     r = ps.add_parser("residential", help="Webshare residential hunter")
     r.add_argument("-n", "--accounts", type=int, default=1)
     r.add_argument("--headless", action="store_true")
+
+    ri = ps.add_parser("ripool", help="RapidProxy/SwiftProxy free-trial signup -> residential pool")
+    ri.add_argument("vendor", choices=["rapidproxy", "swiftproxy"])
+    ri.add_argument("-n", "--accounts", type=int, default=1)
+    ri.add_argument("--headless", action="store_true")
 
     ps.add_parser("sync", help="sync fresh proxies into all tool pools")
     ps.add_parser("warp", help="generate Cloudflare WARP WireGuard profile")
@@ -3914,8 +3951,10 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- autofarm ----
     af = sub.add_parser("autofarm", help="paste any website URL to adapt and autofarm with clean proxies")
     af.add_argument("url", nargs="?", default=None, help="website signup/login URL")
-    af.add_argument("--domain", choices=["kancalabs.biz.id", "kancalabs.my.id", "biz.id", "my.id"], default="kancalabs.biz.id",
-                    help="disposable email domain (default: kancalabs.biz.id)")
+    af.add_argument("--domain", choices=["kancalabs.biz.id", "kancalabs.my.id", "biz.id", "my.id"], default="kancalabs.my.id",
+                    help="disposable email domain (default: kancalabs.my.id — Tempik, readable)")
+    af.add_argument("--mail", choices=["tempik", "relay", "litensi", "static"], default="tempik",
+                    help="mailbox provider (default: tempik)")
     af.add_argument("--inject-9router", action="store_true", help="inject credentials into 9Router SQLite DB")
     af.add_argument("--out", default=None, help="output JSON path (default: results/autofarm_accounts.json)")
     af.add_argument("--headless", action="store_true", help="run without showing browser UI")
@@ -3925,6 +3964,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "none = force direct; WARP = force Cloudflare WARP; or an explicit "
                          "proxy URL such as http://127.0.0.1:8888")
     af.add_argument("--no-proxy", action="store_true", help="alias for --proxy none: force direct")
+    af.add_argument("--inspect-only", action="store_true", help="detect auth methods (GitHub/Google/email) and exit — no filling, nothing written")
     af.add_argument("--mobile-rotate", action="store_true", help="rotate tethered phone carrier IP before run & retry on block")
     af.add_argument("--plus-address", default=None, metavar="EMAIL", help="use plus-addressing (you+farm1@gmail.com) instead of disposable domain")
     af.add_argument("--plus-prefix", default="farm", metavar="STR", help="tag prefix for plus-addressing (default: farm)")
@@ -4002,9 +4042,35 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_yowes(args)
     if g == "autofarm":
         return cmd_autofarm(args)
+    if g == "otp":
+        if not getattr(args, "otp_cmd", None):
+            p.parse_args(["otp", "--help"])
+            return 1
+        return cmd_otp(args)
 
     p.print_help()
     return 0
+
+
+def cmd_otp(a) -> int:
+    """Litensi email-activation client (scripts/otp_litensi.py)."""
+    py = pick_python()  # requests only — no browser
+    tool = AUTO_FREECF / "scripts" / "otp_litensi.py"
+    if not tool.exists():
+        print(col("red", f"✗ otp_litensi.py not found at {tool}"))
+        return 1
+    sub = a.otp_cmd
+    cmd = [py, str(tool), sub]
+    if sub == "prices" and getattr(a, "site", None):
+        cmd += ["--site", a.site]
+    elif sub == "order" and getattr(a, "site", None):
+        cmd += ["--site", a.site]
+    elif sub == "wait":
+        cmd += ["--order-id", a.order_id, "--email", getattr(a, "email", "") or "",
+                "--timeout", str(getattr(a, "timeout", 240) or 240)]
+    elif sub == "done":
+        cmd += ["--order-id", a.order_id]
+    return run(cmd, cwd=AUTO_FREECF)
 
 
 def cmd_autofarm(a) -> int:
@@ -4017,12 +4083,16 @@ def cmd_autofarm(a) -> int:
         cmd.append(a.url)
     if getattr(a, "domain", None):
         cmd += ["--domain", a.domain]
+    if getattr(a, "mail", None):
+        cmd += ["--mail", a.mail]
     if getattr(a, "inject_9router", False):
         cmd.append("--inject-9router")
     if getattr(a, "out", None):
         cmd += ["--out", a.out]
     if getattr(a, "headless", False):
         cmd.append("--headless")
+    if getattr(a, "inspect_only", False):
+        cmd.append("--inspect-only")
     if getattr(a, "plus_address", None):
         plus_pfx = getattr(a, "plus_prefix", "farm") or "farm"
         sample_email = make_plus_address(a.plus_address, plus_pfx, 1)
@@ -4079,6 +4149,12 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
 
     # Group 6: 9Router IDE interception
     ("19", "9Router MITM proxy status (route IDE traffic)", "9router mitm status", ["9router", "mitm", "status"]),
+
+    # Group 7: Adapt any site
+    ("20", "Autofarm any website (paste URL -> adapt a pipeline)", "autofarm", ["autofarm"]),
+
+    # Group 8: OTP mailboxes
+    ("21", "Cheap OTP mailboxes (Litensi pay-per-code)", "otp", ["otp", "profile"]),
 ]
 
 MENU_STAGE_HEADERS: dict[str, str] = {
@@ -4088,6 +4164,8 @@ MENU_STAGE_HEADERS: dict[str, str] = {
     "12": "[4] 9Router Integration (inject · sync · prune)",
     "15": "[5] Mailbox & Verification Docs (mail · SheerID · docs)",
     "19": "[6] IDE Interception (MITM · Antigravity/Copilot/Kiro)",
+    "20": "[7] Adapt Any Website (autofarm)",
+    "21": "[8] OTP Mailboxes (Litensi)",
 }
 
 
@@ -4377,6 +4455,37 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
             try:
                 input(f" {C['bold']}Press Enter to return to menu...{C['reset']}")
             except (EOFError, KeyboardInterrupt):
+                return 0
+            print()
+            continue
+
+        if choice == "20":
+            try:
+                url = input(f" {C['bold']}Target signup/login URL: {C['reset']}").strip()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if not url:
+                continue
+            dom = input(f" {C['bold']}Mailbox [1=tempik my.id, 2=relay biz.id, 3=litensi, 4=static]: {C['reset']}").strip()
+            mail = {"2": "relay", "3": "litensi", "4": "static"}.get(dom, "tempik")
+            domain = "kancalabs.biz.id" if mail == "relay" else "kancalabs.my.id"
+            cmd_args = ["autofarm", url, "--domain", domain, "--mail", mail]
+            inj = input(f" {C['bold']}Inject into 9Router? (y/N): {C['reset']}").strip().lower()
+            if inj in ("y", "yes"):
+                cmd_args.append("--inject-9router")
+            hl = input(f" {C['bold']}Run headless? (y/N): {C['reset']}").strip().lower()
+            if hl in ("y", "yes"):
+                cmd_args.append("--headless")
+            print(col("cyan", f"\n▶ Running: kancahub {' '.join(cmd_args)}\n"))
+            try:
+                dispatch(p, p.parse_args(cmd_args))
+            except Exception as e:  # noqa: BLE001
+                print(col("red", f"Error: {e}"))
+            print()
+            try:
+                input(f" {C['bold']}Press Enter to return to menu...{C['reset']}")
+            except (EOFError, KeyboardInterrupt):
+                jobs.stop_all()
                 return 0
             print()
             continue

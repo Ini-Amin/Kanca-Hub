@@ -131,3 +131,12 @@ harbor/tools/proxyscrape_premium_http_proxies.txt
 harbor/tools/tokenharbor/config.toml
 harbor/account.json
 harbor/*.account.json
+
+# Third-party reference checkouts (separate repos, not part of this project)
+9router-mibp-version/
+github-regkit-mibp/
+grok2api/
+hark-pool/
+abliteration-bulk-creator/
+tokenharbor-bulk-creator/
+session-ses_*.md

@@ -239,7 +239,7 @@ class TestInspectOnlyWritesNothing(unittest.TestCase):
             out = Path(d) / "accounts.json"
 
             async def fake_flow(url, headless, proxy_cfg, email, password, username,
-                                host, result, *, inspect_only=False):
+                                host, result, *, inspect_only=False, mailbox=None):
                 result["auth_methods"] = ["github", "email"]
                 result["auth_preferred"] = "github"
                 result["has_email_form"] = True
@@ -247,6 +247,7 @@ class TestInspectOnlyWritesNothing(unittest.TestCase):
                 return result
 
             with patch.object(autofarm, "_run_browser_flow", side_effect=fake_flow), \
+                    patch("mailboxes.open_mailbox", return_value=None), \
                     patch.object(autofarm, "get_fresh_proxy", return_value=None), \
                     patch.object(autofarm, "sync_now", return_value=0), \
                     patch.object(autofarm, "_scaffold_pipeline") as scaffold:
@@ -268,6 +269,7 @@ class TestNoSuccessFileWhenBlocked(unittest.TestCase):
     def _run(self, fake_flow, tmpdir):
         out = Path(tmpdir) / "accounts.json"
         with patch.object(autofarm, "_run_browser_flow", side_effect=fake_flow), \
+                patch("mailboxes.open_mailbox", return_value=None), \
                 patch.object(autofarm, "get_fresh_proxy", return_value=None), \
                 patch.object(autofarm, "sync_now", return_value=0), \
                 patch.object(autofarm, "_scaffold_pipeline") as scaffold:
@@ -279,7 +281,7 @@ class TestNoSuccessFileWhenBlocked(unittest.TestCase):
         import tempfile
 
         async def fake_flow(url, headless, proxy_cfg, email, password, username,
-                            host, result, *, inspect_only=False):
+                            host, result, *, inspect_only=False, mailbox=None):
             result["auth_methods"] = []
             result["stopped_at"] = "no_supported_auth_method"
             result["error"] = "no supported auth method found"
@@ -297,7 +299,7 @@ class TestNoSuccessFileWhenBlocked(unittest.TestCase):
         import tempfile
 
         async def fake_flow(url, headless, proxy_cfg, email, password, username,
-                            host, result, *, inspect_only=False):
+                            host, result, *, inspect_only=False, mailbox=None):
             result["auth_methods"] = ["email"]
             result["has_email_form"] = True
             result["stopped_at"] = "no_post_login_signal"
@@ -316,7 +318,7 @@ class TestNoSuccessFileWhenBlocked(unittest.TestCase):
         import tempfile
 
         async def fake_flow(url, headless, proxy_cfg, email, password, username,
-                            host, result, *, inspect_only=False):
+                            host, result, *, inspect_only=False, mailbox=None):
             result["auth_methods"] = ["email"]
             result["has_email_form"] = True
             result["stopped_at"] = "post_login_verified"
