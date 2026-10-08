@@ -320,7 +320,7 @@ async def run_autofarm(
     inject_9r: bool = False,
     out_json: Path | str | None = None,
     inspect_only: bool = False,
-    mail_provider: str = "tempik",
+    mail_provider: str = "auto",
     mail_site: str | None = None,
 ) -> dict:
     domain = normalize_domain(mail_domain)
@@ -1188,7 +1188,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--inspect-only", action="store_true",
                     help="detect available auth methods (GitHub/Google/email) and exit — "
                          "no filling, no submit, nothing written")
-    ap.add_argument("--mail", default="tempik", choices=["tempik", "relay", "litensi", "static"],
+    ap.add_argument("--mail", default="auto", choices=["auto", "tempik", "relay", "litensi", "static"],
                     help="mailbox provider (default: tempik — a real readable inbox)")
     ap.add_argument("--mail-site", default=None,
                     help="site for litensi email activation (default: derived from the URL host)")

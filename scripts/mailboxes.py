@@ -143,25 +143,48 @@ def _static(domain: str, local_part: str = "", log=print) -> Mailbox:
 _PROVIDERS = {"tempik": _tempik, "relay": _relay, "litensi": _litensi, "static": _static}
 
 
-def open_mailbox(provider: str = "tempik", *, domain: str = "", local_part: str = "",
+def route_for(domain: str) -> str:
+    """Which backend serves a domain. Tempik (the Worker) is my.id ONLY; the
+    relay serves my.id AND biz.id. So biz.id must go through the relay."""
+    d = (domain or "").lower()
+    if d.endswith("kancalabs.biz.id"):
+        return "relay"
+    if d.endswith("kancalabs.my.id"):
+        return "tempik"
+    return "relay"  # any other domain → the relay (supports arbitrary domains here)
+
+
+def open_mailbox(provider: str = "auto", *, domain: str = "", local_part: str = "",
                  site: str = "", log=print) -> Mailbox:
-    """Create/attach a mailbox. Falls back to a static address on failure."""
-    provider = (provider or "tempik").strip().lower()
+    """Create/attach a mailbox. Falls back to a static address on failure.
+
+    provider="auto" routes by domain: my.id -> tempik, biz.id -> relay, so the
+    caller never has to know which backend owns which domain.
+    """
+    provider = (provider or "auto").strip().lower()
+    domain = domain or "kancalabs.my.id"
+    if provider == "auto":
+        provider = route_for(domain)
+        log(f"  [mail] domain {domain} -> {provider} backend")
     fn = _PROVIDERS.get(provider)
     if fn is None:
         log(f"  [mail] unknown provider {provider!r}; using a static address")
-        return _static(domain or "kancalabs.my.id", local_part, log)
+        return _static(domain, local_part, log)
     try:
         if provider == "tempik":
-            return _tempik(domain or "kancalabs.my.id", local_part, log)
+            if domain.lower().endswith("biz.id"):
+                log("  [mail] Tempik only serves kancalabs.my.id — routing biz.id via the relay")
+                provider = "relay"
+            else:
+                return _tempik(domain, local_part, log)
         if provider == "relay":
-            return _relay(domain or "kancalabs.biz.id", log)
+            return _relay(domain, log)
         if provider == "litensi":
             return _litensi(site, log)
-        return _static(domain or "kancalabs.my.id", local_part, log)
+        return _static(domain, local_part, log)
     except Exception as exc:  # network/keys/stock — never fatal to a farm run
         log(f"  [mail] {provider} unavailable ({exc}); using a static address")
-        return _static(domain or "kancalabs.my.id", local_part, log)
+        return _static(domain, local_part, log)
 
 
 if __name__ == "__main__":

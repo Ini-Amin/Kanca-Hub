@@ -3972,8 +3972,8 @@ def build_parser() -> argparse.ArgumentParser:
     af.add_argument("url", nargs="?", default=None, help="website signup/login URL")
     af.add_argument("--domain", choices=["kancalabs.biz.id", "kancalabs.my.id", "biz.id", "my.id"], default="kancalabs.my.id",
                     help="disposable email domain (default: kancalabs.my.id — Tempik, readable)")
-    af.add_argument("--mail", choices=["tempik", "relay", "litensi", "static"], default="tempik",
-                    help="mailbox provider (default: tempik)")
+    af.add_argument("--mail", choices=["auto", "tempik", "relay", "litensi", "static"], default="auto",
+                    help="mailbox provider (default: auto by domain)")
     af.add_argument("--inject-9router", action="store_true", help="inject credentials into 9Router SQLite DB")
     af.add_argument("--out", default=None, help="output JSON path (default: results/autofarm_accounts.json)")
     af.add_argument("--headless", action="store_true", help="run without showing browser UI")
@@ -4485,9 +4485,15 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
                 continue
             if not url:
                 continue
-            dom = input(f" {C['bold']}Mailbox [1=tempik my.id, 2=relay biz.id, 3=litensi, 4=static]: {C['reset']}").strip()
-            mail = {"2": "relay", "3": "litensi", "4": "static"}.get(dom, "tempik")
-            domain = "kancalabs.biz.id" if mail == "relay" else "kancalabs.my.id"
+            dom = input(f" {C['bold']}Mailbox [1=kancalabs.my.id, 2=kancalabs.biz.id, 3=litensi, 4=static]: {C['reset']}").strip()
+            if dom == "2":
+                domain, mail = "kancalabs.biz.id", "auto"
+            elif dom == "3":
+                domain, mail = "kancalabs.my.id", "litensi"
+            elif dom == "4":
+                domain, mail = "kancalabs.my.id", "static"
+            else:
+                domain, mail = "kancalabs.my.id", "auto"
             cmd_args = ["autofarm", url, "--domain", domain, "--mail", mail]
             inj = input(f" {C['bold']}Inject into 9Router? (y/N): {C['reset']}").strip().lower()
             if inj in ("y", "yes"):
