@@ -68,3 +68,18 @@ No import-time side effects except `colorama.init()`; `sys.path.insert`/`mkdir`/
 log-open are all inside functions. IMPORTANT: `get_ascii_banner`/`KancaHubParser`
 are used by `build_parser` (3515) and menus via lazy `kancahub.` access — base
 MUST re-export them and callers keep module-qualified refs (H1).
+
+## Overnight attempt result (worker1, reverted)
+
+worker1 (Luvus pane10) DID extract kancahub_base.py (846 lines) + re-export block,
+and build_parser + the 134-command surface test passed — BUT it put
+`import kancahub` at MODULE level in kancahub_base.py → circular import when the
+CLI is the entry point (ImportError: _AUTO_GATEWAYS). After fixing that, the real
+breakage surfaced: extracted functions read their OWN module globals, so tests
+that `patch.object(kancahub, "_choose_egress"/"run")` no longer intercept →
+a test actually RAN the live github farm ("pace sleeping 76.7s"). That is H1,
+unfixed. REVERTED (kancahub.py + kancahub_base.py) to keep the CLI correct.
+
+Lesson: the base split needs the **lazy `import kancahub` INSIDE every function
+that calls a patched helper** (not module-level, not `from ... import`), done
+function-by-function with the suite run after each — not a single big move.
