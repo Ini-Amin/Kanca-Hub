@@ -2319,15 +2319,29 @@ def _thk_sync(a, py) -> int:
         dd = json.loads(r["data"]); key = dd["apiKey"]; model = dd.get("defaultModel") or "deepseek-v4.1-flash:free"
         url = f"https://tokenharbor.ai/v1/chat/completions"
         body = json.dumps({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}).encode()
-        req = urllib.request.Request(url, data=body, method="POST",
-                                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                ok = resp.status == 200
-        except Exception as e:
-            ok = False
-        print(f"  {'✅' if ok else '❌'} {r['name']:34s}")
-        if not ok:
+        # tokenharbor.ai is intermittently SLOW (30s+). A single 20s shot with
+        # no retry falsely marks valid keys dead — and --prune then DELETES them,
+        # which is how good keys "go invalid". Retry, and only treat a definitive
+        # auth rejection (401/403) as dead; timeouts/429/5xx are "unknown" → keep.
+        verdict = "unknown"
+        for attempt in range(3):
+            req = urllib.request.Request(url, data=body, method="POST",
+                                         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    verdict = "alive" if resp.status == 200 else "unknown"
+                    break
+            except urllib.error.HTTPError as he:
+                if he.code in (401, 403):
+                    verdict = "dead"
+                    break
+                verdict = "unknown"  # 429 / 5xx → keep, don't prune
+            except Exception:
+                verdict = "unknown"
+            time.sleep(3)
+        alive = verdict == "alive"
+        print(f"  {'✅' if alive else ('⛔' if verdict == 'dead' else '⚠ keep')} {r['name']:34s}")
+        if verdict == "dead":
             dead.append(r["id"])
     if a.prune and dead:
         for cid in dead:
