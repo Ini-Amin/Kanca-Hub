@@ -441,12 +441,21 @@ def cmd_mobile(a) -> int:
     """Rotate/expose the tethered phone's MOBILE carrier IP (a real mobile IP is
     accepted by TokenHarbor/GitHub where datacenter/WARP are blocked)."""
     py = pick_python()
+    sub = getattr(a, "mobile_cmd", None) or "status"
+    if sub == "saving":
+        tool = AUTO_FREECF / "scripts" / "mobile_saving.py"
+        if not tool.exists():
+            print(col("red", "✗ mobile_saving.py not found"))
+            return 1
+        cmd = [py, str(tool), getattr(a, "action", "status")]
+        if getattr(a, "action", "") == "start":
+            cmd += ["--cap-mb", str(getattr(a, "cap_mb", 50))]
+        return run(cmd, cwd=AUTO_FREECF)
     tool = AUTO_FREECF / "scripts" / "mobile_rotate.py"
     if not tool.exists():
         print(col("red", "✗ mobile_rotate.py not found"))
         return 1
     cmd = [py, str(tool)]
-    sub = getattr(a, "mobile_cmd", None) or "status"
     if sub == "status":
         cmd.append("--status")
     elif sub == "rotate":
@@ -3570,6 +3579,9 @@ def build_parser() -> argparse.ArgumentParser:
     mor.add_argument("--until", default=None, help="keep rotating until the new IP starts with this prefix")
     mor.add_argument("--wait", type=float, default=20.0, help="max seconds to wait for the new IP (default 20)")
     mor.add_argument("--force", action="store_true", help="rotate even if the phone is not on mobile data")
+    msv = mos.add_parser("saving", help="IP-only saving mode: phone IP for the signup, Wi-Fi for the heavy traffic + data cap")
+    msv.add_argument("action", nargs="?", default="status", choices=["status", "start", "used", "stop"])
+    msv.add_argument("--cap-mb", type=float, default=50, help="mobile-data budget per session (default 50 MB)")
     sub.add_parser("menu", help="classic numbered command menu (advanced users)")
 
     # ---- warp ----
