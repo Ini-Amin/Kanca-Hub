@@ -242,25 +242,46 @@ class TokenHarborClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def signup(self, email: str, password: str) -> dict:
-        """Register a new account."""
-        self._fingerprint = str(uuid.uuid4())
-        self._ensure_deployment_info()
+    _THROTTLE_MARKERS = ("bit fast", "take a breath", "slow down", "too many", "rate limit")
 
-        turnstile_token = self._solve_turnstile(f"{BASE_URL}/login?mode=signup")
-        if turnstile_token is None:  # "" means the site showed no challenge: proceed
-            return {"ok": False, "error": "Turnstile solve failed"}
+    def signup(self, email: str, password: str, *, max_attempts: int = 3) -> dict:
+        """Register a new account.
 
-        return self._call_server_action(
-            self._signup_action_hash,
-            [
-                ("cf-turnstile-response", turnstile_token),
-                ("email", email),
-                ("password", password),
-                ("invite_code", ""),
-            ],
-            mode="signup",
-        )
+        TokenHarbor applies a soft anti-abuse throttle ('You're doing that a bit
+        fast'), which our prior flow treated as a hard failure. Ported from
+        tokenharbor-bulk-creator: detect it and back off + retry (the throttle
+        clears the fields, so we re-solve Turnstile and resubmit).
+        """
+        result: dict = {"ok": False, "error": "no attempt"}
+        for attempt in range(1, max_attempts + 1):
+            self._fingerprint = str(uuid.uuid4())
+            self._ensure_deployment_info()
+
+            turnstile_token = self._solve_turnstile(f"{BASE_URL}/login?mode=signup")
+            if turnstile_token is None:  # "" means the site showed no challenge: proceed
+                return {"ok": False, "error": "Turnstile solve failed"}
+
+            result = self._call_server_action(
+                self._signup_action_hash,
+                [
+                    ("cf-turnstile-response", turnstile_token),
+                    ("email", email),
+                    ("password", password),
+                    ("invite_code", ""),
+                ],
+                mode="signup",
+            )
+            if result.get("ok"):
+                return result
+            err = (result.get("error") or "").lower()
+            if any(m in err for m in self._THROTTLE_MARKERS) and attempt < max_attempts:
+                wait = 45 * attempt
+                print(f"  [thk] signup throttled ('{result.get('error')}') — backing off {wait}s "
+                      f"(attempt {attempt}/{max_attempts})")
+                time.sleep(wait)
+                continue
+            return result
+        return result
 
     def verify_email(self, url_or_token: str) -> bool:
         """Verify email via verification link."""
