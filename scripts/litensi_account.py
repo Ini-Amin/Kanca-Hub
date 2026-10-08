@@ -276,19 +276,36 @@ async def unlock_api(*, headless: bool, timeout: float) -> dict:
 
         if "/security/email" in page.url:
             print("  ! API page gated by email confirmation — requesting code...")
-            requested_at = time.time()
+            # Snapshot codes already in the inbox, then only accept a NEW one —
+            # the step-up mails carry no usable timestamps, so a plain "first
+            # match" returns a stale code from an earlier request.
+            def _all_codes() -> set[str]:
+                out = set()
+                try:
+                    for m in g.poll_relay_inbox(jwt):
+                        c = _code_from_relay([m])
+                        if c:
+                            out.add(c)
+                except Exception:
+                    pass
+                return out
+            seen = _all_codes()
             await R._click_text(page, "Kirim kode ke email", "Send code", "Send")
             code = None
             deadline = time.time() + timeout
             while time.time() < deadline and not code:
                 try:
-                    code = _code_from_relay(g.poll_relay_inbox(jwt), after=requested_at)
+                    for m in g.poll_relay_inbox(jwt):
+                        c = _code_from_relay([m])
+                        if c and c not in seen:
+                            code = c
+                            break
                 except Exception as e:
                     print(f"    (relay poll error: {e})")
                 if not code:
                     await asyncio.sleep(4)
             if not code:
-                print("  ✗ no confirmation code received")
+                print("  ✗ no fresh confirmation code received")
                 return {"status": "no_code"}
             print(f"  ✓ confirmation code: {code}")
             await _enter_code(page, code)
