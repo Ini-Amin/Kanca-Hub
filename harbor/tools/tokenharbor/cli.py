@@ -19,10 +19,14 @@ import re
 import secrets
 import string
 import sys
+import threading
 import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
+
+_SAVE_LOCK = threading.Lock()  # _save_account is read-modify-write; guard it
 
 # ── path setup ──────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -177,6 +181,10 @@ def _gen_email(domain: Optional[str] = None) -> str:
 
 
 def _save_account(account: dict, path: Optional[str] = None) -> None:
+    with _SAVE_LOCK:  # concurrent workers append to the same file
+        _save_account_unlocked(account, path)
+
+def _save_account_unlocked(account: dict, path: Optional[str] = None) -> None:
     filepath = Path(path or _ACCOUNT_FILE)
     if filepath.exists():
         try:
@@ -381,8 +389,9 @@ def _run_full_setup(email: Optional[str] = None, password: Optional[str] = None)
 # batch mode
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _run_batch(count: int) -> int:
-    """Create N accounts in batch mode."""
+def _run_batch(count: int, concurrency: int = 1) -> int:
+    """Create N accounts in batch mode. concurrency>1 runs workers in parallel."""
+    concurrency = max(1, int(concurrency or 1))
     _print_banner()
 
     capsolver_key = _load_capsolver_key()
@@ -412,6 +421,33 @@ def _run_batch(count: int) -> int:
     accounts: list[dict] = []
     failed = 0
     working = list(alive)  # copy to rotate through
+
+    # ── concurrent mode: N workers, each its own client+Tempik session+proxy ──
+    if concurrency > 1:
+        console.print(f"[bold cyan]Concurrency:[/bold cyan] {concurrency} workers")
+        def _worker(idx: int) -> Optional[dict]:
+            domain = random.choice(domains)
+            email = _gen_email(domain=domain)
+            password = _gen_password()
+            proxy = random.choice(working)
+            console.print(f"[dim][{idx}/{count}] start {email}[/dim]")
+            acct = _run_single_setup(email, password, capsolver_key, proxy=proxy)
+            if acct is None:
+                console.print(f"[red][{idx}/{count}] failed {email}[/red]")
+                return None
+            _save_account(acct)
+            console.print(f"[green][{idx}/{count}] ✓ {acct['email']}[/green]")
+            return acct
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {pool.submit(_worker, i): i for i in range(1, count + 1)}
+            for fut in as_completed(futures):
+                a = fut.result()
+                if a is None:
+                    failed += 1
+                else:
+                    accounts.append(a)
+        return _print_batch_summary(accounts, failed, count)
 
     for i in range(1, count + 1):
         domain = random.choice(domains)
@@ -445,7 +481,9 @@ def _run_batch(count: int) -> int:
             console.print(f"  [dim]pacing {wait:.0f}s before next account...[/dim]")
             time.sleep(wait)
 
-    # ── summary ─────────────────────────────────────────────────────────
+    return _print_batch_summary(accounts, failed, count)
+
+def _print_batch_summary(accounts: list[dict], failed: int, count: int) -> int:
     console.print()
     summary = Table(title="[bold]Batch Summary[/bold]", box=box.ROUNDED, border_style="cyan")
     summary.add_column("#", style="dim")
@@ -454,19 +492,13 @@ def _run_batch(count: int) -> int:
     summary.add_column("Free", style="bold")
     for j, a in enumerate(accounts, 1):
         key = a["api_key"]
-        summary.add_row(
-            str(j),
-            a["email"],
-            key[:30] + "..." if len(key) > 30 else key,
-            "✓" if a.get("free_tier_enabled") else "✗",
-        )
-
+        summary.add_row(str(j), a["email"],
+                        key[:30] + "..." if len(key) > 30 else key,
+                        "✓" if a.get("free_tier_enabled") else "✗")
     if failed > 0:
         summary.add_row("", f"[red]{failed} failed[/red]", "", "")
-
     console.print(summary)
     console.print(f"[bold green]✓ {len(accounts)}/{count} accounts created[/bold green]")
-    # non-zero when nothing was created, or the pipeline reports false success
     return 0 if accounts else 1
 
 
@@ -774,6 +806,8 @@ def _parse_args():
 
     p = sub.add_parser("batch")
     p.add_argument("count", type=int, help="Number of accounts to create")
+    p.add_argument("--concurrency", type=int, default=int(os.environ.get("TOKENHARBOR_CONCURRENCY", "1")),
+                   help="parallel workers (default 1; each worker uses its own proxy/browser)")
 
     p = sub.add_parser("create-key")
     p.add_argument("--email", required=True); p.add_argument("--password", required=True)
@@ -802,7 +836,7 @@ def main() -> int:
     if args.command == "full-setup":
         return _run_full_setup(email=args.email, password=args.password)
     elif args.command == "batch":
-        return _run_batch(args.count)
+        return _run_batch(args.count, concurrency=getattr(args, "concurrency", 1))
     elif args.command == "create-key":
         return _run_create_key(args.email, args.password, args.label)
     elif args.command == "test-key":

@@ -10,9 +10,11 @@ CLI = Path(__file__).resolve().parent.parent / "harbor" / "tools" / "tokenharbor
 class TestBatchExit(unittest.TestCase):
     def test_batch_returns_nonzero_when_nothing_created(self):
         src = CLI.read_text()
+        # the exit rule now lives in _print_batch_summary (called by both the
+        # serial and the concurrent path of _run_batch)
         body = src[src.index("def _run_batch"):]
-        body = body[:body.index("\ndef ", 10)]
-        self.assertTrue(re.search(r"return 0 if accounts else 1", body),
+        self.assertTrue(re.search(r"return 0 if accounts else 1", src)
+                        and "_print_batch_summary" in body,
                         "_run_batch must not return 0 unconditionally")
 
 
