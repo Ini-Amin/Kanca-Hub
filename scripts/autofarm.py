@@ -316,10 +316,12 @@ async def run_autofarm(
     url: str,
     headless: bool = False,
     proxy: str | None = None,
-    mail_domain: str = "kancalabs.biz.id",
+    mail_domain: str = "kancalabs.my.id",
     inject_9r: bool = False,
     out_json: Path | str | None = None,
     inspect_only: bool = False,
+    mail_provider: str = "tempik",
+    mail_site: str | None = None,
 ) -> dict:
     domain = normalize_domain(mail_domain)
     # 1. Resolve egress (only harvest the pool when a pool proxy is actually wanted)
@@ -334,11 +336,25 @@ async def run_autofarm(
     if inspect_only:
         print("  • Mode     : INSPECT ONLY (no filling, no submit, nothing written)")
 
-    # 2. Prepare identity (only needed for the email path, but harmless to print)
+    # 2. Prepare identity via a REAL mailbox (so email OTPs are readable).
+    #    Tempik first (self-hosted, kancalabs.my.id). Falls back to a static
+    #    address if the provider is down. A fragile mailbox must never crash a run.
     username = f"usr_{random_string(8)}"
-    email = f"{username}@{domain}"
+    local_part = username.replace("_", "")
     password = generate_password()
+    mailbox = None
+    try:
+        from mailboxes import open_mailbox
+        site_host = urllib.parse.urlparse(mail_site or url).netloc or domain
+        mailbox = open_mailbox(mail_provider, domain=domain, local_part=local_part,
+                               site=site_host, log=print)
+        email = mailbox.address
+    except Exception as exc:
+        print(f"  [mail] provider init failed ({exc}); using static address")
+    if mailbox is None:
+        email = f"{username}@{domain}"
 
+    print(f"  • Mailbox  : {mail_provider}")
     print(f"  • Email    : {email}")
     print(f"  • Password : {password}")
 
@@ -365,7 +381,7 @@ async def run_autofarm(
 
     result = await _run_browser_flow(
         url, headless, proxy_cfg, email, password, username, host, result,
-        inspect_only=inspect_only,
+        inspect_only=inspect_only, mailbox=mailbox,
     )
 
     # 4. Inspect-only: print the finding and write NOTHING.
@@ -421,6 +437,7 @@ async def _drive_page(
     host: str,
     *,
     inspect_only: bool = False,
+    mailbox=None,
 ) -> dict:
     print(f"  • Navigating to {url}…")
     try:
@@ -466,7 +483,7 @@ async def _drive_page(
     # ── PHASE 2: ROUTE (email FIRST per user directive, then github, then google)
     if result.get("has_email_form") or "email" in methods:
         print("  [route] Email/password form selected (preferred).")
-        return await _route_email(page, url, email, password, username, host, result)
+        return await _route_email(page, url, email, password, username, host, result, mailbox=mailbox)
 
     if "github" in methods:
         accounts = load_github_accounts()
@@ -501,6 +518,7 @@ async def _run_browser_flow(
     result: dict,
     *,
     inspect_only: bool = False,
+    mailbox=None,
 ) -> dict:
     """Launch the browser and drive one target page (Camoufox, else Playwright)."""
     try:
@@ -513,7 +531,7 @@ async def _run_browser_flow(
             page = await browser.new_page()
             return await _drive_page(
                 page, url, email, password, username, result, host,
-                inspect_only=inspect_only,
+                inspect_only=inspect_only, mailbox=mailbox,
             )
 
     from playwright.async_api import async_playwright
@@ -523,7 +541,7 @@ async def _run_browser_flow(
             page = await browser.new_page()
             return await _drive_page(
                 page, url, email, password, username, result, host,
-                inspect_only=inspect_only,
+                inspect_only=inspect_only, mailbox=mailbox,
             )
         finally:
             await browser.close()
@@ -632,6 +650,42 @@ async def _is_phone_otp_present(page) -> bool:
             return True
     except Exception:
         pass
+    return False
+
+
+async def _has_phone_field(page) -> bool:
+    """True if a tel/phone input is visible — i.e. SMS (not a readable email OTP)."""
+    for sel in ("input[type='tel']", "input[name*='phone' i]", "input[id*='phone' i]"):
+        try:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _fill_code(page, code: str) -> bool:
+    """Fill an email-OTP code, handling a single input or split digit boxes."""
+    boxes = await page.query_selector_all("input[maxlength='1']")
+    if len(boxes) >= len(code):
+        for i, digit in enumerate(code):
+            try:
+                await boxes[i].fill(digit)
+                await page.wait_for_timeout(80)
+            except Exception:
+                pass
+        return True
+    for sel in ("input[name*='otp' i]", "input[id*='otp' i]",
+                "input[name*='code' i]", "input[id*='code' i]",
+                "input[placeholder*='code' i]", "input[placeholder*='verif' i]"):
+        try:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                await el.fill(code)
+                return True
+        except Exception:
+            continue
     return False
 
 
@@ -788,7 +842,8 @@ async def _extract_visible_text(page) -> str:
         return ""
 
 
-async def _route_email(page, url, email, password, username, host, result, max_steps: int = 8) -> dict:
+async def _route_email(page, url, email, password, username, host, result,
+                       max_steps: int = 8, mailbox=None) -> dict:
     """Fill email/password signup and drive multi-step flows up to max_steps."""
     print("  • Starting email signup flow (supporting multi-step)…")
 
@@ -844,10 +899,46 @@ async def _route_email(page, url, email, password, username, host, result, max_s
             return result
 
         if await _is_phone_otp_present(page):
-            result["stopped_at"] = "stop_phone_otp"
-            result["error"] = "phone or email OTP verification required"
-            print("  ⚠ Phone or email OTP verification required — stopping honestly.")
-            return result
+            # Try an EMAIL OTP read from our real mailbox before stopping. A phone
+            # field means SMS (can't read) — stop; otherwise read the code.
+            if mailbox is not None and not await _has_phone_field(page):
+                print(f"  • Email OTP page detected — reading code from {mailbox.address}...")
+                vendor = urllib.parse.urlparse(url).netloc.split(".")[0]
+                code = await asyncio.to_thread(mailbox.code, vendor, 150.0)
+                if code:
+                    print(f"  ✓ Code received: {code}")
+                    if await _fill_code(page, code):
+                        print("  • Code filled; submitting...")
+                        btn = await _find_clickable_next_button(page)
+                        if btn:
+                            try:
+                                await btn.click()
+                            except Exception:
+                                pass
+                            await page.wait_for_timeout(2500)
+                        session = await _capture_session(page, host)
+                        result["final_url"] = page.url
+                        result["session"] = session
+                        if _post_login_signal(page.url, session, url, host):
+                            result["success"] = True
+                            result["stopped_at"] = "post_login_verified"
+                            print(f"  ✓ Verified post-login signal at {page.url}")
+                            return result
+                        filled = True  # continue the multi-step loop
+                    else:
+                        result["stopped_at"] = "stop_otp_fill"
+                        result["error"] = "read a code but no OTP input matched"
+                        return result
+                else:
+                    result["stopped_at"] = "stop_otp_timeout"
+                    result["error"] = "no email OTP arrived within the timeout"
+                    print("  ⚠ No email OTP arrived — stopping honestly.")
+                    return result
+            else:
+                result["stopped_at"] = "stop_phone_otp"
+                result["error"] = "phone or email OTP verification required"
+                print("  ⚠ Phone/email OTP required — no readable mailbox (stopping).")
+                return result
 
         filled = await _fill_known_fields(page, email, password, username)
 
@@ -1097,6 +1188,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--inspect-only", action="store_true",
                     help="detect available auth methods (GitHub/Google/email) and exit — "
                          "no filling, no submit, nothing written")
+    ap.add_argument("--mail", default="tempik", choices=["tempik", "relay", "litensi", "static"],
+                    help="mailbox provider (default: tempik — a real readable inbox)")
+    ap.add_argument("--mail-site", default=None,
+                    help="site for litensi email activation (default: derived from the URL host)")
     return ap
 
 def main() -> int:
@@ -1113,14 +1208,19 @@ def main() -> int:
         if not url:
             print("  ✗ No URL provided.")
             return 1
-        print("\n  Choose disposable email domain:")
-        print("    [1] kancalabs.biz.id (Cloudflare Email Routing)")
-        print("    [2] kancalabs.my.id  (Tempik D1 Worker Catch-all)")
-        c_dom = input("  Select [1/2] (default 1): ").strip()
-        domain = "kancalabs.my.id" if c_dom == "2" else "kancalabs.biz.id"
+        print("\n  Choose disposable mailbox:")
+        print("    [1] Tempik kancalabs.my.id (readable inbox — default, most sites)")
+        print("    [2] KancaHub relay kancalabs.biz.id")
+        print("    [3] Litensi paid activation (needs API keys/balance)")
+        print("    [4] Static address (no inbox — nothing to read)")
+        c_dom = input("  Select [1/2/3/4] (default 1): ").strip()
+        mail_provider = {"2": "relay", "3": "litensi", "4": "static"}.get(c_dom, "tempik")
+        domain = "kancalabs.biz.id" if mail_provider == "relay" else "kancalabs.my.id"
 
         c_inj = input("  Inject credentials into 9Router? [y/N]: ").strip().lower()
         inject = c_inj in ("y", "yes", "true", "1")
+    else:
+        mail_provider = getattr(args, "mail", "tempik")
 
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
@@ -1130,6 +1230,8 @@ def main() -> int:
         headless=args.headless,
         proxy=("none" if getattr(args, "no_proxy", False) else args.proxy),
         mail_domain=domain,
+        mail_provider=mail_provider,
+        mail_site=getattr(args, "mail_site", None) or url,
         inject_9r=inject,
         out_json=args.out,
         inspect_only=args.inspect_only,

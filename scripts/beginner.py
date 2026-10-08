@@ -58,7 +58,23 @@ def yesno(prompt: str, default: bool = True) -> bool:
     return v.startswith("y")
 
 
+# These scripts import camoufox/playwright, which exist ONLY in the isolated
+# camoufox-venv (the main venv is python3.13 and has neither). Launching them
+# with the default interpreter crashes with ModuleNotFoundError.
+BROWSER_SCRIPTS = frozenset({
+    "autofarm.py",
+    "github_farm.py",
+    "github_to_anything.py",
+    "github_to_kiro.py",
+    "k12_camoufox.py",
+    "sheerid_link_finder.py",
+    "webshare_camoufox.py",
+})
+
+
 def run_script(script: str, args: list[str], *, python: str | None = None, cwd: Path | None = None) -> int:
+    if python is None and script in BROWSER_SCRIPTS and CAMOUFOX_PY.exists():
+        python = str(CAMOUFOX_PY)
     py = python or (str(VENV_PY) if VENV_PY.exists() else sys.executable)
     cmd = [py, str(SCRIPTS / script)] + args
     print(c("dim", f"\n  running: {' '.join(cmd)}\n"))
@@ -87,8 +103,9 @@ def beginner_menu() -> int:
         print(f"   {c('green', '7')}  Use my xAI / Grok account" + c("dim", "  (add your xAI API key)"))
         print(f"   {c('green', '8')}  Make teacher/student documents (PDF/PNG)")
         print(f"   {c('green', '9')}  Manage my keys" + c("dim", " (Cloudflare, TokenHarbor, 9Router)"))
-        print(f"   {c('green', '10')}  What is this? / Help")
-        print(f"   {c('green', '11')}  Autofarm any website" + c("dim", " (paste URL -> adapt into pipeline)"))
+        print(f"   {c('green', '10')}  Autofarm any website" + c("dim", " (paste URL -> adapt into pipeline)"))
+        print(f"   {c('green', '11')}  Cheap OTP mailboxes" + c("dim", " (Litensi: pay-per-code, no monthly)"))
+        print(f"   {c('green', '12')}  What is this? / Help")
         print(f"   {c('dim', 'q')}  Quit")
         print()
         choice = ask("Pick one", "2").lower()
@@ -115,9 +132,11 @@ def beginner_menu() -> int:
         elif choice == "9":
             wizard_manage()
         elif choice == "10":
-            explain_what_is_this()
-        elif choice == "11":
             wizard_autofarm()
+        elif choice == "11":
+            wizard_litensi()
+        elif choice == "12":
+            explain_what_is_this()
         else:
             print(c("yellow", "  Please type one of the numbers shown."))
 
@@ -309,6 +328,28 @@ def wizard_autofarm() -> int:
         args.append("--headless")
 
     run_script("autofarm.py", args)
+    ask("\nPress Enter to go back")
+    return 0
+
+
+def wizard_litensi() -> int:
+    hr()
+    print(c("bold", "  Cheap OTP mailboxes (Litensi)\n"))
+    print(c("dim", "  Litensi rents email inboxes per code (pay-as-you-go, no monthly)."))
+    print(c("dim", "  Useful when a signup needs an email code you can't reach.\n"))
+    print(f"   {c('green', '1')}  Check balance / prices")
+    print(f"   {c('green', '2')}  Order a mailbox and wait for the code")
+    print(f"   {c('dim', 'q')}  Back")
+    choice = ask("Pick one", "1").lower()
+    if choice == "2":
+        site = ask("Site (e.g. github.com)", "github.com")
+        run_script("otp_litensi.py", ["order", "--site", site])
+        oid = ask("Order id (from the output above)")
+        email = ask("Email (from the output above)")
+        if oid:
+            run_script("otp_litensi.py", ["wait", "--order-id", oid, "--email", email])
+    elif choice == "1":
+        run_script("otp_litensi.py", ["profile"])
     ask("\nPress Enter to go back")
     return 0
 
