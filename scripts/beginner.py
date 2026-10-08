@@ -351,6 +351,7 @@ def wizard_litensi() -> int:
     print(c("dim", "  Useful when a signup needs an email code you can't reach.\n"))
     print(f"   {c('green', '1')}  Check balance / prices")
     print(f"   {c('green', '2')}  Order a mailbox and wait for the code")
+    print(f"   {c('green', '3')}  Read my Litensi account's inbox (kancalabs.biz.id)")
     print(f"   {c('dim', 'q')}  Back")
     choice = ask("Pick one", "1").lower()
     if choice == "2":
@@ -362,6 +363,10 @@ def wizard_litensi() -> int:
             run_script("otp_litensi.py", ["wait", "--order-id", oid, "--email", email])
     elif choice == "1":
         run_script("otp_litensi.py", ["profile"])
+    elif choice == "3":
+        print(c("dim", "  NOTE: your Litensi account mail goes to kancalabs.biz.id (the relay),"))
+        print(c("dim", "        NOT kancalabs.my.id (Tempik) — different domains.\n"))
+        run_script("mailboxes.py", ["relay-account"])
     ask("\nPress Enter to go back")
     return 0
 

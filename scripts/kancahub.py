@@ -3720,13 +3720,12 @@ def build_parser() -> argparse.ArgumentParser:
     gma.add_argument("--dry-run", action="store_true")
 
     gmslow = gms.add_parser("slow", help="drip-feed: create 1 Gmail every few days (safest)")
+    gmslow.add_argument("action", nargs="?", choices=["check", "run", "reset"], default="check",
+                        help="check (default) | run (create if due) | reset")
     gmslow.add_argument("--interval-days", type=float, default=3.5,
                         help="min days between accounts (default 3.5)")
     gmslow.add_argument("--backend", choices=["auto", "device", "desktop"], default="auto")
     gmslow.add_argument("--count", type=int, default=1)
-    gmslow_actions = ["run", "check", "reset"]
-    gmslow_act = gmslow.add_argument("--action", choices=gmslow_actions, default="check",
-                                     help="check (default) | run (create if due) | reset")
 
     gmw = gms.add_parser("waydroid",
                           help="create Gmail on Waydroid (fresh Android 13 + GMS) via Kiwi CDP")
