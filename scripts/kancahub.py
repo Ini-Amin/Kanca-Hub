@@ -4026,6 +4026,10 @@ def build_parser() -> argparse.ArgumentParser:
     ys.add_parser("gui", help="launch the legacy desktop GUI")
     ys.add_parser("mcp", help="run the yowes MCP server (stdio)")
 
+    # ---- diagnose (where each tool breaks) ----
+    dg = sub.add_parser("diagnose", help="one-line verdicts: where each tool breaks (egress/DataDome/phone/OTP/webhook)")
+    dg.add_argument("--live", action="store_true", help="also probe egress IP + github.com/signup")
+
     # ---- scrape (Firecrawl, using the keys already in 9Router) ----
     sc = sub.add_parser("scrape", help="Firecrawl: clean-markdown scrape / web search (uses 9Router's firecrawl keys)")
     scs = sc.add_subparsers(dest="scrape_cmd")
@@ -4137,6 +4141,12 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_otp(args)
     if g == "scrape":
         return cmd_scrape(args)
+    if g == "diagnose":
+        tool = AUTO_FREECF / "scripts" / "diagnose.py"
+        cmd = [pick_python(), str(tool)]
+        if getattr(args, "live", False):
+            cmd.append("--live")
+        return run(cmd, cwd=AUTO_FREECF)
 
     p.print_help()
     return 0
