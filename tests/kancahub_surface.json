@@ -69,6 +69,10 @@
 "beginner": [
 "help"
 ],
+"diagnose": [
+"help",
+"live"
+],
 "doctor": [
 "help"
 ],
