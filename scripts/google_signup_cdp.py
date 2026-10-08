@@ -54,16 +54,30 @@ async def _click_next(page) -> bool:
 
 
 async def _pick_combobox(page, label: str, option_text: str) -> bool:
-    """Click a Google MD combobox labelled `label` and choose an option."""
-    cb = page.locator(f"div[role='combobox'][aria-label='{label}']").first
+    """Click a Google MD combobox and choose an option.
+
+    Google's birthday/gender comboboxes have NO aria-label; they are identified
+    by their visible placeholder text ("Month" / "Gender"). Match on text.
+    """
+    cb = page.locator(f"div[role='combobox']").filter(has_text=label).first
     if await cb.count() == 0:
-        cb = page.locator(f"[role='combobox']:has-text('{label}')").first
+        cb = page.locator(f"[role='combobox'][aria-label='{label}']").first
     try:
         await cb.click(timeout=8000)
-        await asyncio.sleep(1)
-        opt = page.locator(f"li[role='option']:has-text('{option_text}')").first
-        if await opt.count():
-            await opt.click(timeout=8000)
+        await asyncio.sleep(1.2)
+        # exact text match — "Male" must not match "Female"
+        opt = page.locator("ul[role='listbox'] li[role='option']", has_text=option_text)
+        n = await opt.count()
+        chosen = None
+        for i in range(n):
+            t = (await opt.nth(i).inner_text()).strip()
+            if t == option_text:
+                chosen = opt.nth(i)
+                break
+        if chosen is None and n:
+            chosen = opt.first
+        if chosen is not None:
+            await chosen.click(timeout=8000)
             return True
     except Exception:
         pass
