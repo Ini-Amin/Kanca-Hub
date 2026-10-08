@@ -129,7 +129,7 @@ async def run_bd(ws: str, *, dry_run: bool, headless: bool = False) -> dict:
     print(f"  • Password : {password}")
 
     async with async_playwright() as p:
-        print("  connecting to Bright Data Scraping Browser...")
+        print("  connecting to the CDP cloud browser...")
         browser = None
         for _try in range(4):
             try:
