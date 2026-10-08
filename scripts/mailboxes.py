@@ -109,6 +109,22 @@ def _relay(domain: str = "kancalabs.biz.id", log=print) -> Mailbox:
     return Mailbox(mb["email"], lambda: g.poll_relay_inbox(jwt))
 
 
+def relay_inbox(jwt: str, address: str = "") -> Mailbox:
+    """Read an EXISTING relay inbox (biz.id) by its JWT — e.g. the Litensi account."""
+    import github_farm as g
+    return Mailbox(address or "(relay inbox)", lambda: g.poll_relay_inbox(jwt))
+
+
+def _litensi_account_jwt() -> tuple[str, str]:
+    """(jwt, email) of the saved Litensi account's relay inbox, or ('','')."""
+    import json
+    try:
+        d = json.loads((Path.home() / ".config" / "auto-freecf" / "litensi_account.json").read_text())
+        return d.get("relay_jwt", ""), d.get("email", "")
+    except Exception:
+        return "", ""
+
+
 # ── provider: litensi (paid email activation) ───────────────────
 def _litensi(site: str, log=print) -> Mailbox:
     import otp_litensi
@@ -151,16 +167,40 @@ def open_mailbox(provider: str = "tempik", *, domain: str = "", local_part: str 
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Create/read a disposable mailbox")
-    ap.add_argument("provider", nargs="?", default="tempik", choices=sorted(_PROVIDERS))
+    ap.add_argument("provider", nargs="?", default="tempik",
+                    choices=sorted(_PROVIDERS) + ["relay-account", "list-providers"],
+                    help="tempik|relay|litensi|static, or relay-account (the saved Litensi inbox)")
     ap.add_argument("--domain", default="")
     ap.add_argument("--site", default="github.com")
     ap.add_argument("--local-part", default="", help="pick the name (tempik/static)")
+    ap.add_argument("--jwt", default="", help="read an existing relay inbox by JWT")
     ap.add_argument("--watch", action="store_true", help="keep printing new mail until Ctrl-C")
     ap.add_argument("--timeout", type=float, default=180.0)
     a = ap.parse_args()
-    mb = open_mailbox(a.provider, domain=a.domain, local_part=a.local_part, site=a.site)
-    print(f"  address : {mb.address}")
-    print(f"  inbox   : https://tempik.kancalabs.workers.dev/  (this session only)\n")
+
+    if a.provider == "list-providers":
+        print("  tempik  kancalabs.my.id  — free, readable; UI shows only this browser's inboxes")
+        print("  relay   kancalabs.biz.id — the relay (Litensi account codes land here)")
+        print("  litensi paid email activation (needs keys/balance)")
+        print("  static  no inbox")
+        print("  relay-account  read the saved Litensi account inbox directly")
+        raise SystemExit(0)
+
+    if a.provider == "relay-account":
+        jwt, email = _litensi_account_jwt()
+        if not jwt:
+            print("  ✗ no saved Litensi account JWT (~/.config/auto-freecf/litensi_account.json)")
+            raise SystemExit(1)
+        mb = relay_inbox(jwt, email)
+        print(f"  reading relay inbox : {email}")
+        print(f"  relay domain        : kancalabs.biz.id  (this is the Litensi code inbox)")
+        print(f"  note                : the Tempik site (kancalabs.my.id) is a DIFFERENT domain\n")
+    elif a.jwt:
+        mb = relay_inbox(a.jwt)
+    else:
+        mb = open_mailbox(a.provider, domain=a.domain, local_part=a.local_part, site=a.site)
+        print(f"  address : {mb.address}")
+        print(f"  inbox   : https://tempik.kancalabs.workers.dev/  (this session only)\n")
     if not a.watch:
         for m in mb.read():
             print(f"  - {m.get('subject','')} :: {m.get('body','')[:120]}")
