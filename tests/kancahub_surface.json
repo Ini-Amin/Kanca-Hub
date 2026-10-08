@@ -1,0 +1,708 @@
+{
+"9router": [
+"help",
+"r9_cmd"
+],
+"9router combo": [
+"action",
+"base",
+"help",
+"models",
+"name"
+],
+"9router mitm": [
+"action",
+"api_key",
+"base",
+"help",
+"sudo_password",
+"tool"
+],
+"9router proxy": [
+"action",
+"help",
+"name",
+"proxy_url",
+"type"
+],
+"adb": [
+"adb_cmd",
+"help"
+],
+"adb connect": [
+"addr",
+"help"
+],
+"adb devices": [
+"help"
+],
+"adb emulator": [
+"help"
+],
+"adb phone": [
+"help"
+],
+"adb setup": [
+"help"
+],
+"adb status": [
+"help"
+],
+"adb usb": [
+"help"
+],
+"autofarm": [
+"domain",
+"headless",
+"help",
+"inject_9router",
+"inspect_only",
+"mail",
+"mobile_rotate",
+"no_proxy",
+"out",
+"plus_address",
+"plus_prefix",
+"proxy",
+"url"
+],
+"beginner": [
+"help"
+],
+"doctor": [
+"help"
+],
+"egress-node": [
+"en_cmd",
+"help"
+],
+"egress-node add": [
+"help",
+"name",
+"url"
+],
+"egress-node list": [
+"help"
+],
+"egress-node remove": [
+"help",
+"name"
+],
+"egress-node serve": [
+"background",
+"help",
+"host",
+"port"
+],
+"github": [
+"github_cmd",
+"help"
+],
+"github check": [
+"domain",
+"help",
+"inbox"
+],
+"github edu": [
+"domain",
+"help",
+"inbox",
+"interactive",
+"max_accounts",
+"no_verify",
+"proxy",
+"url"
+],
+"github farm": [
+"delay_max",
+"delay_min",
+"domain",
+"dry_run",
+"headless",
+"help",
+"inbox",
+"index",
+"max_accounts",
+"mobile_rotate",
+"no_proxy",
+"pace",
+"pool",
+"proxy",
+"retries"
+],
+"github verify": [
+"debug",
+"email",
+"from_mail",
+"gateway",
+"headless",
+"help",
+"open",
+"proxy",
+"timeout",
+"url"
+],
+"gmail": [
+"gmail_cmd",
+"help"
+],
+"gmail adb": [
+"count",
+"dry_run",
+"help",
+"package",
+"password"
+],
+"gmail check": [
+"help"
+],
+"gmail dry-run": [
+"count",
+"help",
+"out",
+"proxy"
+],
+"gmail farm": [
+"count",
+"dry_run",
+"headless",
+"help",
+"mobile_rotate",
+"no_proxy",
+"out",
+"plus_address",
+"plus_prefix",
+"proxy",
+"random_password"
+],
+"gmail slow": [
+"action",
+"backend",
+"count",
+"help",
+"interval_days"
+],
+"gmail waydroid": [
+"cdp",
+"day",
+"first",
+"help",
+"last",
+"md",
+"month",
+"no_launch",
+"password",
+"wait",
+"year"
+],
+"grok": [
+"grok_cmd",
+"help"
+],
+"grok check": [
+"help"
+],
+"grok gui": [
+"help"
+],
+"grok inject": [
+"base_url",
+"dry_run",
+"help",
+"input",
+"proxy",
+"verify"
+],
+"grok pool": [
+"help"
+],
+"grok retry": [
+"help",
+"out",
+"pending"
+],
+"grok run": [
+"accounts",
+"headless",
+"help",
+"no_proxy",
+"petani",
+"proxy",
+"proxy_pool",
+"workers"
+],
+"grok web": [
+"help"
+],
+"ip-reuse": [
+"clear",
+"help"
+],
+"k12": [
+"help",
+"k12_cmd"
+],
+"k12 auto": [
+"help",
+"no_proxy",
+"proxy"
+],
+"k12 inject": [
+"dry_run",
+"help",
+"session"
+],
+"k12 link-finder": [
+"extra",
+"help"
+],
+"k12 modes": [
+"help"
+],
+"k12 run": [
+"help"
+],
+"k12 sync": [
+"help",
+"prune"
+],
+"k12 verify": [
+"ask_email",
+"debug",
+"email",
+"gateway",
+"help",
+"no_temp_email",
+"proxy",
+"url"
+],
+"mail": [
+"help",
+"mail_cmd"
+],
+"mail login": [
+"help"
+],
+"mail otp": [
+"help",
+"timeout"
+],
+"mail test": [
+"help"
+],
+"menu": [
+"help"
+],
+"mobile": [
+"help",
+"mobile_cmd"
+],
+"mobile rotate": [
+"force",
+"help",
+"until",
+"wait"
+],
+"mobile saving": [
+"action",
+"cap_mb",
+"help"
+],
+"mobile status": [
+"help"
+],
+"otp": [
+"help",
+"otp_cmd"
+],
+"otp done": [
+"help",
+"order_id"
+],
+"otp order": [
+"help",
+"site"
+],
+"otp prices": [
+"help",
+"site"
+],
+"otp profile": [
+"help"
+],
+"otp wait": [
+"email",
+"help",
+"order_id",
+"timeout"
+],
+"otp webhook": [
+"action",
+"help",
+"latest"
+],
+"proxy": [
+"help",
+"proxy_cmd"
+],
+"proxy api": [
+"gateway",
+"help",
+"path"
+],
+"proxy daemon": [
+"background",
+"help"
+],
+"proxy export": [
+"help",
+"limit",
+"to_pool"
+],
+"proxy fast": [
+"help",
+"max_latency",
+"target"
+],
+"proxy gateway": [
+"background",
+"help",
+"port",
+"target"
+],
+"proxy grok": [
+"accounts",
+"headless",
+"help",
+"mail_provider"
+],
+"proxy harvest": [
+"anonymity",
+"country",
+"help",
+"loop",
+"max",
+"protocol",
+"serve",
+"sync_9router",
+"target",
+"target_url",
+"timeout",
+"workers"
+],
+"proxy ngateway": [
+"help",
+"pool",
+"port",
+"scheme"
+],
+"proxy nharvest": [
+"help",
+"out_json",
+"out_txt",
+"protocol",
+"target",
+"timeout",
+"workers"
+],
+"proxy nhealth": [
+"help",
+"pool"
+],
+"proxy pipeline": [
+"accounts",
+"headless",
+"help"
+],
+"proxy res-gateway": [
+"help",
+"pool",
+"port",
+"scheme"
+],
+"proxy residential": [
+"accounts",
+"headless",
+"help"
+],
+"proxy ripool": [
+"accounts",
+"headless",
+"help",
+"vendor"
+],
+"proxy serve": [
+"background",
+"help",
+"port",
+"target"
+],
+"proxy start": [
+"accounts",
+"help",
+"mode",
+"port",
+"target"
+],
+"proxy stats": [
+"gateway",
+"help"
+],
+"proxy stop": [
+"help",
+"name"
+],
+"proxy sync": [
+"help"
+],
+"proxy sync9r": [
+"db",
+"help",
+"target"
+],
+"proxy test": [
+"help",
+"pool"
+],
+"proxy verify": [
+"gateway_out",
+"help",
+"pool",
+"proxy"
+],
+"proxy warp": [
+"help"
+],
+"region": [
+"help",
+"region_cmd"
+],
+"region clear": [
+"help"
+],
+"region current": [
+"help"
+],
+"region list": [
+"help"
+],
+"region set": [
+"help",
+"name"
+],
+"region show": [
+"help",
+"name"
+],
+"report": [
+"clear",
+"help",
+"tail"
+],
+"scrape": [
+"help",
+"scrape_cmd"
+],
+"scrape key": [
+"help"
+],
+"scrape search": [
+"help",
+"limit",
+"query"
+],
+"scrape url": [
+"help",
+"url"
+],
+"session": [
+"help",
+"port",
+"start_gateway",
+"target"
+],
+"stack": [
+"help",
+"stack_cmd"
+],
+"stack cookie-import": [
+"cookies",
+"help",
+"label"
+],
+"stack inject": [
+"db",
+"dry_run",
+"help",
+"input",
+"model",
+"no_verify"
+],
+"stack login": [
+"account",
+"bulk",
+"google",
+"help",
+"proxy",
+"visible"
+],
+"stack manage": [
+"help",
+"model",
+"no_test",
+"out_csv",
+"out_json",
+"token",
+"token_file"
+],
+"stack signup": [
+"accounts",
+"delay",
+"export_txt",
+"fast",
+"gateway",
+"headless",
+"help",
+"no_inject",
+"output",
+"proxy",
+"proxy_pool",
+"retry",
+"warp",
+"workers"
+],
+"stack sync": [
+"db",
+"deactivate",
+"export_clean",
+"help",
+"prune"
+],
+"stack validate": [
+"account_id",
+"help",
+"token"
+],
+"stack web": [
+"help",
+"open",
+"port"
+],
+"thk": [
+"help",
+"thk_cmd"
+],
+"thk batch": [
+"concurrency",
+"count",
+"country",
+"help",
+"inject",
+"mobile_rotate",
+"no_proxy",
+"per_ip",
+"proxy",
+"store"
+],
+"thk check-proxies": [
+"help"
+],
+"thk create-key": [
+"country",
+"help",
+"mobile_rotate",
+"no_proxy",
+"proxy"
+],
+"thk enable-free": [
+"help"
+],
+"thk inject": [
+"dry_run",
+"help",
+"input",
+"model",
+"verify"
+],
+"thk setup": [
+"country",
+"help",
+"mobile_rotate",
+"no_proxy",
+"proxy"
+],
+"thk setup-env": [
+"dry_run",
+"env_file",
+"harbor_dir",
+"help",
+"no_proxies",
+"proxies_src",
+"status",
+"tempik_url"
+],
+"thk status": [
+"help"
+],
+"thk sync": [
+"db",
+"help",
+"prune"
+],
+"thk test-key": [
+"help",
+"key"
+],
+"warp": [
+"help",
+"warp_cmd"
+],
+"warp down": [
+"help"
+],
+"warp gen": [
+"help"
+],
+"warp status": [
+"help"
+],
+"warp up": [
+"help"
+],
+"yowes": [
+"help",
+"yowes_cmd"
+],
+"yowes gui": [
+"help"
+],
+"yowes k12": [
+"first",
+"help",
+"last",
+"out",
+"school"
+],
+"yowes list": [
+"help"
+],
+"yowes make": [
+"country",
+"dob",
+"first",
+"gender",
+"help",
+"last",
+"out",
+"position",
+"school",
+"types"
+],
+"yowes mcp": [
+"help"
+],
+"yowes schools": [
+"country",
+"help"
+]
+}
