@@ -422,22 +422,25 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
     ~85% of puzzles. So we sweep those offsets most-likely-first, ~1.1s apart
     (not spam), refreshing to a fresh puzzle after exhausting the list.
     """
-    SWEEP = [205, 195, 185, 215, 225, 235, 175, 165, 245, 155, 75, 145]
+    # One drag per FRESH puzzle. A wrong drag puts the widget in the
+    # "Verification failed" state, after which it will not reopen -- so we MUST
+    # refresh for a new puzzle each attempt. Offsets: invert(gap) over the range
+    # our labels show (gap ~165-245).
+    SWEEP = [205, 195, 185, 215, 225, 235, 175, 165, 245, 155, 240, 170]
 
     if not await _wait_open(page):
         log("  [slider] widget would not open")
         return False
 
-    # ONE drag per FRESH puzzle: a wrong drag closes the widget and it will not
-    # reopen, so we refresh to a new puzzle each attempt and try the next offset.
     for i in range(1, puzzles + 1):
         if await _passed(page):
             log("  [slider] already passed!")
             return True
         if i > 1:
             await refresh(page)
-        if not await _wait_open(page):
-            continue
+            await page.wait_for_timeout(1200)
+            if not await _wait_open(page):
+                continue
         x = SWEEP[(i - 1) % len(SWEEP)]
         box = await _slider_box(page)
         if not box:
@@ -447,6 +450,6 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         if await _passed(page):
             log(f"  [slider] solved ✓ (x={x}, puzzle {i})")
             return True
-        log(f"  [slider] puzzle {i}: x={x} miss -> refresh")
+        log(f"  [slider] puzzle {i}: x={x} miss")
     log("  [slider] not solved")
     return False
