@@ -320,7 +320,9 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
             await refresh(page)
             continue
         log(f"  [slider] puzzle {i}: target x={x} ({how})")
-        for x2 in (x, x - jitter, x + jitter):
+        # A handful of PACED tries around the guess (detection is approximate);
+        # not a fast sweep. Then move on to a fresh puzzle.
+        for x2 in (x, x - 16, x + 16, x - 32, x + 32):
             box = await _slider_box(page)
             if not box:
                 await _ensure_open(page)
