@@ -127,6 +127,20 @@ if commands_region is None:
         _spec.loader.exec_module(commands_region)
 sys.modules.setdefault("scripts.commands_region", commands_region)
 cmd_region = commands_region.cmd_region
+commands_misc = sys.modules.get("commands_misc")
+if commands_misc is None:
+    try:
+        commands_misc = _importlib.import_module("commands_misc")
+    except ModuleNotFoundError:
+        _spec = _importlib_util.spec_from_file_location(
+            "commands_misc", Path(__file__).resolve().parent / "commands_misc.py")
+        commands_misc = _importlib_util.module_from_spec(_spec)
+        sys.modules["commands_misc"] = commands_misc
+        _spec.loader.exec_module(commands_misc)
+sys.modules.setdefault("scripts.commands_misc", commands_misc)
+cmd_ip_reuse = commands_misc.cmd_ip_reuse
+cmd_egress_node = commands_misc.cmd_egress_node
+cmd_report = commands_misc.cmd_report
 
 # ═══════════════════════════════════════════════════════════════ doctor
 
@@ -556,45 +570,6 @@ def cmd_9router(a) -> int:
     return 0
 
 
-def cmd_ip_reuse(a) -> int:
-    """Show the CGNAT-aware session guard: exit-IP reuse per IP + mid-session changes."""
-    py = pick_python()
-    tool = AUTO_FREECF / "scripts" / "session_guard.py"
-    if not tool.exists():
-        print(col("red", "✗ session_guard.py not found"))
-        return 1
-    if getattr(a, "clear", False):
-        try:
-            Path(SESSION_GUARD_STATE).unlink()
-            print(col("green", f"✓ cleared {SESSION_GUARD_STATE}"))
-        except FileNotFoundError:
-            print(col("dim", "nothing to clear"))
-        return 0
-    return run([py, str(tool), "report"], cwd=AUTO_FREECF)
-
-
-def cmd_egress_node(a) -> int:
-    """Use a device's own connection as an egress node (serve here / register remote)."""
-    py = pick_python()
-    tool = AUTO_FREECF / "scripts" / "egress_node.py"
-    if not tool.exists():
-        print(col("red", "✗ egress_node.py not found"))
-        return 1
-    sub = getattr(a, "en_cmd", None) or "list"
-    if sub == "serve":
-        cmd = [py, str(tool), "serve", "--host", getattr(a, "host", "0.0.0.0"),
-               "--port", str(getattr(a, "port", 8899))]
-        if getattr(a, "background", False):
-            return _spawn_background(cmd, cwd=AUTO_FREECF, name="egress-node",
-                                     ready_port=int(getattr(a, "port", 8899)))
-        return run(cmd, cwd=AUTO_FREECF)
-    if sub == "add":
-        return run([py, str(tool), "add", a.name, a.url], cwd=AUTO_FREECF)
-    if sub == "remove":
-        return run([py, str(tool), "remove", a.name], cwd=AUTO_FREECF)
-    return run([py, str(tool), "list"], cwd=AUTO_FREECF)
-
-
 def cmd_session(a) -> int:
     """One long-running CLI session: run a proxy gateway INSIDE it and run farms
     from the same prompt, reusing that gateway. The gateway is owned by this
@@ -691,38 +666,6 @@ def cmd_session(a) -> int:
 
     gw.stop()
     print(col("dim", "\n  session closed.\n"))
-    return 0
-
-
-def cmd_report(a) -> int:
-    """Show the farm run ledger (what each farm attempt produced / where it stopped)."""
-    sys.path.insert(0, str(SCRIPTS_DIR))
-    try:
-        import farm_ledger
-    except Exception as e:  # noqa: BLE001
-        print(col("red", f"✗ farm_ledger unavailable: {e}"))
-        return 1
-    if getattr(a, "clear", False):
-        try:
-            Path(farm_ledger.LEDGER_PATH).unlink()
-            print(col("green", f"✓ cleared {farm_ledger.LEDGER_PATH}"))
-        except FileNotFoundError:
-            print(col("dim", "nothing to clear"))
-        except Exception as e:  # noqa: BLE001
-            print(col("red", f"✗ {e}"))
-            return 1
-        return 0
-    print(col("bold", f"\n  Farm run ledger  ({farm_ledger.LEDGER_PATH})\n"))
-    print(farm_ledger.summarize(farm_ledger.read()))
-    n = int(getattr(a, "tail", 0) or 0)
-    if n:
-        print(col("bold", f"\n  Last {n} runs:\n"))
-        for r in farm_ledger.read()[-n:]:
-            flag = "✅" if r.get("ok") else "❌"
-            print(f"  {flag} {r.get('ts','')} {r.get('farm',''):<9} "
-                  f"egress={r.get('egress','') or '-':<12} stage={r.get('stage','') or '-':<16} "
-                  f"n={r.get('count',0)}")
-    print()
     return 0
 
 
