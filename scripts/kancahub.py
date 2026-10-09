@@ -102,219 +102,56 @@ else:
     sys.modules.setdefault("scripts.kancahub", sys.modules[__name__])
 import importlib as _importlib
 import importlib.util as _importlib_util
-kancahub_base = sys.modules.get("kancahub_base")
-if kancahub_base is None:
-    try:
-        kancahub_base = _importlib.import_module("kancahub_base")
-    except ModuleNotFoundError:  # `from scripts import kancahub` spelling
-        _spec = _importlib_util.spec_from_file_location(
-            "kancahub_base", Path(__file__).resolve().parent / "kancahub_base.py")
-        kancahub_base = _importlib_util.module_from_spec(_spec)
-        sys.modules["kancahub_base"] = kancahub_base
-        _spec.loader.exec_module(kancahub_base)
-sys.modules.setdefault("scripts.kancahub_base", kancahub_base)
+
+
+def _load(name: str):
+    """Import a sibling module under ONE name for both import spellings
+    (`import kancahub` vs `from scripts import kancahub`), so patches hit it."""
+    mod = sys.modules.get(name)
+    if mod is None:
+        try:
+            mod = _importlib.import_module(name)
+        except ModuleNotFoundError:  # `from scripts import kancahub` spelling
+            spec = _importlib_util.spec_from_file_location(
+                name, Path(__file__).resolve().parent / f"{name}.py")
+            mod = _importlib_util.module_from_spec(spec)
+            sys.modules[name] = mod
+            spec.loader.exec_module(mod)
+    sys.modules.setdefault(f"scripts.{name}", mod)
+    return mod
+
+
+kancahub_base = _load("kancahub_base")
 globals().update({_n: getattr(kancahub_base, _n)
                   for _n in dir(kancahub_base) if not _n.startswith("__")})
-commands_region = sys.modules.get("commands_region")
-if commands_region is None:
-    try:
-        commands_region = _importlib.import_module("commands_region")
-    except ModuleNotFoundError:  # `from scripts import kancahub` spelling
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_region", Path(__file__).resolve().parent / "commands_region.py")
-        commands_region = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_region"] = commands_region
-        _spec.loader.exec_module(commands_region)
-sys.modules.setdefault("scripts.commands_region", commands_region)
-cmd_region = commands_region.cmd_region
-commands_misc = sys.modules.get("commands_misc")
-if commands_misc is None:
-    try:
-        commands_misc = _importlib.import_module("commands_misc")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_misc", Path(__file__).resolve().parent / "commands_misc.py")
-        commands_misc = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_misc"] = commands_misc
-        _spec.loader.exec_module(commands_misc)
-sys.modules.setdefault("scripts.commands_misc", commands_misc)
-cmd_ip_reuse = commands_misc.cmd_ip_reuse
-cmd_egress_node = commands_misc.cmd_egress_node
-cmd_report = commands_misc.cmd_report
-commands_9router = sys.modules.get("commands_9router")
-if commands_9router is None:
-    try:
-        commands_9router = _importlib.import_module("commands_9router")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_9router", Path(__file__).resolve().parent / "commands_9router.py")
-        commands_9router = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_9router"] = commands_9router
-        _spec.loader.exec_module(commands_9router)
-sys.modules.setdefault("scripts.commands_9router", commands_9router)
-cmd_adb = commands_9router.cmd_adb
-cmd_mobile = commands_9router.cmd_mobile
-_r9_cli_token = commands_9router._r9_cli_token
-_r9_api = commands_9router._r9_api
-cmd_9router = commands_9router.cmd_9router
-commands_proxy = sys.modules.get("commands_proxy")
-if commands_proxy is None:
-    try:
-        commands_proxy = _importlib.import_module("commands_proxy")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_proxy", Path(__file__).resolve().parent / "commands_proxy.py")
-        commands_proxy = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_proxy"] = commands_proxy
-        _spec.loader.exec_module(commands_proxy)
-sys.modules.setdefault("scripts.commands_proxy", commands_proxy)
-_probe_http = commands_proxy._probe_http
-_egress_verdict = commands_proxy._egress_verdict
-cmd_proxy = commands_proxy.cmd_proxy
-_proxy_start = commands_proxy._proxy_start
-_proxy_export = commands_proxy._proxy_export
-_proxy_test_pool = commands_proxy._proxy_test_pool
-_proxy_stats = commands_proxy._proxy_stats
-_proxy_api = commands_proxy._proxy_api
-_native_proxy_lib = commands_proxy._native_proxy_lib
-_proxy_native_harvest = commands_proxy._proxy_native_harvest
-_proxy_native_health = commands_proxy._proxy_native_health
-_proxy_native_gateway = commands_proxy._proxy_native_gateway
-commands_stack = sys.modules.get("commands_stack")
-if commands_stack is None:
-    try:
-        commands_stack = _importlib.import_module("commands_stack")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_stack", Path(__file__).resolve().parent / "commands_stack.py")
-        commands_stack = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_stack"] = commands_stack
-        _spec.loader.exec_module(commands_stack)
-sys.modules.setdefault("scripts.commands_stack", commands_stack)
-cmd_stack = commands_stack.cmd_stack
-_stack_signup = commands_stack._stack_signup
-_stack_login = commands_stack._stack_login
-_stack_manage = commands_stack._stack_manage
-commands_grok = sys.modules.get("commands_grok")
-if commands_grok is None:
-    try:
-        commands_grok = _importlib.import_module("commands_grok")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_grok", Path(__file__).resolve().parent / "commands_grok.py")
-        commands_grok = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_grok"] = commands_grok
-        _spec.loader.exec_module(commands_grok)
-sys.modules.setdefault("scripts.commands_grok", commands_grok)
-cmd_grok = commands_grok.cmd_grok
-commands_github = sys.modules.get("commands_github")
-if commands_github is None:
-    try:
-        commands_github = _importlib.import_module("commands_github")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_github", Path(__file__).resolve().parent / "commands_github.py")
-        commands_github = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_github"] = commands_github
-        _spec.loader.exec_module(commands_github)
-sys.modules.setdefault("scripts.commands_github", commands_github)
-map_github_farm_args = commands_github.map_github_farm_args
-build_github_parser = commands_github.build_github_parser
-build_edu_steps = commands_github.build_edu_steps
-edu_needs_human = commands_github.edu_needs_human
-edu_doc_upload_attempted = commands_github.edu_doc_upload_attempted
-_github_accounts_count = commands_github._github_accounts_count
-_sheerid_find_url = commands_github._sheerid_find_url
-_sheerid_run = commands_github._sheerid_run
-_print_edu_summary = commands_github._print_edu_summary
-cmd_github = commands_github.cmd_github
-commands_thk = sys.modules.get("commands_thk")
-if commands_thk is None:
-    try:
-        commands_thk = _importlib.import_module("commands_thk")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_thk", Path(__file__).resolve().parent / "commands_thk.py")
-        commands_thk = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_thk"] = commands_thk
-        _spec.loader.exec_module(commands_thk)
-sys.modules.setdefault("scripts.commands_thk", commands_thk)
-THK_PER_IP_DEFAULT = commands_thk.THK_PER_IP_DEFAULT
-THK_PER_IP_MAX = commands_thk.THK_PER_IP_MAX
-thk_classify = commands_thk.thk_classify
-_thk_account_count = commands_thk._thk_account_count
-_current_ip = commands_thk._current_ip
-_thk_fresh_ip = commands_thk._thk_fresh_ip
-thk_chunks = commands_thk.thk_chunks
-cmd_thk = commands_thk.cmd_thk
-_thk_sync = commands_thk._thk_sync
-cmd_mail = commands_thk.cmd_mail
-cmd_gmail = commands_thk.cmd_gmail
-commands_farm = sys.modules.get("commands_farm")
-if commands_farm is None:
-    try:
-        commands_farm = _importlib.import_module("commands_farm")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_farm", Path(__file__).resolve().parent / "commands_farm.py")
-        commands_farm = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_farm"] = commands_farm
-        _spec.loader.exec_module(commands_farm)
-sys.modules.setdefault("scripts.commands_farm", commands_farm)
-_k12_guided = commands_farm._k12_guided
-cmd_k12 = commands_farm.cmd_k12
-cmd_warp = commands_farm.cmd_warp
-cmd_yowes = commands_farm.cmd_yowes
-commands_otp = sys.modules.get("commands_otp")
-if commands_otp is None:
-    try:
-        commands_otp = _importlib.import_module("commands_otp")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "commands_otp", Path(__file__).resolve().parent / "commands_otp.py")
-        commands_otp = _importlib_util.module_from_spec(_spec)
-        sys.modules["commands_otp"] = commands_otp
-        _spec.loader.exec_module(commands_otp)
-sys.modules.setdefault("scripts.commands_otp", commands_otp)
-cmd_otp = commands_otp.cmd_otp
-cmd_scrape = commands_otp.cmd_scrape
-cmd_autofarm = commands_otp.cmd_autofarm  # def cmd_autofarm -> commands_otp: pick_python(camoufox=True)
-doctor = sys.modules.get("doctor")
-if doctor is None:
-    try:
-        doctor = _importlib.import_module("doctor")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "doctor", Path(__file__).resolve().parent / "doctor.py")
-        doctor = _importlib_util.module_from_spec(_spec)
-        sys.modules["doctor"] = doctor
-        _spec.loader.exec_module(doctor)
-sys.modules.setdefault("scripts.doctor", doctor)
-cmd_doctor = doctor.cmd_doctor
-menu = sys.modules.get("menu")
-if menu is None:
-    try:
-        menu = _importlib.import_module("menu")
-    except ModuleNotFoundError:
-        _spec = _importlib_util.spec_from_file_location(
-            "menu", Path(__file__).resolve().parent / "menu.py")
-        menu = _importlib_util.module_from_spec(_spec)
-        sys.modules["menu"] = menu
-        _spec.loader.exec_module(menu)
-sys.modules.setdefault("scripts.menu", menu)
-MENU_BACKGROUND = menu.MENU_BACKGROUND
-MENU_BACKGROUND_CMD = menu.MENU_BACKGROUND_CMD
-UNIFIED_MENU = menu.UNIFIED_MENU
-MENU_STAGE_HEADERS = menu.MENU_STAGE_HEADERS
-MENU_FARM_KEYS = menu.MENU_FARM_KEYS
-render_menu = menu.render_menu
-run_end_to_end_flow = menu.run_end_to_end_flow
-_farm_kind = menu._farm_kind
-_menu_ask_farm_options = menu._menu_ask_farm_options
-_jobs_menu = menu._jobs_menu
-interactive_mode = menu.interactive_mode
-beginner_entry = menu.beginner_entry
-menu_entry = menu.menu_entry
+
+# Extracted command modules (docs/refactor-kancahub.md). Each name is re-exported
+# here so dispatch() and tests keep using `kancahub.<name>` (H1).
+_REEXPORTS = {
+    "commands_region": "cmd_region",
+    "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
+    "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api cmd_9router",
+    "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
+                      "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
+                      "_proxy_native_harvest _proxy_native_health _proxy_native_gateway",
+    "commands_stack": "cmd_stack _stack_signup _stack_login _stack_manage",
+    "commands_grok": "cmd_grok",
+    "commands_github": "map_github_farm_args build_github_parser build_edu_steps edu_needs_human "
+                       "edu_doc_upload_attempted _github_accounts_count _sheerid_find_url "
+                       "_sheerid_run _print_edu_summary cmd_github",
+    "commands_thk": "THK_PER_IP_DEFAULT THK_PER_IP_MAX thk_classify _thk_account_count _current_ip "
+                    "_thk_fresh_ip thk_chunks cmd_thk _thk_sync cmd_mail cmd_gmail",
+    "commands_farm": "_k12_guided cmd_k12 cmd_warp cmd_yowes",
+    "commands_otp": "cmd_otp cmd_scrape cmd_autofarm",
+    "doctor": "cmd_doctor",
+    "menu": "MENU_BACKGROUND MENU_BACKGROUND_CMD UNIFIED_MENU MENU_STAGE_HEADERS MENU_FARM_KEYS "
+            "render_menu run_end_to_end_flow _farm_kind _menu_ask_farm_options _jobs_menu "
+            "interactive_mode beginner_entry menu_entry",
+}
+for _m, _names in _REEXPORTS.items():
+    _mod = _load(_m)
+    globals()[_m] = _mod
+    globals().update({_n: getattr(_mod, _n) for _n in _names.split()})
 
 
 def cmd_session(a) -> int:

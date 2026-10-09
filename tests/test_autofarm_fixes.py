@@ -36,7 +36,7 @@ class TestAutofarmProxyResolution(unittest.TestCase):
 
 class TestKancahubAutofarmWiring(unittest.TestCase):
     def test_uses_camoufox_venv(self):
-        src = (REPO_ROOT / "scripts" / "kancahub.py").read_text()
+        src = (REPO_ROOT / "scripts" / "commands_otp.py").read_text()
         # cmd_autofarm must pick the camoufox python
         idx = src.find("def cmd_autofarm")
         seg = src[idx:idx + 400]
