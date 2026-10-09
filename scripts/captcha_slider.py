@@ -218,7 +218,7 @@ def gap_by_vision(bg_b64: str, piece_b64: str, *, model: str = VISION_MODEL,
             txt = r.read().decode()
     except Exception:  # noqa: BLE001
         return None
-    # 9Router streams SSE even with stream:false; stitch the content deltas.
+    # 9Router may return plain JSON OR an SSE stream; handle both.
     s = ""
     if txt.lstrip().startswith("data:"):
         for line in txt.splitlines():
@@ -236,7 +236,8 @@ def gap_by_vision(bg_b64: str, piece_b64: str, *, model: str = VISION_MODEL,
                 s += ((ch.get("delta") or {}).get("content")) or ""
     else:
         try:
-            s = (json.loads(txt).get("choices") or [{}])[0].get("message", {}).get("content", "")
+            j = json.loads(txt)
+            s = (j.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
         except Exception:  # noqa: BLE001
             return None
     import re
@@ -448,8 +449,10 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
     Targets = invert() of the gaps our labels show (165-245). One accurate drag per
     fresh puzzle; refresh between attempts (a mouse-up submits).
     """
-    # target = where the piece's LEFT should end up (image coords 0-300)
-    TARGETS = [205, 195, 185, 215, 225, 235, 175, 165, 245, 155, 240, 170, 250, 160]
+    # target = where the piece's LEFT should end up. Order: detector guess first
+    # (blur/smear metric is right ~25% and exact when right), then a data-driven
+    # sweep of the observed range.
+    SWEEP = [205, 195, 185, 215, 225, 235, 175, 165, 245, 155, 240, 170, 250, 160]
 
     if not await _wait_open(page):
         log("  [slider] widget would not open")
@@ -464,15 +467,22 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
             await page.wait_for_timeout(1100)
             if not await _wait_open(page):
                 continue
-        t = TARGETS[(i - 1) % len(TARGETS)]
+        # detector-first guess
+        imgs = await _read_images(page)
+        guess = None
+        if imgs:
+            guess = gap_by_diff(imgs[0], imgs[1])
+        targets = ([guess] if guess and 100 <= guess <= 300 else []) + \
+                  [t for t in SWEEP if t != guess]
+        t = targets[0]
         box = await _slider_box(page)
         if not box:
             continue
         await _drag_exact(page, box, invert(t), log=log)
         await page.wait_for_timeout(1200)
         if await _passed(page):
-            log(f"  [slider] solved ✓ (target={t}, puzzle {i})")
+            log(f"  [slider] solved ✓ (target={t}{' detect' if t == guess else ''}, puzzle {i})")
             return True
-        log(f"  [slider] puzzle {i}: target={t} miss")
+        log(f"  [slider] puzzle {i}: target={t}{' detect' if t == guess else ''} miss")
     log("  [slider] not solved")
     return False
