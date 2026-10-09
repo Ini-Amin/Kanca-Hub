@@ -130,6 +130,7 @@ globals().update({_n: getattr(kancahub_base, _n)
 _REEXPORTS = {
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report cmd_rephrase",
+    "commands_vendor": "cmd_zcode cmd_abliteration",
     "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
                       "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
@@ -805,6 +806,21 @@ def build_parser() -> argparse.ArgumentParser:
     rps.add_parser("key", help="show which 9Router key is used (masked)")
     rp.add_argument("--selftest", action="store_true", help="run the offline refusal-detection self-test")
 
+    # ---- vendor passthroughs (tools vendored in ~/Auto-FreeCF-vendor-refs) ----
+    zc = sub.add_parser("zcode",
+                        help="zcode-claim: z.ai account -> ZCode JWT -> claim free Start Plan -> 9Router glm pool")
+    zc.add_argument("mode", nargs="?", choices=["claim", "console", "connect"], default="claim",
+                    help="claim (CLI orchestrator), console (web UI bridge), connect (register keys)")
+    zc.add_argument("extra", nargs=argparse.REMAINDER,
+                    help="args passed straight to the vendored script (e.g. -- --headless)")
+
+    ab = sub.add_parser("abliteration",
+                        help="abliteration-bulk-creator: bulk-create abliteration.ai accounts with API keys")
+    ab.add_argument("mode", nargs="?", choices=["run", "test", "check-proxies"], default="run",
+                    help="run (create accounts), test (offline self-test), check-proxies")
+    ab.add_argument("extra", nargs=argparse.REMAINDER,
+                    help="args passed straight to node (e.g. -- -n 5 -c 2)")
+
     # ---- autofarm ----
     af = sub.add_parser("autofarm", help="paste any website URL to adapt and autofarm with clean proxies")
     af.add_argument("url", nargs="?", default=None, help="website signup/login URL")
@@ -908,6 +924,10 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_scrape(args)
     if g == "rephrase":
         return cmd_rephrase(args)
+    if g == "zcode":
+        return cmd_zcode(args)
+    if g == "abliteration":
+        return cmd_abliteration(args)
     if g == "hunt":
         tool = AUTO_FREECF / "scripts" / "ai_key_hunt.py"
         if not tool.exists():

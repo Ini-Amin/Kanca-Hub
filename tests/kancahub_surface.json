@@ -25,6 +25,11 @@
 "proxy_url",
 "type"
 ],
+"abliteration": [
+"extra",
+"help",
+"mode"
+],
 "adb": [
 "adb_cmd",
 "help"
@@ -736,5 +741,10 @@
 "yowes schools": [
 "country",
 "help"
+],
+"zcode": [
+"extra",
+"help",
+"mode"
 ]
 }
