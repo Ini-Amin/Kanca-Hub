@@ -195,6 +195,18 @@ cmd_stack = commands_stack.cmd_stack
 _stack_signup = commands_stack._stack_signup
 _stack_login = commands_stack._stack_login
 _stack_manage = commands_stack._stack_manage
+commands_grok = sys.modules.get("commands_grok")
+if commands_grok is None:
+    try:
+        commands_grok = _importlib.import_module("commands_grok")
+    except ModuleNotFoundError:
+        _spec = _importlib_util.spec_from_file_location(
+            "commands_grok", Path(__file__).resolve().parent / "commands_grok.py")
+        commands_grok = _importlib_util.module_from_spec(_spec)
+        sys.modules["commands_grok"] = commands_grok
+        _spec.loader.exec_module(commands_grok)
+sys.modules.setdefault("scripts.commands_grok", commands_grok)
+cmd_grok = commands_grok.cmd_grok
 
 # ═══════════════════════════════════════════════════════════════ doctor
 
@@ -813,137 +825,6 @@ def _thk_sync(a, py) -> int:
         print(f"  ✓ removed {len(dead)} dead")
     con.close()
     return 0
-
-
-# ═══════════════════════════════════════════════════════════════ grok
-
-def cmd_grok(a) -> int:
-    """Grok farm — grok-register backend (preferred) or PetaniProxy fallback."""
-    py = pick_python()
-    sub = a.grok_cmd or "run"
-
-    if sub == "run":
-        driver = AUTO_FREECF / "scripts" / "grok_driver.py"
-        mode = getattr(a, "proxy", None) or PROXY_AUTO
-        if getattr(a, "no_proxy", False):
-            mode = PROXY_NONE
-        choice = _choose_egress(mode, EGRESS_TARGETS["grok"])
-        if driver.exists() and not a.petani:
-            cmd = [py, str(driver), "-n", str(getattr(a, "accounts", 1))]
-            if getattr(a, "headless", False):
-                cmd += ["--headless"]
-            if getattr(a, "proxy_pool", None):
-                cmd += ["--proxy-pool", a.proxy_pool]
-            # An explicit hop must win over the child's auto/pool mode.
-            if choice.proxy:
-                cmd += ["--proxy", choice.proxy]
-            if getattr(a, "workers", None):
-                cmd += ["--workers", str(a.workers)]
-            print(col("cyan", "Using grok non-interactive driver (SSO risk gate, relay mail, pool export)"))
-            try:
-                return run_with_mobile_retry(cmd, cwd=AUTO_FREECF,
-                                             mobile_rotate=getattr(a, "mobile_rotate", False),
-                                             account=f"grok:{getattr(a, 'accounts', 1)}x")
-            finally:
-                _stop_auto_gateways()
-        if (GROK_REG / "grok_register_ttk.py").exists() and not a.petani:
-            cmd = [py, "grok_register_ttk.py", "cli"]
-            print(col("cyan", "Using grok-register backend (SSO risk gate, 5 mail providers, pool export)"))
-            print(col("dim", "  (backend takes no --proxy; egress is inherited from the environment)"))
-            try:
-                return run(cmd, cwd=GROK_REG, env=_proxy_env(choice))
-            finally:
-                _stop_auto_gateways()
-        # fallback to PetaniProxy
-        petani = PETANI / "main.py"
-        cmd = [py, str(petani), "--grok-farm", str(getattr(a, "accounts", 1))]
-        if getattr(a, "headless", False):
-            cmd += ["--headless"]
-        print(col("yellow", "Using PetaniProxy grok farm fallback"))
-        try:
-            return run(cmd, cwd=PETANI, env=_proxy_env(choice))
-        finally:
-            _stop_auto_gateways()
-
-    if sub == "web":
-        if not (GROK_REG / "web").exists():
-            print(col("red", "✗ grok-register web/ not found"))
-            return 1
-        print(col("cyan", "Grok-register WebUI -> http://127.0.0.1:8092"))
-        return run([py, "-m", "web.server"], cwd=GROK_REG)
-
-    if sub == "gui":
-        return run([py, "grok_register_ttk.py"], cwd=GROK_REG)
-
-    if sub == "retry":
-        if not a.pending:
-            print(col("red", "✗ retry needs --pending <file.jsonl>"))
-            return 1
-        cmd = [py, "grok_register_ttk.py", "retry-pending", a.pending]
-        if a.out:
-            cmd.append(a.out)
-        return run(cmd, cwd=GROK_REG)
-
-    if sub == "pool":
-        # show grok2api local token pool if present
-        tk = GROK_REG / "token.json"
-        if tk.exists():
-            data = json.loads(tk.read_text())
-            n = len(data.get("ssoBasic", []))
-            print(col("green", f"grok2api local pool: {n} token(s) -> {tk}"))
-        else:
-            print(col("dim", f"no grok2api pool yet ({tk})"))
-        return 0
-
-    if sub == "check":
-        # Verify the grok-register backend + mail config without creating anything.
-        print(col("bold", "\n  Grok / xAI farm — environment check\n"))
-        ok = True
-        checks = [
-            ("grok-register dir", GROK_REG.exists()),
-            ("grok_register_ttk.py", (GROK_REG / "grok_register_ttk.py").exists()),
-            ("grok_driver.py", (AUTO_FREECF / "scripts" / "grok_driver.py").exists()),
-            ("grok_9router.py", (AUTO_FREECF / "scripts" / "grok_9router.py").exists()),
-            ("token.json pool", (GROK_REG / "token.json").exists()),
-        ]
-        for label, present in checks:
-            print(f"  {'✅' if present else '➖'} {label}")
-        env = {}
-        env_file = Path.home() / ".config" / "auto-freecf" / ".env"
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                if "=" in line and not line.strip().startswith("#"):
-                    k, _, v = line.partition("=")
-                    env[k.strip()] = v.strip()
-        for key in ("XAI_API_KEY", "K12_MAIL_KEY", "SUPABASE_URL"):
-            print(f"  {'✅' if env.get(key) else '➖'} env {key}")
-        print(col("dim", "\n  run:  kancahub grok run -n 1   (uses --proxy auto egress)"))
-        return 0 if ok else 1
-
-    if sub == "inject":
-        inj = AUTO_FREECF / "scripts" / "grok_9router.py"
-        if not inj.exists():
-            print(col("red", f"✗ grok_9router.py not found at {inj}"))
-            return 1
-        choice = _choose_egress(getattr(a, "proxy", None) or PROXY_AUTO,
-                                EGRESS_TARGETS["grok"])
-        cmd = [py, str(inj)]
-        if a.input:
-            cmd += ["-i", str(Path(a.input).expanduser())]
-        if a.base_url:
-            cmd += ["--base-url", a.base_url]
-        if a.verify:
-            cmd.append("--verify")
-        if a.dry_run:
-            cmd.append("--dry-run")
-        # grok_9router.py has no --proxy flag; inherit the hop via the environment.
-        try:
-            return run(cmd, cwd=AUTO_FREECF, env=_proxy_env(choice))
-        finally:
-            _stop_auto_gateways()
-
-    print(col("red", "✗ unknown grok command"))
-    return 1
 
 
 # ═══════════════════════════════════════════════════════════════ github
