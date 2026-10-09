@@ -161,12 +161,19 @@ def school_email_default() -> str:
     return (os.environ.get("SCHOOL_EMAIL") or _ENV.get("SCHOOL_EMAIL") or "").strip()
 
 def school_address(base_email: str, index: int = 1) -> str:
-    """raymondi@binus.ac.id + index 1 -> raymondi+oct1@binus.ac.id"""
+    """raymondi@binus.ac.id + index 1 -> raymondi+oct1@binus.ac.id
+
+    index <= 0  => the PLAIN address (no +tag). Some providers (observed on
+    OpenAI school signup) refuse a '+' subaddress as the signup identity and
+    never send the code; use the plain address for those.
+    """
     base = (base_email or "").strip()
     if "@" not in base:
         return ""
     local, _, dom = base.partition("@")
     local = local.split("+", 1)[0]  # never stack tags on an already-tagged address
+    if int(index) <= 0:
+        return f"{local}@{dom}"
     return f"{local}+oct{int(index)}@{dom}"
 
 def _school_mail_python() -> str:
@@ -299,7 +306,8 @@ def poll_mail(jwt: str, provider: str | None = None) -> list[dict]:
     return _relay_poll_mail(jwt)
 
 
-def school_otp_via_subprocess(timeout: int = 180, cwd: Path | None = None) -> str | None:
+def school_otp_via_subprocess(timeout: int = 180, cwd: Path | None = None,
+                              exclude: list[str] | None = None) -> str | None:
     """Read the next OpenAI OTP from the real school mailbox.
 
     Shells out to scripts/school_mail_browser.py, which drives a nodriver Chrome
@@ -315,6 +323,8 @@ def school_otp_via_subprocess(timeout: int = 180, cwd: Path | None = None) -> st
 
     py = _school_mail_python()
     cmd = [py, str(SCHOOL_MAIL_SCRIPT), "otp", "--timeout", str(int(timeout))]
+    if exclude:
+        cmd += ["--exclude", ",".join(str(c) for c in exclude)]
     print(f"      [school] $ {' '.join(cmd)}", flush=True)
     try:
         proc = subprocess.run(
@@ -347,11 +357,12 @@ def _blob(m: dict) -> str:
     return " ".join(str(m.get(k, "")) for k in ("subject", "text", "body", "html", "snippet", "from"))
 
 
-async def wait_for_otp(jwt: str, timeout: int = 180, provider: str | None = None) -> str | None:
+async def wait_for_otp(jwt: str, timeout: int = 180, provider: str | None = None,
+                       exclude: list[str] | None = None) -> str | None:
     prov = (provider or MAIL_PROVIDER or "relay").strip().lower()
     if prov == "school":
         print(f"      [school] reading OTP from the real M365 inbox (max {timeout}s)…", flush=True)
-        return await asyncio.to_thread(school_otp_via_subprocess, timeout)
+        return await asyncio.to_thread(school_otp_via_subprocess, timeout, None, exclude or [])
     print(f"      [mail] polling relay for OTP (max {timeout}s)…", flush=True)
     start = time.time()
     seen = set()
@@ -407,6 +418,33 @@ async def click_continue(page, timeout: float = 5.0) -> bool:
 
 
 # ───────────────────────────────────────────── SheerID capture
+
+async def _dump_verify_page(page) -> None:
+    """Diagnostic: dump what the /k12-verification page actually shows, so we can
+    tell an eligibility wall (no button at all) from a UI mismatch (different
+    control). Enable with K12_DEBUG_PAGE=1. Never raises."""
+    try:
+        import json as _json
+        data = await page.evaluate(r"""() => ({
+            url: location.href,
+            title: document.title,
+            body: (document.body ? document.body.innerText : '').slice(0, 1200),
+            buttons: [...document.querySelectorAll('button,a,[role=button]')]
+                .map(b => (b.innerText||b.getAttribute('aria-label')||'').trim()).filter(Boolean).slice(0,40),
+            links: [...document.querySelectorAll('a')].map(a => a.href).filter(h => h && h!=='#').slice(0,40),
+            forms: [...document.querySelectorAll('input,select,textarea')].map(i => i.name||i.id||i.type).slice(0,30),
+            iframes: [...document.querySelectorAll('iframe')].map(f => f.src).slice(0,10),
+        })""")
+        print("      ── K12_DEBUG_PAGE dump ──", flush=True)
+        print(f"      url   : {data.get('url','')[:90]}", flush=True)
+        print(f"      title : {data.get('title','')!r}", flush=True)
+        print(f"      body  : {str(data.get('body','')).replace(chr(10),' | ')[:700]}", flush=True)
+        print(f"      buttons: {data.get('buttons')}", flush=True)
+        print(f"      links : {[l for l in data.get('links',[]) if 'sheerid' in l.lower()] or data.get('links',[])[:12]}", flush=True)
+        print(f"      iframes: {data.get('iframes')}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"      (dump failed: {e})", flush=True)
+
 
 def _is_sheerid(url: str) -> bool:
     return bool(url) and "sheerid.com/verify" in url
@@ -847,8 +885,10 @@ async def run_flow(
         # ---- OTP: wait for mail, find the field, fill, VERIFY, then submit.
         print(f"[4/6] Waiting for OTP from "
               f"{'the school mailbox (binus.ac.id)' if prov == 'school' else 'relay'}…", flush=True)
-        otp = await wait_for_otp(jwt, timeout=180, provider=prov)
+        used_otp: list[str] = []
+        otp = await wait_for_otp(jwt, timeout=180, provider=prov, exclude=used_otp)
         if otp:
+            used_otp.append(otp)
             otp_sel = None
             cands = ['input[autocomplete=one-time-code]', 'input[name=code]', 'input[name=otp]',
                      'input[inputmode=numeric]', 'input[type=number]', 'input[type=tel]']
@@ -962,6 +1002,8 @@ async def run_flow(
         # ---- K-12 verification page
         print("[5/6] Driving K-12 verification page…", flush=True)
         page = await pick_live_page(context, page, "k12-verification", "chatgpt.com")
+        if os.environ.get("K12_DEBUG_PAGE"):
+            await _dump_verify_page(page)
         sheerid = None
 
         for round_ in range(8):

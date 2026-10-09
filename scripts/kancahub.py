@@ -2549,11 +2549,13 @@ def cmd_k12(a) -> int:
         if getattr(a, "no_proxy", False):
             mode = PROXY_NONE
         choice = _choose_egress(mode, EGRESS_TARGETS["k12"])
-        env = dict(_proxy_env(choice) or {})
+        env = _proxy_env(choice)  # None when direct (so --no-proxy stays clean)
+        # The school mailbox provider is a process-wide default, not a proxy var:
+        # set it in os.environ so it reaches the child even on the direct path.
+        os.environ.setdefault("K12_MAIL_PROVIDER", "school")
         if camoufox_flow.exists():
             print(col("cyan", "Full auto flow: ChatGPT signup -> OTP -> SheerID -> K12Verifier"))
             print(col("dim", "  uses YOUR school mailbox (binus.ac.id via K12_MAIL_PROVIDER=school) + Camoufox"))
-            env["K12_MAIL_PROVIDER"] = os.environ.get("K12_MAIL_PROVIDER", "school")
             py_camo = pick_python(camoufox=True)
             try:
                 return run([py_camo, str(camoufox_flow)], cwd=AUTO_FREECF, env=env)

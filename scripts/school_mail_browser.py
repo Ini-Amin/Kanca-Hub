@@ -198,7 +198,8 @@ async def read_subjects(tab, limit: int = 15) -> list[str]:
         return []
 
 
-async def run(action: str, timeout: int = 180) -> int:
+async def run(action: str, timeout: int = 180, exclude_codes: list[str] | None = None) -> int:
+    exclude_codes = exclude_codes or []
     email = cfg("SCHOOL_EMAIL")
     pw = cfg("SCHOOL_MAIL_PASSWORD")
     url = cfg("SCHOOL_MAIL_URL", MAIL_URL)
@@ -241,25 +242,34 @@ async def run(action: str, timeout: int = 180) -> int:
         browser.stop()
         return 0
 
-    # otp
-    start = time.time()
-    while time.time() - start < timeout:
+    # otp — the inbox keeps the LAST mail open, so a naive scan returns the SAME
+    # (already-used) code forever -> OpenAI "max_check_attempts". Baseline the
+    # codes present now and only return a NEW one; also honour --exclude.
+    async def _scan() -> list[str]:
+        found = []
         subs = await read_subjects(tab)
         for s in subs:
-            m = re.search(r'\b(\d{6})\b', s)
+            m = re.search(r"\b(\d{6})\b", s)
             if m and any(k in s.lower() for k in ("openai", "chatgpt", "code", "verif", "confirm")):
-                print(f"      [school] OTP from subject: {m.group(1)}", flush=True)
+                found.append(m.group(1))
+        txt = await _js(tab, "document.body ? document.body.innerText : ''", "")
+        for m in re.finditer(r"(?:code to continue|verification code)[:\s]*(\d{6})", txt or "", re.I):
+            found.append(m.group(1))
+        return found
+
+    baseline = set(await _scan())
+    skip = set(baseline) | {str(c).strip() for c in exclude_codes if str(c).strip()}
+    print(f"      [school] baseline codes present: {sorted(baseline) or 'none'} "
+          f"| excluding: {sorted(skip) or 'none'}", flush=True)
+    start = time.time()
+    while time.time() - start < timeout:
+        for code in await _scan():
+            if code not in skip:
+                print(f"      [school] OTP (new): {code}", flush=True)
                 browser.stop()
                 return 0
-        # also scan page text
-        txt = await _js(tab, "document.body ? document.body.innerText : ''", "")
-        m = re.search(r'(?:code to continue|verification code)[:\s]*(\d{6})', txt or "", re.I)
-        if m:
-            print(f"      [school] OTP from page: {m.group(1)}", flush=True)
-            browser.stop()
-            return 0
         await asyncio.sleep(6)
-    print("      [school] no OTP within timeout", flush=True)
+    print("      [school] no NEW OTP within timeout", flush=True)
     browser.stop()
     return 1
 
@@ -271,10 +281,12 @@ def main() -> int:
     sub.add_parser("selftest", help="log in and list recent subjects")
     o = sub.add_parser("otp", help="wait for an OpenAI OTP")
     o.add_argument("--timeout", type=int, default=180)
+    o.add_argument("--exclude", default="", help="comma-separated codes already used (skipped)")
     a = ap.parse_args()
     if not a.cmd:
         ap.print_help(); return 0
-    return asyncio.run(run(a.cmd, timeout=getattr(a, "timeout", 180)))
+    excl = [c for c in (getattr(a, "exclude", "") or "").split(",") if c.strip()]
+    return asyncio.run(run(a.cmd, timeout=getattr(a, "timeout", 180), exclude_codes=excl))
 
 
 if __name__ == "__main__":
