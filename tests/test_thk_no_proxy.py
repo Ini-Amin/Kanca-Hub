@@ -16,7 +16,7 @@ class TestHarborNoProxyEnv(unittest.TestCase):
                       "harbor must honor TOKENHARBOR_NO_PROXY to force direct egress")
 
     def test_kancahub_sets_no_proxy_on_direct(self):
-        src = (REPO / "scripts" / "kancahub.py").read_text()
+        src = (REPO / "scripts" / "commands_thk.py").read_text()
         self.assertIn('env["TOKENHARBOR_NO_PROXY"] = "1"', src,
                       "cmd_thk must set TOKENHARBOR_NO_PROXY when egress is direct")
 
