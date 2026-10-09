@@ -804,8 +804,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ab = sub.add_parser("abliteration",
                         help="abliteration-bulk-creator: bulk-create abliteration.ai accounts with API keys")
-    ab.add_argument("mode", nargs="?", choices=["run", "test", "check-proxies"], default="run",
-                    help="run (create accounts), test (offline self-test), check-proxies")
+    ab.add_argument("mode", nargs="?", choices=["run", "mint", "test", "check-proxies"], default="run",
+                    help="run (vendor bulk), mint (native Camoufox mint of ONE key), test, check-proxies")
     ab.add_argument("--cdp", default=None, metavar="URL",
                 help="attach to an existing/cloud browser instead of launching local Chromium "
                      "(pass ABC_CDP to the tool; a clean residential egress then does the "

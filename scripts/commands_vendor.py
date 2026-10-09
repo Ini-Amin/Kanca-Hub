@@ -35,8 +35,17 @@ def cmd_zcode(a) -> int:
 def cmd_abliteration(a) -> int:
     """abliteration-bulk-creator: bulk abliteration.ai accounts, each with an API key."""
     import kancahub
-    root = VENDOR / "abliteration-bulk-creator"
     mode = getattr(a, "mode", "run") or "run"
+    if mode == "mint":
+        # Native Camoufox mint (free Turnstile solve + our mailbox); vendor's
+        # Chromium fails the Turnstile on every egress we have.
+        tool = kancahub.AUTO_FREECF / "scripts" / "abliteration_mint.py"
+        if not tool.exists():
+            print(kancahub.col("red", f"✗ abliteration_mint.py not found at {tool}"))
+            return 1
+        py = kancahub.pick_python(camoufox=True)
+        return kancahub.run([py, str(tool)] + _extra(a))
+    root = VENDOR / "abliteration-bulk-creator"
     entry = root / _ABC_SCRIPTS.get(mode, "")
     if not entry or not entry.exists():
         print(kancahub.col("red", f"✗ abliteration {mode}: {entry} not found"))
