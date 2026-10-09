@@ -511,6 +511,21 @@
 "help",
 "name"
 ],
+"rephrase": [
+"help",
+"rephrase_cmd",
+"selftest"
+],
+"rephrase chat": [
+"help",
+"json",
+"max_rephrases",
+"model",
+"prompt"
+],
+"rephrase key": [
+"help"
+],
 "report": [
 "clear",
 "help",

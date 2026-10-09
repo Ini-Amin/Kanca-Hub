@@ -77,3 +77,28 @@ def cmd_report(a) -> int:
                   f"n={r.get('count',0)}")
     print()
     return 0
+
+
+def cmd_rephrase(a) -> int:
+    """Refusal-aware 9Router middleware — rephrase a declined prompt and retry."""
+    import kancahub
+    tool = kancahub.AUTO_FREECF / "scripts" / "rephraser.py"
+    if not tool.exists():
+        print(kancahub.col("red", f"✗ rephraser.py not found at {tool}"))
+        return 1
+    if getattr(a, "selftest", False):
+        return kancahub.run([kancahub.pick_python(), str(tool), "--selftest"])
+    sub = getattr(a, "rephrase_cmd", None) or "key"
+    if sub == "key":
+        return kancahub.run([kancahub.pick_python(), str(tool), "key"])
+    if sub == "chat":
+        cmd = [kancahub.pick_python(), str(tool), "chat", a.prompt]
+        if getattr(a, "model", None):
+            cmd += ["--model", a.model]
+        if getattr(a, "max_rephrases", None) is not None:
+            cmd += ["-n", str(a.max_rephrases)]
+        if getattr(a, "json", False):
+            cmd.append("--json")
+        return kancahub.run(cmd)
+    print(kancahub.col("red", "✗ usage: kancahub rephrase [key | chat <prompt> [--model M] [-n N] [--json]] [--selftest]"))
+    return 1
