@@ -48,7 +48,11 @@ python -m unittest tests.test_cli_surface            # 134-command surface
 
 ## Status
 - [x] Regression surface test (`tests/test_cli_surface.py` + fixture)
-- [ ] kancahub_base.py
+- [x] kancahub_base.py (857 l) — re-exports every name onto `kancahub`; the two
+      import spellings are collapsed onto one module object; base reaches patchable
+      helpers through lazy `_kc()` (H1) and reads `AUTO_FREECF`/`BACKGROUND_DIR`
+      off `kancahub` at call time (H2). Verified: 134-command surface + 14 offline
+      kancahub test modules green.
 - [ ] commands_* extraction (steps 2–9)
 - [ ] menu.py
 
