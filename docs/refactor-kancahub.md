@@ -53,10 +53,13 @@ python -m unittest tests.test_cli_surface            # 134-command surface
       helpers through lazy `_kc()` (H1) and reads `AUTO_FREECF`/`BACKGROUND_DIR`
       off `kancahub` at call time (H2). Verified: 134-command surface + 14 offline
       kancahub test modules green.
-- [x] commands_region.py — cmd_region (STEP 2a, commit 7a61f9e)
+- [x] commands_region.py — cmd_region (STEP 2a, 7a61f9e)
 - [x] commands_misc.py — cmd_ip_reuse / cmd_egress_node / cmd_report (STEP 2b, e34bb82)
-- [ ] commands_* extraction (steps 2c–9): adb/mobile/9router him, then proxy/stack/thk/github/farm
-- [ ] menu.py
+- [x] commands_9router.py — cmd_adb / cmd_mobile / _r9_cli_token / _r9_api / cmd_9router (STEP 2c, 0e10a85)
+- [x] commands_proxy.py — _probe_http/_egress_verdict + cmd_proxy + 8 proxy helpers (STEP 3, 1d865ee)
+- [x] commands_stack.py — cmd_stack + _stack_signup/_login/_manage (STEP 4, cdacd69)
+- [ ] commands_grok.py (STEP 5) -> commands_github.py (careful) -> commands_thk.py -> commands_farm.py -> doctor -> menu.py
+- kancahub.py: 4677 -> 3138 lines
 
 ## Dispatch via Luvus (the prepared harness)
 
