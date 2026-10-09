@@ -62,3 +62,12 @@ invalid". Always **verify before inject** and don't hoard keys.
 ## Anti-treadmill note
 A "bansos" list is a means, not the goal. Collecting keys is not the work. Take
 ONE that works, route your real task through it, and stop.
+
+## F. Reference tools (not vendors)
+- **0x-cookies** (github.com/0xgetz/0x-cookies) — OpenBullet-style **cookie/session
+  checker** (139 platforms, headless Chromium for real logged-in verdicts). Useful
+  pattern for validating saved sessions/keys (overlaps our test-key/verify), but it
+  is NOT a SheerID tool and has no SheerID code.
+- SheerID doc-upload is **browser-only + server-reviewed** (anti-fraud). No public
+  or safe API to POST a document; our k12 flow finds the link + opens the flow, and
+  the upload/review is the parked human gate.
