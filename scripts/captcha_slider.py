@@ -59,12 +59,13 @@ def _png_bytes(b64: str) -> bytes:
 
 
 def gap_by_diff(bg_b64: str, piece_b64: str) -> int | None:
-    """Find the displaced strip's left edge in the background.
+    """Locate where the piece belongs: the LOW-DETAIL (smeared/blank) band.
 
-    The 'restore the image' widget keeps a vertical strip shifted sideways, so the
-    background has two strong vertical SEAMS (the strip's left/right edges). We
-    take the per-column colour gradient, find the two strongest peaks that are a
-    plausible strip-width apart, and return the left one.
+    The 'restore the image' widget blanks a vertical band of the picture and hands
+    you that band as the piece. So the target is the smooth band INSIDE the busy
+    subject. We take per-column horizontal detail, restrict to the subject's
+    x-span (columns with real detail), and return the left edge of the piece-width
+    window with the least detail.
     """
     try:
         from PIL import Image
@@ -76,37 +77,28 @@ def gap_by_diff(bg_b64: str, piece_b64: str) -> int | None:
         pc = Image.open(io.BytesIO(_png_bytes(piece_b64))).convert("RGB")
     except Exception:  # noqa: BLE001
         return None
-    bga = np.asarray(bg, dtype=np.float32)
-    pca = np.asarray(pc, dtype=np.float32)
-    if bga.ndim != 3 or pca.ndim != 3:
+    g = np.asarray(bg, dtype=np.float32).mean(axis=2)
+    pw = int(np.asarray(pc).shape[1])
+    H, W = g.shape
+    if g.ndim != 2 or W < pw + 4 or pw < 16:
         return None
-    # Vertical-edge energy per column (sum over rows and channels).
-    col = np.abs(np.diff(bga, axis=1)).sum(axis=(0, 2))  # shape (W-1,)
-    if col.size < 30:
+    col = np.abs(np.diff(g, axis=1)).sum(axis=0)  # detail per column
+    thr = max(1.0, float(col.mean()))
+    active = np.where(col > thr)[0]
+    if active.size < 4:
         return None
-    # Smooth a little so a single noisy column does not win.
-    k = np.ones(3) / 3
-    col_s = np.convolve(col, k, mode="same")
-    # Strip width from the piece image (fallback 45 px).
-    sw = int(pca.shape[1]) if 20 <= pca.shape[1] <= 90 else 45
-    best = None
-    order = np.argsort(col_s)[::-1]
-    peaks: list[int] = []
-    for idx in order:
-        if all(abs(int(idx) - p) > 6 for p in peaks):
-            peaks.append(int(idx))
-        if len(peaks) >= 8:
-            break
-    for i, a in enumerate(peaks):
-        for b in peaks[i + 1:]:
-            lo, hi = sorted((a, b))
-            if abs(hi - lo) <= max(sw * 2, 120):
-                score = col_s[a] + col_s[b]
-                if best is None or score > best[0]:
-                    best = (score, lo)
-    if best is None:
-        return int(peaks[0]) if peaks else None
-    return best[1]
+    lo, hi = int(active.min()), int(active.max())
+    pw = max(8, min(pw, W - 4))
+    x_hi = min(hi, W - pw - 1)
+    if x_hi <= lo:
+        lo = max(0, W - pw - 1)
+        x_hi = lo
+    best, bx = None, lo
+    for x in range(lo, min(hi, W - pw - 1) + 1):
+        s = float(col[x:x + pw].sum())
+        if best is None or s < best:
+            best, bx = s, x
+    return bx
 
 
 def _r9_key(base: str = "http://localhost:20128") -> str:
@@ -145,9 +137,12 @@ def gap_by_vision(bg_b64: str, piece_b64: str, *, model: str = VISION_MODEL,
     if "," not in piece_b64:
         piece_b64 = "data:image/png;base64," + piece_b64
     ask = (
-        "You are solving a slider captcha. Image 1 is the background with a missing "
-        "vertical strip; image 2 is the piece that belongs there. Reply with ONLY the "
-        "integer x pixel (the LEFT edge of the missing strip) in image-1 coordinates."
+        "Task: Solve an Aliyun inpaint restore slider puzzle.\n"
+        "Image 1 is the 300x150 background canvas with a displaced vertical slice.\n"
+        "Image 2 is the puzzle slice.\n"
+        "Find the horizontal X pixel column (integer between 10 and 290) in Image 1 "
+        "where Image 2 restores the background.\n"
+        "Return ONLY the single integer X coordinate. Example: 146"
     )
     body = {
         "model": model, "stream": False, "max_tokens": 20,
@@ -231,60 +226,119 @@ async def _slider_box(page):
 
 
 async def _reopen(page):
-    """Nudge the compact slider so the puzzle window re-opens after a miss."""
+    """Dismiss and re-open the puzzle: close any open window, then click the bar."""
     await page.evaluate(
-        """(ids) => { const c=document.getElementById('aliyunCaptcha-btn-close');
-             if(c && c.offsetParent) c.click();
-             const l=document.getElementById(ids.left); if(l) l.click(); }""", IDS)
+        """() => { const c=document.getElementById('aliyunCaptcha-btn-close');
+             if (c && c.offsetParent) c.click(); }""")
+    await _sleep(0.3)
+    for sel in ("#aliyunCaptcha-captcha-body", "#aliyunCaptcha-captcha-wrapper"):
+        try:
+            await page.click(sel, timeout=2000)
+            break
+        except Exception:  # noqa: BLE001
+            continue
+
+
+async def _sleep(sec: float) -> None:
+    import asyncio as _a
+    await _a.sleep(sec)
 
 
 async def _passed(page) -> bool:
-    t = (await page.evaluate("()=>document.body.innerText")).lower()
-    return "verification passed" in t
+    """Success = the page says so, or the puzzle window is gone."""
+    t = (await page.evaluate("()=>document.body.innerText") or "").lower()
+    if "verification passed" in t:
+        return True
+    return await page.evaluate(
+        """(id) => { const w=document.getElementById(id);
+             return !w || /hidden/.test(w.className) || w.getBoundingClientRect().width === 0; }""",
+        IDS["window"])
+
+
+async def _ensure_open(page) -> None:
+    """Open the puzzle window if it is closed (click the 'start verification' bar)."""
+    for sel in ("#aliyunCaptcha-captcha-body", "#aliyunCaptcha-captcha-wrapper", "#captcha-element"):
+        try:
+            await page.click(sel, timeout=2000)
+            await page.wait_for_timeout(1200)
+            return
+        except Exception:  # noqa: BLE001
+            continue
+
+
+async def _wait_open(page, tries: int = 6) -> bool:
+    """Click the 'start verification' bar until the puzzle window is actually up."""
+    for _ in range(tries):
+        if await _read_images(page):
+            return True
+        for sel in ("#aliyunCaptcha-captcha-body", "#aliyunCaptcha-captcha-wrapper", "#captcha-element"):
+            try:
+                await page.click(sel, timeout=2000)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        await page.wait_for_timeout(1500)
+    return bool(await _read_images(page))
+
+
+async def refresh(page) -> None:
+    """Ask the widget for a fresh puzzle (top-right refresh button)."""
+    await page.evaluate(
+        """() => { const r=document.getElementById('aliyunCaptcha-btn-refresh');
+             if (r) r.click(); }""")
+    await _sleep(1.5)
 
 
 async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
-                       rounds: int = 8, step: int = 4) -> bool:
-    """Solve the Aliyun slider.
+                       puzzles: int = 8, jitter: int = 14) -> bool:
+    """Solve the Aliyun 'restore the image' slider, gently.
 
-    Primary method: sweep the slider offset (the vendor's proven approach) --
-    drag by invert(target) for target=4,8,...,check "verification passed", reopen
-    between tries. If the image diff locates the seam confidently we ALSO try that
-    offset first (fewer drags), and the vision model is a last resort.
-
-    Returns True once the captcha reports passed.
+    Per puzzle: re-detect the blank band (diff, else vision) and make ONE careful
+    humanized drag (plus tiny +/- jitters around it, not a fast spam sweep). If the
+    puzzle is not passed, REFRESH to a fresh image and try again.
     """
-    try:
-        await page.click(f"#{IDS['slider']}", timeout=3000)
-    except Exception:  # noqa: BLE001
-        pass
-    await page.wait_for_timeout(1500)
+    if not await _wait_open(page):
+        log("  [slider] widget would not open")
+        return False
 
-    # Cheap first guess from the image diff.
-    seeds: list[int] = []
-    imgs = await _read_images(page)
-    if imgs:
+    for i in range(1, puzzles + 1):
+        imgs = await _read_images(page)
+        if not imgs:
+            await _wait_open(page)
+            imgs = await _read_images(page)
+        if not imgs:
+            await refresh(page)
+            await _wait_open(page)
+            continue
         x = gap_by_diff(imgs[0], imgs[1])
-        if x is not None:
-            seeds.append(x)
-    order = seeds + [t for t in range(step, 300, step) if t not in seeds]
-    tried = 0
-    for rnd in range(rounds):
-        for x in order:
+        how = "diff"
+        if x is None:
+            x = gap_by_vision(imgs[0], imgs[1], model=model)
+            how = "vision"
+        if x is None:
+            log(f"  [slider] puzzle {i}: not detected -> refresh")
+            await refresh(page)
+            continue
+        log(f"  [slider] puzzle {i}: target x={x} ({how})")
+        for x2 in (x, x - jitter, x + jitter):
             box = await _slider_box(page)
             if not box:
-                await _reopen(page)
-                await page.wait_for_timeout(900)
+                await _ensure_open(page)
                 box = await _slider_box(page)
                 if not box:
-                    continue
-            await _drag(page, box["x"], box["y"], invert(x))
-            await page.wait_for_timeout(900)
-            tried += 1
+                    break
+            await _drag(page, box["x"], box["y"], invert(x2))
+            await page.wait_for_timeout(1600)  # human pace, no spam
             if await _passed(page):
-                log(f"  [slider] solved ✓ (offset={x}, {tried} drags)")
+                log("  [slider] solved ✓")
                 return True
-            await _reopen(page)
-            await page.wait_for_timeout(500)
-        log(f"  [slider] round {rnd + 1} no hit")
+            # a miss usually auto-closes the puzzle: reopen + fetch a fresh image
+            await _wait_open(page)
+            await refresh(page)
+            await _wait_open(page)
+            imgs = await _read_images(page)
+            if not imgs:
+                break
+        await page.wait_for_timeout(600)
+    log("  [slider] not solved")
     return False
