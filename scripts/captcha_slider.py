@@ -478,7 +478,16 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         box = await _slider_box(page)
         if not box:
             continue
-        await _drag_exact(page, box, invert(t), log=log)
+        # drag the mouse by the mapped distance (invert(target)), CLAMPED to the
+        # handle's real travel so the slider never slams into the end.
+        max_travel = await page.evaluate(
+            """() => { const s=document.getElementById('aliyunCaptcha-sliding-slider');
+                 const b=document.getElementById('aliyunCaptcha-captcha-body');
+                 if(!s||!b) return 260;
+                 return Math.max(20, b.getBoundingClientRect().width - s.getBoundingClientRect().width - 4);
+               }""") or 260.0
+        dist = min(invert(t), float(max_travel))
+        await _drag(page, box["x"], box["y"], dist)
         await page.wait_for_timeout(1200)
         if await _passed(page):
             log(f"  [slider] solved ✓ (target={t}{' detect' if t == guess else ''}, puzzle {i})")
