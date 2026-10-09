@@ -201,19 +201,20 @@ async def _read_images(page) -> tuple[str, str] | None:
 
 
 async def _drag(page, sx: float, sy: float, dist: float) -> None:
-    """Humanized drag: cubic ease-out with a small overshoot then settle."""
-    over = dist + random.uniform(6, 10)
+    """One clean, steady drag.
+
+    Aliyun's slider JITTERS if the cursor hovers or wobbles on it (anti-bot), so
+    NO pre-hover, NO sine wobble, NO overshoot-and-settle. Move straight onto the
+    handle and pull in a single smooth eased motion, then release promptly.
+    """
     await page.mouse.move(sx, sy)
     await page.mouse.down()
-    for i in range(1, 26):
-        t = i / 25
-        e = 1 - (1 - t) ** 3
-        await page.mouse.move(sx + over * e, sy + math.sin(t * 5) * 1.2)
-        await asyncio.sleep(0.007)
-    for j in range(1, 7):
-        t = j / 6
-        await page.mouse.move(sx + over + (dist - over) * t, sy)
-        await asyncio.sleep(0.02)
+    steps = 22
+    for i in range(1, steps + 1):
+        t = i / steps
+        e = 1 - (1 - t) ** 3            # ease-out only
+        await page.mouse.move(sx + dist * e, sy)
+        await asyncio.sleep(0.012)
     await page.mouse.up()
 
 
