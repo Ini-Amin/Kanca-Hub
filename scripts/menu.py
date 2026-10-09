@@ -56,6 +56,10 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
 
     # Group 8: OTP mailboxes
     ("21", "Cheap OTP mailboxes (Litensi pay-per-code)", "otp", ["otp", "profile"]),
+
+    # Group 9: Vendor farms (vendored tools in ~/Auto-FreeCF-vendor-refs)
+    ("22", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"]),
+    ("23", "ZCode: z.ai Start Plan -> glm pool", "zcode claim --connect", ["zcode", "claim", "--", "--connect"]),
 ]
 
 MENU_STAGE_HEADERS: dict[str, str] = {
@@ -67,6 +71,7 @@ MENU_STAGE_HEADERS: dict[str, str] = {
     "19": "[6] IDE Interception (MITM · Antigravity/Copilot/Kiro)",
     "20": "[7] Adapt Any Website (autofarm)",
     "21": "[8] OTP Mailboxes (Litensi)",
+    "22": "[9] Vendor Farms (abliteration · ZCode)",
 }
 
 # Menu keys that are account farms -> the menu asks for count/pace/egress in-CLI.
@@ -115,6 +120,8 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
         ("4", "Grok / xAI", ["grok", "run"], ["grok", "inject"], ["stack", "sync"]),
         ("5", "K-12 Teacher Verification", ["k12", "auto"], ["k12", "inject"], ["k12", "sync"]),
         ("6", "Gmail Farm", ["gmail", "farm"], None, ["stack", "sync"]),
+        ("7", "Abliteration.ai accounts + API keys", ["abliteration", "run"], None, ["stack", "sync"]),
+        ("8", "ZCode: z.ai Start Plan -> glm pool", ["zcode", "claim", "--", "--connect"], None, ["stack", "sync"]),
     ]
 
     if farm_choice is None:
@@ -124,7 +131,7 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
         print(f"    [{kancahub.col('bold', 'c')}] Cancel / Back to menu\n")
 
         try:
-            f_choice = input(f"  {kancahub.col('bold', 'Select farm [1-6, c]')}: ").strip().lower()
+            f_choice = input(f"  {kancahub.col('bold', f'Select farm [1-{len(farms)}, c]')}: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print("\nPipeline cancelled.")
             return 0
