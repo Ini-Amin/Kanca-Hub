@@ -129,7 +129,7 @@ globals().update({_n: getattr(kancahub_base, _n)
 # here so dispatch() and tests keep using `kancahub.<name>` (H1).
 _REEXPORTS = {
     "commands_region": "cmd_region",
-    "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report cmd_rephrase",
+    "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
     "commands_vendor": "cmd_zcode cmd_abliteration",
     "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
@@ -794,18 +794,6 @@ def build_parser() -> argparse.ArgumentParser:
     sc_ser.add_argument("--limit", type=int, default=5)
     scs.add_parser("key", help="show which firecrawl key is used (masked)")
 
-    # ---- rephrase (refusal-aware retry middleware in front of 9Router) ----
-    rp = sub.add_parser("rephrase",
-                        help="refusal-aware 9Router middleware: detect a declined prompt, rephrase, retry")
-    rps = rp.add_subparsers(dest="rephrase_cmd")
-    rpc = rps.add_parser("chat", help="send a prompt through 9Router, rephrasing on refusal")
-    rpc.add_argument("prompt")
-    rpc.add_argument("--model", default=None, help="9Router model id (default: mocin)")
-    rpc.add_argument("-n", "--max-rephrases", type=int, default=2, help="rephrase+retry attempts (default: 2)")
-    rpc.add_argument("--json", action="store_true", help="print the raw response JSON")
-    rps.add_parser("key", help="show which 9Router key is used (masked)")
-    rp.add_argument("--selftest", action="store_true", help="run the offline refusal-detection self-test")
-
     # ---- vendor passthroughs (tools vendored in ~/Auto-FreeCF-vendor-refs) ----
     zc = sub.add_parser("zcode",
                         help="zcode-claim: z.ai account -> ZCode JWT -> claim free Start Plan -> 9Router glm pool")
@@ -922,8 +910,6 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_otp(args)
     if g == "scrape":
         return cmd_scrape(args)
-    if g == "rephrase":
-        return cmd_rephrase(args)
     if g == "zcode":
         return cmd_zcode(args)
     if g == "abliteration":
