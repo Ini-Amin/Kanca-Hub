@@ -413,20 +413,43 @@ async def refresh(page) -> None:
     await _sleep(1.5)
 
 
-async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
-                       puzzles: int = 8, jitter: int = 16) -> bool:
-    """Solve the Aliyun slider via a PACED, DATA-DRIVEN SWEEP.
+_LEFTS = """()=>{const p=document.getElementById('aliyunCaptcha-puzzle');const s=document.getElementById('aliyunCaptcha-sliding-slider');return {p:parseFloat((p&&p.style.left)||'0')||0, s:parseFloat((s&&s.style.left)||'0')||0};}"""
 
-    Why: pure-CV detection scored <20% on 17 human-labelled puzzles, and 9Router
-    vision times out (>120s). But the labels show the gap sits at ~174-236px in
-    ~85% of puzzles. So we sweep those offsets most-likely-first, ~1.1s apart
-    (not spam), refreshing to a fresh puzzle after exhausting the list.
+
+async def _drag_exact(page, box: dict, target_piece_left: float, log=print) -> bool:
+    """One gesture: press, probe to learn the piece/slider ratio MID-DRAG, then
+    finish so the piece lands at `target_piece_left`. Returns True if a ratio was
+    measured (the piece does not move 1:1 with the slider, and the ratio is random
+    per puzzle, so it must be measured live)."""
+    sx, sy = box["x"], box["y"]
+    await page.mouse.move(sx, sy)
+    await page.mouse.down()
+    await page.mouse.move(sx + 60, sy, steps=4)   # probe (do NOT release)
+    await page.wait_for_timeout(120)
+    st = await page.evaluate(_LEFTS)
+    if st["s"] <= 0:
+        await page.mouse.up()
+        return False
+    ratio = st["p"] / st["s"]
+    # we are currently at slider=st['s'], piece=st['p']; move the rest.
+    need_total = target_piece_left / ratio if ratio > 0 else st["s"]
+    need_total = max(need_total, st["s"])
+    cur_x = sx + st["s"]
+    await page.mouse.move(sx + need_total, sy, steps=8)
+    await page.wait_for_timeout(80)
+    await page.mouse.up()
+    return True
+
+
+async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
+                       puzzles: int = 20, jitter: int = 16) -> bool:
+    """Solve via MEASURE-AND-CORRECT: the piece moves at a small random fraction
+    of the slider, so we learn the ratio mid-drag and land the piece on the target.
+    Targets = invert() of the gaps our labels show (165-245). One accurate drag per
+    fresh puzzle; refresh between attempts (a mouse-up submits).
     """
-    # One drag per FRESH puzzle. A wrong drag puts the widget in the
-    # "Verification failed" state, after which it will not reopen -- so we MUST
-    # refresh for a new puzzle each attempt. Offsets: invert(gap) over the range
-    # our labels show (gap ~165-245).
-    SWEEP = [205, 195, 185, 215, 225, 235, 175, 165, 245, 155, 240, 170]
+    # target = where the piece's LEFT should end up (image coords 0-300)
+    TARGETS = [205, 195, 185, 215, 225, 235, 175, 165, 245, 155, 240, 170, 250, 160]
 
     if not await _wait_open(page):
         log("  [slider] widget would not open")
@@ -438,18 +461,18 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
             return True
         if i > 1:
             await refresh(page)
-            await page.wait_for_timeout(1200)
+            await page.wait_for_timeout(1100)
             if not await _wait_open(page):
                 continue
-        x = SWEEP[(i - 1) % len(SWEEP)]
+        t = TARGETS[(i - 1) % len(TARGETS)]
         box = await _slider_box(page)
         if not box:
             continue
-        await _drag(page, box["x"], box["y"], invert(x))
-        await page.wait_for_timeout(1300)
+        await _drag_exact(page, box, invert(t), log=log)
+        await page.wait_for_timeout(1200)
         if await _passed(page):
-            log(f"  [slider] solved ✓ (x={x}, puzzle {i})")
+            log(f"  [slider] solved ✓ (target={t}, puzzle {i})")
             return True
-        log(f"  [slider] puzzle {i}: x={x} miss")
+        log(f"  [slider] puzzle {i}: target={t} miss")
     log("  [slider] not solved")
     return False
