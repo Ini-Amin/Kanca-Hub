@@ -90,13 +90,14 @@ class TestUnifiedMenuStructure(unittest.TestCase):
         self.assertEqual(missing, set(), f"Commands missing from unified menu: {missing}")
         self.assertTrue(old_union.issubset(current_commands))
 
-        # Total items: 18 old commands + 1 end-to-end + 1 mitm + 1 autofarm + 1 otp = 22
-        self.assertEqual(len(UNIFIED_MENU), 22)
+        # Total items: 18 old commands + 1 end-to-end + 1 mitm + 1 autofarm + 1 otp
+        # + 2 vendor farms (abliteration, ZCode) = 24
+        self.assertEqual(len(UNIFIED_MENU), 24)
         self.assertIn("autofarm", current_commands)
         self.assertIn("otp", current_commands)
 
         # Keys must be sequential strings from "0" to "21"
-        expected_keys = [str(i) for i in range(22)]
+        expected_keys = [str(i) for i in range(24)]
         actual_keys = [item[0] for item in UNIFIED_MENU]
         self.assertEqual(actual_keys, expected_keys)
 
