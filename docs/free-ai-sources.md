@@ -32,11 +32,24 @@ Last curated: 2026-10-08 (first pass). Sources: Firecrawl search + community
 | AppVerse | https://appverse.id/bansos-ai | "Kumpulan Bansos AI Murah dan Gratis" |
 | GutsAI | https://gutsai.id/bansos | bansos list |
 
-## D. Where to *discuss/find* new bansos (not a scrape target — human sources)
+## D. Where to *discuss/find* new bansos (human feeds, not clean scrape targets)
 
-- **Threads** — search "bansos ai"; often has **scripts + fresh info** before it's
-  in any list. (User's tip.) Scrape-averse; treat as a human feed.
+- **Threads** — often has **scripts + fresh info** before any list. Tips:
+  - `q=aithreads` is LOW signal (returns general social posts). Use the account/query
+    **"bansos"**, **"bansos ai"**, **"free model"**, **"openagentic"** instead.
+  - Scrape-averse (Meta anti-bot); works via an unblocker (Bright Data) but noisy —
+    treat as a discovery feed, extract leads by hand.
+- **`@openagentic.id`** (Threads) — lead: "Bansos gratis akses model GPT-6 Sol
+  (Codex), daily shared pool 500M tokens, resets 00:00" — buy any plan → free model
+  access. ⚠ not verified by us; check terms.
 - Telegram/Discord communities linked from the sites above.
+
+## E. Why bansos pools are flaky (read before judging a key "dead")
+
+BazaarLink returns `free_global_rate_limited`: *"The site-wide free-model capacity
+is currently full. This is not your personal quota."* → free pools are **shared and
+saturate site-wide**, so a 429/503 often means "try later", **not** "your key is
+invalid". Always **verify before inject** and don't hoard keys.
 
 ## How to use
 
