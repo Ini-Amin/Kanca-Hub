@@ -39,3 +39,17 @@ class TestRankDedupe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCuratedSeed(unittest.TestCase):
+    def test_curated_domains_parsed_from_doc(self):
+        d = H.curated_domains()
+        self.assertIn("bazaarlink.ai", d)
+        self.assertIn("bansos.dev", d)
+
+    def test_curated_domains_are_skipped(self):
+        hits = [{"url": "https://bazaarlink.ai/free", "title": "free api key no credit card"},
+                {"url": "https://brand-new-site.example", "title": "free llm api key signup"}]
+        seen = H._load_seen()  # includes curated
+        out = H.rank_and_dedupe(hits, seen)
+        self.assertEqual([h["domain"] for h in out], ["brand-new-site.example"])
