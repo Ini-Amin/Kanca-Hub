@@ -265,6 +265,20 @@ _k12_guided = commands_farm._k12_guided
 cmd_k12 = commands_farm.cmd_k12
 cmd_warp = commands_farm.cmd_warp
 cmd_yowes = commands_farm.cmd_yowes
+commands_otp = sys.modules.get("commands_otp")
+if commands_otp is None:
+    try:
+        commands_otp = _importlib.import_module("commands_otp")
+    except ModuleNotFoundError:
+        _spec = _importlib_util.spec_from_file_location(
+            "commands_otp", Path(__file__).resolve().parent / "commands_otp.py")
+        commands_otp = _importlib_util.module_from_spec(_spec)
+        sys.modules["commands_otp"] = commands_otp
+        _spec.loader.exec_module(commands_otp)
+sys.modules.setdefault("scripts.commands_otp", commands_otp)
+cmd_otp = commands_otp.cmd_otp
+cmd_scrape = commands_otp.cmd_scrape
+cmd_autofarm = commands_otp.cmd_autofarm  # def cmd_autofarm -> commands_otp: pick_python(camoufox=True)
 
 # ═══════════════════════════════════════════════════════════════ doctor
 
@@ -1255,96 +1269,6 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     p.print_help()
     return 0
-
-
-def cmd_otp(a) -> int:
-    """Litensi email-activation client (scripts/otp_litensi.py)."""
-    py = pick_python()  # requests only — no browser
-    sub = a.otp_cmd
-
-    if sub == "webhook":
-        tool = AUTO_FREECF / "scripts" / "otp_webhook_up.py"
-        if not tool.exists():
-            print(col("red", "✗ otp_webhook_up.py not found"))
-            return 1
-        if getattr(a, "latest", False):
-            return run([py, str(AUTO_FREECF / "scripts" / "sms_webhook.py"), "--latest"], cwd=AUTO_FREECF)
-        return run([py, str(tool), getattr(a, "action", "up")], cwd=AUTO_FREECF)
-
-    tool = AUTO_FREECF / "scripts" / "otp_litensi.py"
-    if not tool.exists():
-        print(col("red", f"✗ otp_litensi.py not found at {tool}"))
-        return 1
-    cmd = [py, str(tool), sub]
-    if sub == "prices" and getattr(a, "site", None):
-        cmd += ["--site", a.site]
-    elif sub == "order" and getattr(a, "site", None):
-        cmd += ["--site", a.site]
-    elif sub == "wait":
-        cmd += ["--order-id", a.order_id, "--email", getattr(a, "email", "") or "",
-                "--timeout", str(getattr(a, "timeout", 240) or 240)]
-    elif sub == "done":
-        cmd += ["--order-id", a.order_id]
-    return run(cmd, cwd=AUTO_FREECF)
-
-
-def cmd_scrape(a) -> int:
-    """Firecrawl scrape/search using the keys already configured in 9Router."""
-    py = pick_python()
-    tool = AUTO_FREECF / "scripts" / "firecrawl.py"
-    if not tool.exists():
-        print(col("red", f"✗ firecrawl.py not found at {tool}"))
-        return 1
-    sub = getattr(a, "scrape_cmd", None) or "key"
-    if sub == "url":
-        return run([py, str(tool), "scrape", a.url], cwd=AUTO_FREECF)
-    if sub == "search":
-        return run([py, str(tool), "search", a.query, "--limit", str(getattr(a, "limit", 5))], cwd=AUTO_FREECF)
-    return run([py, str(tool), "key"], cwd=AUTO_FREECF)
-
-
-def cmd_autofarm(a) -> int:
-    # autofarm drives Camoufox (falls back to Playwright) — both live ONLY in the
-    # camoufox venv. The main venv has neither, so it crashed with ModuleNotFoundError.
-    py = pick_python(camoufox=True)
-    tool = AUTO_FREECF / "scripts" / "autofarm.py"
-    cmd = [py, str(tool)]
-    if getattr(a, "url", None):
-        cmd.append(a.url)
-    if getattr(a, "domain", None):
-        cmd += ["--domain", a.domain]
-    if getattr(a, "mail", None):
-        cmd += ["--mail", a.mail]
-    if getattr(a, "inject_9router", False):
-        cmd.append("--inject-9router")
-    if getattr(a, "out", None):
-        cmd += ["--out", a.out]
-    if getattr(a, "headless", False):
-        cmd.append("--headless")
-    if getattr(a, "inspect_only", False):
-        cmd.append("--inspect-only")
-    if getattr(a, "plus_address", None):
-        plus_pfx = getattr(a, "plus_prefix", "farm") or "farm"
-        sample_email = make_plus_address(a.plus_address, plus_pfx, 1)
-        print(col("cyan", f"  • Plus-addressing configured: {sample_email}"))
-
-    # Smart egress auto-wire: resolve --proxy auto|none|URL against the target.
-    force_none = bool(getattr(a, "no_proxy", False)) or str(getattr(a, "proxy", "") or "").lower() in ("none", "direct", "off", "no")
-    mode = PROXY_NONE if force_none else (getattr(a, "proxy", None) or PROXY_AUTO)
-    target = getattr(a, "url", None) or "https://example.com"
-    choice = _choose_egress(mode, target)
-    _acct = f"autofarm:{target[:40]}"
-    try:
-        if force_none or not choice.proxy:
-            # Tell autofarm explicitly to stay direct (it otherwise grabs pool[0]).
-            cmd.append("--no-proxy")
-            return run_with_mobile_retry(cmd, cwd=AUTO_FREECF,
-                                         mobile_rotate=getattr(a, "mobile_rotate", False), account=_acct)
-        cmd += ["--proxy", choice.proxy]
-        return run_with_mobile_retry(cmd, cwd=AUTO_FREECF, env=_proxy_env(choice),
-                                     mobile_rotate=getattr(a, "mobile_rotate", False), account=_acct)
-    finally:
-        _stop_auto_gateways()
 
 
 UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
