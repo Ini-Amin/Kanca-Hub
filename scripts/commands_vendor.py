@@ -1,6 +1,7 @@
 """commands_vendor — passthroughs to vendored third-party tools in ~/Auto-FreeCF-vendor-refs."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 VENDOR = Path.home() / "Auto-FreeCF-vendor-refs"
@@ -51,4 +52,10 @@ def cmd_abliteration(a) -> int:
         return 1
     if mode == "run" and not (root / "node_modules").exists():
         print(kancahub.col("yellow", f"⚠ deps missing — run once: cd {root} && npm install"))
-    return kancahub.run([str(node), str(entry)] + _extra(a), cwd=root)
+    # --cdp: drive the signup through a cloud/remote browser (TinyFish, Bright Data)
+    # instead of a local Chromium, so a clean residential egress does the turnstile.
+    env = os.environ.copy()
+    cdp = getattr(a, "cdp", None) or (getattr(a, "extra_env", None) or {}).get("ABC_CDP")
+    if cdp:
+        env["ABC_CDP"] = cdp
+    return kancahub.run([str(node), str(entry)] + _extra(a), cwd=root, env=env)
