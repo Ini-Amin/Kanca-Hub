@@ -115,6 +115,18 @@ if kancahub_base is None:
 sys.modules.setdefault("scripts.kancahub_base", kancahub_base)
 globals().update({_n: getattr(kancahub_base, _n)
                   for _n in dir(kancahub_base) if not _n.startswith("__")})
+commands_region = sys.modules.get("commands_region")
+if commands_region is None:
+    try:
+        commands_region = _importlib.import_module("commands_region")
+    except ModuleNotFoundError:  # `from scripts import kancahub` spelling
+        _spec = _importlib_util.spec_from_file_location(
+            "commands_region", Path(__file__).resolve().parent / "commands_region.py")
+        commands_region = _importlib_util.module_from_spec(_spec)
+        sys.modules["commands_region"] = commands_region
+        _spec.loader.exec_module(commands_region)
+sys.modules.setdefault("scripts.commands_region", commands_region)
+cmd_region = commands_region.cmd_region
 
 # ═══════════════════════════════════════════════════════════════ doctor
 
@@ -2429,27 +2441,6 @@ def cmd_gmail(a) -> int:
         return run(cmd, cwd=AUTO_FREECF)
 
     print(col("red", f"✗ unknown gmail command: {sub}"))
-    return 1
-
-# ═══════════════════════════════════════════════════════════════ region
-
-def cmd_region(a) -> int:
-    py = pick_python()
-    reg = AUTO_FREECF / "scripts" / "regions.py"
-    if not reg.exists():
-        print(col("red", f"✗ regions.py not found"))
-        return 1
-    if a.region_cmd in (None, "current"):
-        return run([py, str(reg), "current"])
-    if a.region_cmd == "list":
-        return run([py, str(reg), "list"])
-    if a.region_cmd == "set":
-        return run([py, str(reg), "set", a.name])
-    if a.region_cmd == "clear":
-        return run([py, str(reg), "clear"])
-    if a.region_cmd == "show":
-        return run([py, str(reg), "show", a.name])
-    print(col("red", "✗ unknown region command"))
     return 1
 
 
