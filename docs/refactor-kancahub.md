@@ -63,9 +63,18 @@ python -m unittest tests.test_cli_surface            # 134-command surface
 - [x] commands_thk.py (STEP 7, 47298a6) — thk constants moved w/ thk_chunks def-time default; test_thk_no_proxy now scans commands_thk.py
 - [x] commands_farm.py — k12/warp/yowes (STEP 8, 24f33cc, worker1)
 - [x] commands_otp.py — otp/scrape/autofarm (STEP 9, d626483, worker2)
-- [ ] doctor.py (STEP 10)
-- [ ] menu.py (STEP 11) LAST — build_parser/dispatch live in kancahub.py (H3), menu lazy-imports them
-- kancahub.py: 4677 -> 1728 lines (keeps build_parser, dispatch, cmd_session, menus, main)
+- [x] doctor.py (STEP 10, 08240ea)
+- [x] menu.py (STEP 11, a5fe104) LAST — build_parser/dispatch stay in kancahub.py (H3);
+      menu.interactive_mode/run_end_to_end_flow call kancahub.dispatch lazily so the
+      `patch("scripts.kancahub.<name>")` spellings in test_unified_menu intercept.
+
+## DONE — kancahub.py 4,677 -> 1,096 lines
+
+kancahub.py now holds only the cycle core: `build_parser`, `dispatch`,
+`cmd_session`, `main`, `if __name__`. 13 modules extracted:
+kancahub_base, commands_{region,misc,9router,proxy,stack,grok,github,thk,farm,otp},
+doctor, menu. Every step verified with: build_parser canary + 137-command
+surface test + full suite + an explicit H1 intercept check.
 
 ## Dispatch via Luvus (the prepared harness)
 
