@@ -279,6 +279,18 @@ sys.modules.setdefault("scripts.commands_otp", commands_otp)
 cmd_otp = commands_otp.cmd_otp
 cmd_scrape = commands_otp.cmd_scrape
 cmd_autofarm = commands_otp.cmd_autofarm  # def cmd_autofarm -> commands_otp: pick_python(camoufox=True)
+doctor = sys.modules.get("doctor")
+if doctor is None:
+    try:
+        doctor = _importlib.import_module("doctor")
+    except ModuleNotFoundError:
+        _spec = _importlib_util.spec_from_file_location(
+            "doctor", Path(__file__).resolve().parent / "doctor.py")
+        doctor = _importlib_util.module_from_spec(_spec)
+        sys.modules["doctor"] = doctor
+        _spec.loader.exec_module(doctor)
+sys.modules.setdefault("scripts.doctor", doctor)
+cmd_doctor = doctor.cmd_doctor
 
 # ═══════════════════════════════════════════════════════════════ doctor
 
@@ -295,215 +307,6 @@ MENU_BACKGROUND_CMD: dict[str, list[str]] = {
     "2": ["proxy", "gateway", "--port", "8888", "--target", "30"],  # rotating gateway
     "4": ["proxy", "harvest", "--target", "20"],                    # long harvest
 }
-
-
-def cmd_doctor(_a) -> int:
-    banner("KancaHub doctor")
-    py = pick_python()
-    print(f"  python : {py}\n")
-
-    files = [
-        ("Auto-FreeCF dir", AUTO_FREECF.exists()),
-        ("  signup main.py", (AUTO_FREECF / "signup_from_scratch" / "main.py").exists()),
-        ("  cli.js (moycf)", (AUTO_FREECF / "cli.js").exists()),
-        ("  web_ui.py", (AUTO_FREECF / "web_ui.py").exists()),
-        ("  pipeline.py", (AUTO_FREECF / "scripts" / "pipeline.py").exists()),
-        ("  inject_9router.py", (AUTO_FREECF / "scripts" / "inject_9router.py").exists()),
-        ("  residential_gateway.py", (AUTO_FREECF / "scripts" / "residential_gateway.py").exists()),
-        ("  proxy_gateway.py", (AUTO_FREECF / "scripts" / "proxy_gateway.py").exists()),
-        ("  cf_workerai_manager.py", (AUTO_FREECF / "cf_workerai_manager.py").exists()),
-        ("PetaniProxy dir", PETANI.exists()),
-        ("  main.py", (PETANI / "main.py").exists()),
-        ("  core/server.py", (PETANI / "core" / "server.py").exists()),
-        ("K-12 script.py", (K12_DIR / "script.py").exists()),
-        ("K-12 auto_k12_flow.py", (K12_DIR / "auto_k12_flow.py").exists()),
-        ("K-12 gen doc bridge", (K12_ROOT / "generate_teacher_doc.py").exists()),
-        ("Yowes dir", YOWES.exists()),
-        ("  countries/", (YOWES / "countries").exists()),
-        ("  main_gui.py", (YOWES / "main_gui.py").exists()),
-        ("harbor (TokenHarbor)", (HARBOR / "tools" / "tokenharbor").exists()),
-        ("grok-register", (GROK_REG / "grok_register_ttk.py").exists()),
-        ("  registration_flow", (GROK_REG / "registration_flow.py").exists()),
-        ("turnstilePatch", (PETANI / "core" / "turnstilePatch").exists()),
-        ("9Router DB", NINE_ROUTER_DB.exists()),
-        ("Secrets .env", (HOME / ".config" / "auto-freecf" / ".env").exists()),
-        ("Proxies pool", (AUTO_FREECF / "signup_from_scratch" / "proxies.txt").exists()),
-        ("WARP config", (PETANI / "output" / "warp" / "warp.conf").exists()),
-        ("Region profile", (HOME / ".config" / "auto-freecf" / "region.json").exists()),
-    ]
-    for label, ok in files:
-        print(f"  {'✅' if ok else '❌'} {label}")
-
-    print(col("bold", "\n  Python modules:"))
-    for mod in ("nodriver", "patchright", "httpx", "requests", "curl_cffi",
-                "cloudscraper", "DrissionPage", "speech_recognition", "pydub",
-                "PIL", "mcp", "customtkinter", "rich", "tomllib", "fastapi"):
-        r = subprocess.run([py, "-c", f"import {mod}"], capture_output=True)
-        print(f"  {'✅' if r.returncode == 0 else '❌'} {mod}")
-
-    print(col("bold", "\n  Binaries:"))
-    for b in ("google-chrome", "ffmpeg", "git", "adb", "wg", "sing-box"):
-        print(f"  {'✅' if shutil.which(b) else '➖'} {b}")
-
-    petani_gw = _gateway_alive(GATEWAY_DEFAULT)
-    print(f"\n  {'✅' if petani_gw else '➖'} PetaniProxy gateway :8888 {'(running)' if petani_gw else '(not running)'}")
-
-    # ── proxy backend ─────────────────────────────────────────────
-    native_lib = AUTO_FREECF / "scripts" / "proxy_lib.py"
-    native_gateway = AUTO_FREECF / "scripts" / "proxy_gateway.py"
-    native_ok = native_lib.exists() and native_gateway.exists()
-    petani_ok = (PETANI / "main.py").exists()
-    backend = ("native (scripts/proxy_lib.py)" if native_ok else
-               "petani (petani-proxy/main.py)" if petani_ok else "MISSING")
-    print(col("bold", f"\n  Proxy backend: {backend}"))
-    print(f"  {'✅' if native_ok else '❌'} native proxy_lib.py ({native_lib})")
-    print(f"  {'✅' if native_gateway.exists() else '❌'} native proxy_gateway.py ({native_gateway})")
-    print(f"  {'✅' if petani_ok else '➖'} PetaniProxy legacy fallback ({PETANI})")
-    print(col("dim", "    native commands: kancahub proxy nharvest | nhealth | ngateway"))
-
-    # WARP
-    try:
-        import subprocess as _sp
-        wm = AUTO_FREECF / "scripts" / "warp_manager.py"
-        if wm.exists():
-            r = _sp.run([py, str(wm), "status"], capture_output=True, text=True)
-            up = "🟢 up" in r.stdout
-            print(f"  {'✅' if up else '➖'} WARP tunnel {'(up)' if up else '(down)'}")
-    except Exception:
-        pass
-
-    # ── Camoufox (isolated venv + fetched browser binary) ──────────
-    print(col("bold", "\n  Camoufox:"))
-    cf_py = CAMOUFOX_PY
-    cf_py_ok = cf_py.exists() and os.access(str(cf_py), os.X_OK)
-    print(f"  {'✅' if cf_py_ok else '❌'} camoufox venv python ({cf_py})")
-    if cf_py_ok:
-        r = subprocess.run(
-            [str(cf_py), "-c", "import camoufox, playwright"],
-            capture_output=True, text=True,
-        )
-        imp_ok = r.returncode == 0
-        print(f"  {'✅' if imp_ok else '❌'} import camoufox + playwright")
-        if not imp_ok:
-            tail = (r.stderr or r.stdout or "").strip().splitlines()
-            if tail:
-                print(col("dim", f"      {tail[-1][:100]}"))
-    else:
-        print("  ❌ import camoufox + playwright (venv python missing)")
-    cf_cache = CAMOUFOX_CACHE
-    try:
-        cf_fetched = cf_cache.exists() and any(cf_cache.iterdir())
-    except OSError:
-        cf_fetched = False
-    if cf_fetched:
-        n_entries = len(list(cf_cache.iterdir()))
-        print(f"  ✅ browser binary fetched (~/.cache/camoufox, {n_entries} entries)")
-    else:
-        print("  ❌ browser binary fetched (~/.cache/camoufox empty — run: camoufox fetch)")
-
-    # ── Tempik mail worker (HTTP reachability) ─────────────────────
-    print(col("bold", "\n  Tempik:"))
-    tempik_code = _http_status(TEMPIK_URL, timeout=6.0)
-    if tempik_code == 200:
-        print(f"  ✅ GET {TEMPIK_URL} -> 200")
-    elif tempik_code is None:
-        print(f"  ❌ GET {TEMPIK_URL} -> unreachable")
-    else:
-        print(f"  ❌ GET {TEMPIK_URL} -> HTTP {tempik_code} (expected 200)")
-
-    # ── School mailbox (M365 / BINUS) ──────────────────────────────
-    print(col("bold", "\n  School mailbox:"))
-    env_file = ENV_FILE
-    school_email = _env_get("SCHOOL_EMAIL", env_file)
-    print(f"  {'✅' if school_email else '❌'} SCHOOL_EMAIL "
-          f"{school_email if school_email else '(not set in ' + str(env_file) + ')'}")
-    school_pw = bool(_env_get("SCHOOL_MAIL_PASSWORD", env_file))
-    print(f"  {'✅' if school_pw else '❌'} SCHOOL_MAIL_PASSWORD set")
-    prof = SCHOOL_PROFILE
-    prof_ok = prof.is_dir() and any(prof.iterdir())
-    if prof_ok:
-        print(f"  ✅ school profile dir ({prof.name}, logged-in session cached)")
-    elif prof.is_dir():
-        print(f"  ➖ school profile dir ({prof.name} exists but empty — run: kancahub mail test)")
-    else:
-        print(f"  ❌ school profile dir ({prof} missing)")
-
-    # ── Outputs / state files ──────────────────────────────────────
-    print(col("bold", "\n  Outputs & state:"))
-    state = [
-        ("results.json (CF signup)", AUTO_FREECF / "results.json"),
-        ("results.json (signup_from_scratch)", AUTO_FREECF / "signup_from_scratch" / "results.json"),
-        ("github_accounts.json", AUTO_FREECF / "github_accounts.json"),
-        ("k12_sessions.json", K12_DIR / "k12_sessions.json"),
-        ("region.json", HOME / ".config" / "auto-freecf" / "region.json"),
-    ]
-    for label, path in state:
-        if path.exists():
-            size = path.stat().st_size
-            extra = ""
-            if path.name == "github_accounts.json" or path.name == "results.json":
-                try:
-                    data = json.loads(path.read_text())
-                    n = len(data) if isinstance(data, list) else len(data.get("accounts", [])) if isinstance(data, dict) else 0
-                    extra = f", {n} entries"
-                except Exception:
-                    extra = ""
-            print(f"  ✅ {label} ({size} bytes{extra})")
-        else:
-            print(f"  ➖ {label} (absent)")
-
-    proxies = AUTO_FREECF / "signup_from_scratch" / "proxies.txt"
-    if proxies.exists():
-        n_prox = _count_lines(proxies)
-        print(f"  {'✅' if n_prox else '➖'} proxies.txt ({n_prox} proxies)")
-    else:
-        print("  ❌ proxies.txt (missing)")
-
-    # ── 9Router connection inventory ───────────────────────────────
-    print(col("bold", "\n  9Router connections:"))
-    if NINE_ROUTER_DB.exists():
-        import sqlite3
-        try:
-            con = sqlite3.connect(f"file:{NINE_ROUTER_DB}?mode=ro", uri=True)
-            def _cnt(where: str, params: tuple = ()) -> tuple[int, int]:
-                row = con.execute(
-                    f"SELECT COUNT(*), COALESCE(SUM(isActive), 0) FROM providerConnections {where}",
-                    params,
-                ).fetchone()
-                return int(row[0]), int(row[1])
-            cf_t, cf_a = _cnt("WHERE provider = ?", ("cloudflare-ai",))
-            cx_t, cx_a = _cnt("WHERE provider = ?", ("codex",))
-            thk_t, thk_a = _cnt("WHERE provider = ?", (THK_NODE_ID,))
-            xai_t, xai_a = _cnt("WHERE provider = ?", ("xai",))
-            print(f"  {'✅' if cf_t else '➖'} cloudflare-ai : {cf_t} total, {cf_a} active  (farm: Auto-FreeCF)")
-            print(f"  {'✅' if cx_t else '➖'} codex (ChatGPT): {cx_t} total, {cx_a} active  (YOUR account)")
-            print(f"  {'✅' if thk_t else '➖'} TokenHarbor (thk): {thk_t} total, {thk_a} active  (farm: harbor)")
-            print(f"  {'✅' if xai_t else '➖'} xai (Grok OAuth): {xai_t} total, {xai_a} active  (YOUR account)")
-            print(col("dim", "  (codex/xai are the user's own accounts — not farm output)"))
-            con.close()
-        except Exception as e:  # noqa: BLE001
-            print(col("red", f"  ❌ could not read DB: {e}"))
-    else:
-        print(col("red", f"  ❌ 9Router DB not found: {NINE_ROUTER_DB}"))
-
-    # ── Scripts built since the last doctor pass ───────────────────
-    print(col("bold", "\n  Scripts:"))
-    wanted = [
-        "proxy_gateway.py", "grok_driver.py", "grok_9router.py", "github_farm.py",
-        "sheerid_link_finder.py", "school_mail_browser.py", "gmail_creator.py",
-        "harbor_config.py", "camoufox_helpers.py",
-    ]
-    for name in wanted:
-        p = AUTO_FREECF / "scripts" / name
-        print(f"  {'✅' if p.exists() else '❌'} {name}")
-
-    # ── Egress verdict: what is the CURRENT internet exit good for? ──
-    print(col("bold", "\n  Egress verdict (what this connection can do):"))
-    verdict = _egress_verdict()
-    print(verdict)
-
-    print()
-    return 0
 
 
 def cmd_session(a) -> int:
