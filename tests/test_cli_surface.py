@@ -41,7 +41,9 @@ def _live_surface() -> dict:
 
 class TestCommandSurface(unittest.TestCase):
     def setUp(self):
-        self.expected = json.loads(FIXTURE.read_text())
+        raw = FIXTURE.read_text().strip()
+        self.assertTrue(raw, f"fixture {FIXTURE.name} is empty — run scripts/gen_cli_surface.py")
+        self.expected = json.loads(raw)
         self.live = _live_surface()
 
     def test_no_command_dropped(self):

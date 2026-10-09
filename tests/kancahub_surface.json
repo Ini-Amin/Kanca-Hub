@@ -238,6 +238,19 @@
 "grok web": [
 "help"
 ],
+"hunt": [
+"help",
+"hunt_cmd"
+],
+"hunt discover": [
+"help",
+"limit",
+"queries",
+"query"
+],
+"hunt report": [
+"help"
+],
 "ip-reuse": [
 "clear",
 "help"
