@@ -55,6 +55,9 @@ def invert(left_px: float) -> float:
 def _png_bytes(b64: str) -> bytes:
     if "," in b64:
         b64 = b64.split(",", 1)[1]
+    b64 = b64.strip().replace("\n", "").replace(" ", "")
+    b64 = b64.replace("-", "+").replace("_", "/")
+    b64 += "=" * (-len(b64) % 4)
     return base64.b64decode(b64)
 
 
@@ -189,32 +192,96 @@ def gap_by_vision(bg_b64: str, piece_b64: str, *, model: str = VISION_MODEL,
 
 # ─────────────────────────────────────────────────────────── browser driving
 async def _read_images(page) -> tuple[str, str] | None:
+    """Read both widget images as base64 data URLs.
+
+    The first puzzle may arrive inline (data: URL), but refreshed / post-fail
+    puzzles are served from the cross-origin CDN (static-captcha-sgp.aliyuncs.com),
+    which TAINTS a canvas (SecurityError). That CDN does send permissive CORS
+    headers, so fetch() (or a crossOrigin <img>) recovers the bytes. Returns None
+    while the widget is closed or the images are still loading.
+    """
     return await page.evaluate(
-        """(ids) => {
+        """async (ids) => {
             const g = id => document.getElementById(id);
             const bg = g(ids.bg), pc = g(ids.piece);
             if (!bg || !pc) return null;
             const r = bg.getBoundingClientRect();
             if (!r.width) return null;
-            return [bg.src, pc.src];
+            if (!bg.complete || !pc.complete || !bg.naturalWidth || !pc.naturalWidth) return null;
+            const b64 = (buf) => { let s=''; const b=new Uint8Array(buf);
+                for (let i=0;i<b.length;i+=8192)
+                    s+=String.fromCharCode.apply(null, b.subarray(i,i+8192));
+                return 'data:image/png;base64,'+btoa(s); };
+            const viaCanvas = (el) => { try {
+                const w=el.naturalWidth, h=el.naturalHeight;
+                const c=document.createElement('canvas'); c.width=w; c.height=h;
+                c.getContext('2d').drawImage(el,0,0,w,h); return c.toDataURL('image/png');
+            } catch(e) { return null; } };
+            const viaFetch = async (url) => { const r = await fetch(url);
+                return b64(await r.arrayBuffer()); };
+            const viaCors = (url) => new Promise((resolve) => {
+                const im = new Image(); im.crossOrigin = 'anonymous';
+                im.onload = () => { try {
+                    const c=document.createElement('canvas');
+                    c.width=im.naturalWidth; c.height=im.naturalHeight;
+                    c.getContext('2d').drawImage(im,0,0); resolve(c.toDataURL('image/png'));
+                } catch(e){ resolve(null); } };
+                im.onerror = () => resolve(null); im.src = url; });
+            const one = async (el) => {
+                const u = el.currentSrc || el.src || '';
+                if (u.startsWith('data:')) return viaCanvas(el);
+                try { return await viaFetch(u); } catch (e) { /* fall through */ }
+                return await viaCors(u);
+            };
+            const b = await one(bg); const p = await one(pc);
+            if (!b || !p) return null;
+            return [b, p];
+        }""", IDS)
+
+
+async def _puzzle_id(page):
+    """A per-puzzle fingerprint: the widget's certifyId text plus the piece
+    image URL/size (both change on every refresh / post-fail swap)."""
+    return await page.evaluate(
+        """(ids) => {
+            const pc = document.getElementById(ids.piece);
+            const c = document.getElementById('aliyunCaptcha-certifyId');
+            return JSON.stringify({
+                cid: c ? (c.textContent||c.innerText||'').trim() : null,
+                src: pc ? String(pc.currentSrc||pc.src||'').slice(-48) : null,
+                w: pc ? pc.naturalWidth : 0,
+            });
+        }""", IDS)
+
+
+async def _piece_geom(page):
+    """Displayed width/height/natural size/current left of the puzzle element."""
+    return await page.evaluate(
+        """(ids) => {
+            const pc = document.getElementById(ids.piece);
+            if (!pc) return null;
+            const r = pc.getBoundingClientRect();
+            const bg = document.getElementById(ids.bg);
+            const b = bg ? bg.getBoundingClientRect() : null;
+            return {
+                natW: pc.naturalWidth, natH: pc.naturalHeight,
+                left: r.left, top: r.top, w: r.width, h: r.height,
+                bgLeft: b ? b.left : null,
+                relLeft: b != null ? r.left - b.left : null,
+                relTop: b != null ? r.top - b.top : null,
+            };
         }""", IDS)
 
 
 async def _drag(page, sx: float, sy: float, dist: float) -> None:
-    """One clean, steady drag.
+    """Direct, robotic drag -- human-likeness is NOT required.
 
-    Aliyun's slider JITTERS if the cursor hovers or wobbles on it (anti-bot), so
-    NO pre-hover, NO sine wobble, NO overshoot-and-settle. Move straight onto the
-    handle and pull in a single smooth eased motion, then release promptly.
+    Hovering/lingering makes the Aliyun handle jitter, so we move on and pull in a
+    single quick motion with no easing or pauses. Accuracy is all that matters.
     """
     await page.mouse.move(sx, sy)
     await page.mouse.down()
-    steps = 22
-    for i in range(1, steps + 1):
-        t = i / steps
-        e = 1 - (1 - t) ** 3            # ease-out only
-        await page.mouse.move(sx + dist * e, sy)
-        await asyncio.sleep(0.012)
+    await page.mouse.move(sx + dist, sy, steps=8)
     await page.mouse.up()
 
 
