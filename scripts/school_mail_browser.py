@@ -84,34 +84,81 @@ async def _maybe_click(tab, text: str, timeout: float = 3.0) -> bool:
     return False
 
 
-async def do_login(tab, email: str, password: str) -> None:
-    """Walk the Microsoft login flow."""
-    print("      [school] completing Microsoft login…", flush=True)
-    # email step
-    for _ in range(20):
-        if await _js(tab, "!!document.querySelector('input[type=email],input[name=loginfmt]')", False):
-            break
-        await asyncio.sleep(1)
-    await _js(tab, """(()=>{const e=document.querySelector('input[type=email],input[name=loginfmt]');
+async def _fill(tab, selector: str, value: str) -> bool:
+    """Fill an MS login input with REAL keystrokes (nodriver send_keys).
+
+    MS's login SPA ignores a bare value= / InputEvent (the box looks empty and
+    the form submits blank), which is why the password step never logged in.
+    Prefer element.send_keys (trusted key events); fall back to the native
+    value setter only if send_keys is unavailable.
+    """
+    el = None
+    if hasattr(tab, "select"):
+        for _ in range(20):                    # wait for the SPA to render the field
+            try:
+                el = await tab.select(selector, timeout=2)
+            except Exception:
+                el = None
+            if el is not None:
+                break
+            await asyncio.sleep(0.75)
+    if el is not None:
+        try:
+            await el.clear_input()
+        except Exception:
+            pass
+        try:
+            await el.click()
+        except Exception:
+            pass
+        try:
+            await el.send_keys(value)          # real key events
+            return True
+        except Exception:
+            pass
+    # fallback: native setter + input event
+    await _js(tab, """(()=>{const e=document.querySelector(%s);
         if(!e) return 0; e.focus();
         const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
         s.call(e,%s); e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s}));
-        return 1;})()""" % (repr(email).replace("'", '"'), repr(email).replace("'", '"')), 0)
-    await asyncio.sleep(0.5)
+        return 1;})()""" % (repr(selector).replace("'", '"'), repr(value).replace("'", '"'),
+                            repr(value).replace("'", '"')), 0)
+    return True
+
+
+async def _field_value(tab, selector: str) -> str:
+    return await _js(tab, "(document.querySelector(%s)||{}).value||''"
+                     % repr(selector).replace("'", '"'), "")
+
+
+async def do_login(tab, email: str, password: str) -> None:
+    """Walk the Microsoft login flow (real keystrokes so the fields actually fill)."""
+    print("      [school] completing Microsoft login…", flush=True)
+    email_sel = "input[type=email],input[name=loginfmt]"
+    pw_sel = "input[type=password],input[name=passwd]"
+
+    # email step
+    for _ in range(20):
+        if await _js(tab, "!!document.querySelector(%s)" % repr(email_sel).replace("'", '"'), False):
+            break
+        await asyncio.sleep(1)
+    await _fill(tab, email_sel, email)
+    await asyncio.sleep(0.6)
+    print(f"      [school] email field now: {bool(await _field_value(tab, email_sel))}", flush=True)
     await _maybe_click(tab, "Next")
     await asyncio.sleep(4)
 
     # password step
     for _ in range(20):
-        if await _js(tab, "!!document.querySelector('input[type=password],input[name=passwd]')", False):
+        if await _js(tab, "!!document.querySelector(%s)" % repr(pw_sel).replace("'", '"'), False):
             break
         await asyncio.sleep(1)
-    await _js(tab, """(()=>{const e=document.querySelector('input[type=password],input[name=passwd]');
-        if(!e) return 0; e.focus();
-        const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-        s.call(e,%s); e.dispatchEvent(new InputEvent('input',{bubbles:true,data:%s}));
-        return 1;})()""" % (repr(password).replace("'", '"'), repr(password).replace("'", '"')), 0)
-    await asyncio.sleep(0.5)
+    if not await _js(tab, "!!document.querySelector(%s)" % repr(pw_sel).replace("'", '"'), False):
+        print("      [school] password field never appeared", flush=True)
+        return
+    await _fill(tab, pw_sel, password)
+    await asyncio.sleep(0.6)
+    print(f"      [school] password field filled: {bool(await _field_value(tab, pw_sel))}", flush=True)
     await _maybe_click(tab, "Sign in")
     await asyncio.sleep(6)
 
@@ -125,9 +172,13 @@ async def do_login(tab, email: str, password: str) -> None:
 
 async def wait_inbox(tab, timeout: float = 60) -> bool:
     for _ in range(int(timeout)):
-        u = await _js(tab, "location.href", "")
-        if "outlook" in u and ("mail" in u or "owa" in u):
-            # inbox rendered?
+        u = (await _js(tab, "location.href", "")) or ""
+        # MUST be a real Outlook mailbox URL, never the MS login page (which also
+        # contains "outlook" in its redirect) — that false positive masked a
+        # failed login as "inbox ready".
+        on_mail = ("outlook" in u and ("/mail" in u or "owa" in u)
+                   and "login.microsoftonline" not in u and "login.live" not in u)
+        if on_mail:
             if await _js(tab, "!!document.querySelector('[role=main],[aria-label*=Message],div[role=list]')", False):
                 return True
         await asyncio.sleep(1)
