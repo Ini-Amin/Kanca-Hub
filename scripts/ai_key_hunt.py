@@ -74,10 +74,28 @@ def rank_and_dedupe(hits: list[dict], seen: set[str]) -> list[dict]:
 
 # ── io ───────────────────────────────────────────────────────────────
 def _load_seen() -> set[str]:
+    """Domains we've already surfaced = seen-list PLUS the curated docs list, so
+    a new user never re-scrapes (and re-pays quota for) known sites."""
+    seen: set[str] = set()
     try:
-        return set(json.loads(SEEN.read_text()))
+        seen |= set(json.loads(SEEN.read_text()))
+    except Exception:
+        pass
+    seen |= curated_domains()
+    return seen
+
+
+def curated_domains() -> set[str]:
+    """Parse docs/free-ai-sources.md for already-known domains/URLs."""
+    doc = Path(__file__).resolve().parent.parent / "docs" / "free-ai-sources.md"
+    try:
+        text = doc.read_text()
     except Exception:
         return set()
+    doms = set()
+    for m in re.finditer(r"https?://([^\s)/|]+)", text):
+        doms.add(m.group(1).lower().lstrip("www."))
+    return doms
 
 
 def discover(queries: list[str], limit: int) -> list[dict]:
