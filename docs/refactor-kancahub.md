@@ -58,8 +58,14 @@ python -m unittest tests.test_cli_surface            # 134-command surface
 - [x] commands_9router.py — cmd_adb / cmd_mobile / _r9_cli_token / _r9_api / cmd_9router (STEP 2c, 0e10a85)
 - [x] commands_proxy.py — _probe_http/_egress_verdict + cmd_proxy + 8 proxy helpers (STEP 3, 1d865ee)
 - [x] commands_stack.py — cmd_stack + _stack_signup/_login/_manage (STEP 4, cdacd69)
-- [ ] commands_grok.py (STEP 5) -> commands_github.py (careful) -> commands_thk.py -> commands_farm.py -> doctor -> menu.py
-- kancahub.py: 4677 -> 3138 lines
+- [x] commands_grok.py (STEP 5, dff6fcd)
+- [x] commands_github.py (STEP 6, 2894ac0) — careful: 4 test files patch kancahub attrs
+- [x] commands_thk.py (STEP 7, 47298a6) — thk constants moved w/ thk_chunks def-time default; test_thk_no_proxy now scans commands_thk.py
+- [x] commands_farm.py — k12/warp/yowes (STEP 8, 24f33cc, worker1)
+- [x] commands_otp.py — otp/scrape/autofarm (STEP 9, d626483, worker2)
+- [ ] doctor.py (STEP 10)
+- [ ] menu.py (STEP 11) LAST — build_parser/dispatch live in kancahub.py (H3), menu lazy-imports them
+- kancahub.py: 4677 -> 1728 lines (keeps build_parser, dispatch, cmd_session, menus, main)
 
 ## Dispatch via Luvus (the prepared harness)
 
