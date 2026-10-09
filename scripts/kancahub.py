@@ -2538,31 +2538,35 @@ def cmd_k12(a) -> int:
             _stop_auto_gateways()
 
     if sub == "auto":
-        # Prefer the tool's ORIGINAL proven flow (DrissionPage + temp.tf), which
-        # reliably walks ChatGPT signup -> SheerID and hands off to K12Verifier
-        # (auto-pass). Our experimental relay/nodriver flow is only a fallback.
+        # Preferred: OUR k12_camoufox flow, which signs up with a REAL school
+        # mailbox (binus.ac.id via K12_MAIL_PROVIDER=school), reads the OTP from
+        # the logged-in M365 session, then walks signup -> age gate -> SheerID.
+        # OpenAI accepts binus.ac.id, so this clears the "school email" gate that
+        # the old temp.tf flow (auto_k12_flow.py) stalls on.
+        camoufox_flow = AUTO_FREECF / "scripts" / "k12_camoufox.py"
         original = K12_DIR / "auto_k12_flow.py"
-        experimental = AUTO_FREECF / "scripts" / "auto_k12_flow_kancahub.py"
-        # Neither auto flow takes --proxy; inherit the verified hop via the env.
         mode = getattr(a, "proxy", None) or PROXY_AUTO
         if getattr(a, "no_proxy", False):
             mode = PROXY_NONE
         choice = _choose_egress(mode, EGRESS_TARGETS["k12"])
-        env = _proxy_env(choice)
+        env = dict(_proxy_env(choice) or {})
+        if camoufox_flow.exists():
+            print(col("cyan", "Full auto flow: ChatGPT signup -> OTP -> SheerID -> K12Verifier"))
+            print(col("dim", "  uses YOUR school mailbox (binus.ac.id via K12_MAIL_PROVIDER=school) + Camoufox"))
+            env["K12_MAIL_PROVIDER"] = os.environ.get("K12_MAIL_PROVIDER", "school")
+            py_camo = pick_python(camoufox=True)
+            try:
+                return run([py_camo, str(camoufox_flow)], cwd=AUTO_FREECF, env=env)
+            finally:
+                _stop_auto_gateways()
+        # Fallback: the old tool flow (DrissionPage + temp.tf) if ours is missing.
         if original.exists():
-            print(col("cyan", "Full auto flow (original tool): ChatGPT signup -> SheerID -> K12Verifier"))
-            print(col("dim", "  uses DrissionPage + temp.tf edu mailbox (proven auto-pass path)"))
+            print(col("yellow", "k12_camoufox.py missing; using the legacy temp.tf flow"))
             try:
                 return run([py, str(original)], cwd=K12_DIR, env=env)
             finally:
                 _stop_auto_gateways()
-        if experimental.exists():
-            print(col("yellow", "Original auto flow missing; using experimental relay flow"))
-            try:
-                return run([py, str(experimental)], cwd=K12_DIR, env=env)
-            finally:
-                _stop_auto_gateways()
-        print(col("red", "✗ no auto_k12_flow found"))
+        print(col("red", "✗ no k12 auto flow found"))
         return 1
 
     if sub == "inject":
