@@ -61,27 +61,36 @@ def get_captcha_config(jwt):
     return (d.get("data") or {}).get("configs", {}).get("captcha")
 
 
-# The app's own SDK init (window.AliyunCaptchaConfig + initIl), then our solver reads the param.
+# The app's own SDK init. Order matters: set window.AliyunCaptchaConfig BEFORE the
+# SDK script loads, then initAliyunCaptcha({SceneId, mode, element, button, ...}).
 INJECT = """(scene) => new Promise((res, rej) => {
-  const load = () => {
-    window.AliyunCaptchaConfig = { region: scene.region, prefix: scene.prefix };
-    if (typeof window.initAliyunCaptcha !== 'function') return rej('no initIl');
-    const el = document.createElement('div'); el.id='__capbox'; el.style.cssText='position:fixed;left:0;top:0;width:0;height:0;overflow:visible;z-index:2147483647';
-    const btn = document.createElement('button'); btn.id='__capbtn'; btn.type='button'; btn.style.cssText='position:fixed;left:50%;top:50%;width:1px;height:1px;opacity:0;border:0';
+  window.AliyunCaptchaConfig = { region: scene.region, prefix: scene.prefix };
+  const doInit = () => {
+    if (typeof window.initAliyunCaptcha !== 'function') return rej('no initAliyunCaptcha');
+    const el = document.createElement('div'); el.id='__capbox';
+    el.style.cssText='position:fixed;left:0;top:0;width:0;height:0;overflow:visible;z-index:2147483647';
+    const btn = document.createElement('button'); btn.id='__capbtn'; btn.type='button';
+    btn.style.cssText='position:fixed;left:50%;top:50%;width:1px;height:1px;opacity:0;border:0';
     document.body.appendChild(el); document.body.appendChild(btn);
     window.__capParam = null;
-    window.initAliyunCaptcha({ SceneId: scene.sceneId, mode:'popup', language:'en',
-      showErrorTip:false, element:'#__capbox', button:'#__capbtn',
-      getInstance: (inst) => { window.__capInst = inst;
-        try { inst.show(); res(true); } catch(e) { try{window.__capbtn.click();res(true);}catch(e2){rej(String(e2));} } },
-      success: (p) => { window.__capParam = p; },
-      fail: (e) => { window.__capErr = e; },
-      onError: (e) => { window.__capErr = e; } });
+    try {
+      window.initAliyunCaptcha({
+        SceneId: scene.sceneId, mode: 'popup', language: 'en', showErrorTip: false,
+        element: '#__capbox', button: '#__capbtn',
+        getInstance: (inst) => { window.__capInst = inst;
+          try { inst.show(); } catch (e) { try { btn.click(); } catch (e2) {} }
+          res(true); },
+        success: (p) => { window.__capParam = p; },
+        fail: (e) => { window.__capErr = e; },
+        onError: (e) => { window.__capErr = e; }
+      });
+    } catch (e) { rej(String(e)); }
   };
-  if (typeof window.initAliyunCaptcha === 'function') return load();
+  if (typeof window.initAliyunCaptcha === 'function') return doInit();
   const s = document.createElement('script');
   s.src = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js';
-  s.onload = load; s.onerror = () => rej('script load failed'); document.head.appendChild(s);
+  s.onload = doInit; s.onerror = () => rej('script load failed');
+  document.head.appendChild(s);
 })"""
 
 
