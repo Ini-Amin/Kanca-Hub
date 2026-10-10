@@ -57,13 +57,15 @@ HEALTH = Path("/tmp/opencode/r9_health.json")
 LEDGER = Path(os.path.expanduser("~/.config/auto-freecf/farm_ledger.jsonl"))
 
 THK_PROVIDER = "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a"
+# Ground truth from GET /api/me/free-tier (allowance_model_labels). The API
+# reports these WITHOUT a ":free" suffix, but chat requests need the suffix.
 THK_FREE_MODELS = [
-    "deepseek-v4.1-flash:free",
+    "deepseek-v4-flash:free",
     "mimo-v2.6-flash:free",
-    "claude-haiku-5.5:free",
     "mimo-v2.5:free",
-    "qwen3.8-flash:free",
+    "deepseek-v4.1-flash:free",
 ]
+# Each account gets ~151 requests per rolling 7-day period (see req_used/used_pct).
 # below this many live keys for a provider -> top up
 FLOOR = 3
 # safe accounts per egress IP before TokenHarbor's network cap bites
@@ -82,6 +84,30 @@ def load_accounts() -> list[dict]:
         return d if isinstance(d, list) else d.get("accounts", [])
     except Exception:
         return []
+
+
+def free_tier_status(email: str, password: str) -> dict | None:
+    """Ask TokenHarbor for this account's free-tier state.
+
+    GET /api/me/free-tier returns exhausted / used_pct / reset_at without
+    spending a free request, so it is the cheap sensor. Plain urllib is
+    Cloudflare-challenged (429 "Just a moment..."), so we go through the
+    harbor client, which already holds a working session.
+    """
+    try:
+        harbor = ROOT / "harbor"
+        if str(harbor) not in sys.path:
+            sys.path.insert(0, str(harbor))
+        from tools.tokenharbor.client import TokenHarborClient  # noqa: PLC0415
+
+        c = TokenHarborClient()
+        r = c.login(email, password)
+        if not isinstance(r, dict) or r.get("error"):
+            return None
+        ts = c.get_free_tier_status()
+        return ts if isinstance(ts, dict) and "exhausted" in ts else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def probe_key(api_key: str, model: str) -> tuple[bool, str]:
@@ -126,30 +152,38 @@ def status() -> dict:
     accts = load_accounts()
     live, dead = [], []
     for a in accts:
-        key = a.get("api_key")
+        email, pw, key = a.get("email"), a.get("password"), a.get("api_key")
         if not key:
             continue
-        ok = False
-        why = "no_key"
+        # prefer the cheap, no-request-spent check
+        ts = free_tier_status(email, pw) if (email and pw) else None
+        if ts and "exhausted" in ts:
+            if not ts.get("exhausted"):
+                live.append({
+                    "email": email, "key": key[:18],
+                    "why": f"live:{100 - (ts.get('used_pct') or 0)}% left",
+                    "reset_at": ts.get("reset_at"),
+                })
+            else:
+                dead.append({
+                    "email": email, "key": key[:18],
+                    "why": f"quota_used:{ts.get('used_pct')}%",
+                    "used": ts.get("req_used"), "reset_at": ts.get("reset_at"),
+                })
+            continue
+        # fall back to spending one small request
+        ok, why = False, "unknown"
         for m in THK_FREE_MODELS:
             ok, why = probe_key(key, m)
             if ok:
                 why = f"ok:{m}"
                 break
-            # a missing model tells us nothing about quota -- keep looking
             if why in ("model_unavailable", "rate_limited"):
                 continue
-            # quota/wallet/auth verdicts are final for this key
             break
-        # if every model 404'd we cannot judge quota; record that honestly
         if not ok and why in ("model_unavailable", "rate_limited"):
             why = "all_free_models_unavailable"
-        entry = {
-            "email": a.get("email"),
-            "key": key[:18],
-            "why": why,
-        }
-        (live if ok else dead).append(entry)
+        (live if ok else dead).append({"email": email, "key": key[:18], "why": why})
     return {
         "accounts": len(accts),
         "live": live,
@@ -157,6 +191,7 @@ def status() -> dict:
         "live_count": len(live),
         "floor": FLOOR,
         "need": max(0, FLOOR - len(live)),
+        "resets": sorted({d.get("reset_at") for d in dead if d.get("reset_at")}),
     }
 
 
