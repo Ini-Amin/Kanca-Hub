@@ -163,6 +163,40 @@ def status() -> dict:
     return info
 
 
+ROTATE_ENDPOINTS = ["188.114.97.1:2408", "188.114.96.1:2408", "162.159.192.1:2408",
+                    "162.159.193.10:2408", "188.114.98.1:2408", "188.114.99.1:2408"]
+
+def rotate() -> bool:
+    """Cycle WARP endpoints until the exit IP changes (resets per-IP caps).
+
+    ponytail: the exit IP follows the Cloudflare endpoint, not the account, so
+    regenerating the profile alone keeps the same IP. Some endpoints do not
+    answer; those are skipped. Upgrade path: none needed for a handful of IPs.
+    """
+    import time, urllib.request
+    def ip():
+        try:
+            return urllib.request.urlopen("https://api.ipify.org", timeout=6).read().decode().strip()
+        except Exception:
+            return ""
+    before = ip()
+    if not WARP_CONF.exists() and not generate():
+        return False
+    base = [l for l in WARP_CONF.read_text().splitlines() if not l.startswith("Endpoint =")]
+    for ep in ROTATE_ENDPOINTS:
+        WARP_CONF.write_text("\n".join(base + [f"Endpoint = {ep}"]) + "\n")
+        _sudo(["cp", str(WARP_CONF), str(WG_SYS)])
+        _sudo(["wg-quick", "down", WG_NAME])
+        if _sudo(["wg-quick", "up", WG_NAME]).returncode != 0:
+            continue
+        time.sleep(3)
+        after = ip()
+        if after and after != before:
+            print(f"{C_GREEN}✓{C_RST} egress {before} -> {after} via {ep}")
+            return True
+    print(f"{C_YEL}•{C_RST} no endpoint gave a new IP (still {before})")
+    return False
+
 def print_status() -> int:
     s = status()
     on = s["up"] and s["warp"] == "on"
@@ -182,6 +216,8 @@ if __name__ == "__main__":
         sys.exit(0 if up() else 1)
     if cmd == "down":
         sys.exit(0 if down() else 1)
+    if cmd == "rotate":
+        sys.exit(0 if rotate() else 1)
     if cmd == "gen":
         sys.exit(0 if generate() else 1)
     sys.exit(print_status())
