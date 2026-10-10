@@ -35,6 +35,7 @@ Examples
 --------
   kancahub doctor
   kancahub warp up                          # clean Cloudflare egress
+kancahub thk batch 4 --proxy vpngate:JP          # free VPN Gate relay (IP diversity)
   kancahub region set us                     # target US promos
   kancahub stack signup -n 3 --warp          # full pipeline on WARP
   kancahub stack sync --prune                # drop dead 9Router connections
