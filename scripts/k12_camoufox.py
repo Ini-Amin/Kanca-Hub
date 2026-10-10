@@ -198,15 +198,15 @@ def _relay_create_mailbox(custom_domain: str | None = None) -> dict:
     if not dom:
         valid_domains = [d.strip() for d in DOMAINS if d.strip()]
         dom = random.choice(valid_domains) if valid_domains else "kancalabs.biz.id"
-    r = requests.post(f"{MAIL_BASE}/new_address", json={"domain": dom},
-                      headers={"x-api-key": MAIL_KEY}, timeout=60)
+    r = _req("POST", f"{MAIL_BASE}/new_address", json={"domain": dom},
+            headers={"x-api-key": MAIL_KEY}, timeout=60)
     r.raise_for_status()
     return r.json()  # {address, jwt, domain}
 
 
 def _relay_poll_mail(jwt: str) -> list[dict]:
-    r = requests.get(f"{MAIL_BASE}/parsed_mails",
-                     headers={"Authorization": f"Bearer {jwt}", "x-api-key": MAIL_KEY}, timeout=30)
+    r = _req("GET", f"{MAIL_BASE}/parsed_mails",
+            headers={"Authorization": f"Bearer {jwt}", "x-api-key": MAIL_KEY}, timeout=30)
     r.raise_for_status()
     d = r.json()
     return d if isinstance(d, list) else d.get("results", [])
@@ -220,7 +220,8 @@ def _req(method: str, url: str, *, retries: int = 4, **kw):
         try:
             r = requests.request(method, url, timeout=kw.pop("timeout", 30), **kw)
             return r
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                requests.exceptions.SSLError) as e:
             last = e
             time.sleep(2 * (i + 1))
     raise last
