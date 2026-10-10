@@ -329,18 +329,15 @@ async def _piece_geom(page):
 
 
 async def _drag(page, sx: float, sy: float, dist: float) -> None:
-    """Clean, steady, deliberate drag straight onto the handle to the target.
+    """Pure LINEAR native drag: press the handle, move straight to the target,
+    release. No easing curve, no overshoot, no jitter, no pauses.
 
-    No pre-hover, no sine wobble, no pauses on the slider, and prompt release.
+    Playwright's mouse.* dispatch real Input events (native CDP Input.dispatchMouseEvent),
+    and mouse.move(..., steps=N) walks a straight line — so this is linear + native.
     """
     await page.mouse.move(sx, sy)
     await page.mouse.down()
-    steps = 18
-    for i in range(1, steps + 1):
-        t = i / steps
-        await page.mouse.move(sx + dist * (1 - (1 - t) ** 2), sy)
-        await asyncio.sleep(0.012)
-    await asyncio.sleep(0.06)
+    await page.mouse.move(sx + dist, sy, steps=12)   # single straight-line move
     await page.mouse.up()
 
 async def _slider_box(page):
