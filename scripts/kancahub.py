@@ -281,6 +281,25 @@ def build_parser() -> argparse.ArgumentParser:
     r9c.add_argument("action", nargs="?", default="list", choices=["list", "make-thk-fallback"])
     r9c.add_argument("--name", default="thk-fallback", help="combo name (default thk-fallback)")
     r9c.add_argument("--models", default=None, help="comma list of models (default: free THK models)")
+    r9k = r9s.add_parser("keyguard", help="watch healthy 9Router keys; auto-farm when they run low")
+    r9ks = r9k.add_subparsers(dest="kg_action")
+    _kg_common = argparse.ArgumentParser(add_help=False)
+    _kg_common.add_argument("--threshold", type=int, default=2,
+                            help="farm when healthy keys <= this (default 2)")
+    _kg_common.add_argument("--farm-url", default=None,
+                            help="target URL handed to autofarm when it triggers")
+    _kg_common.add_argument("--dry-run", action="store_true", help="print actions, do nothing")
+    r9k_status = r9ks.add_parser("status", parents=[_kg_common], help="one-shot table; never farms")
+    r9k_watch = r9ks.add_parser("watch", parents=[_kg_common], help="loop; farms when keys run low")
+    r9k_watch.add_argument("--interval", type=float, default=300.0,
+                           help="seconds between polls (default 300)")
+    r9k_watch.add_argument("--cooldown", type=float, default=3600.0,
+                           help="min seconds between farm runs (default 3600)")
+    r9k_watch.add_argument("--no-headless", action="store_true",
+                           help="show the browser during a farm run")
+    r9ks.add_parser("farm", parents=[_kg_common], help="force one autofarm run now")
+    r9ks.add_parser("reset", parents=[_kg_common], help="clear the farm cooldown")
+    r9k.add_argument("--base", default="http://localhost:20128", help="9Router base URL (default :20128)")
     r9c.add_argument("--base", default="http://localhost:20128")
     r9m.add_argument("--base", default="http://localhost:20128", help="9Router base URL (default :20128)")
     ipr = sub.add_parser("ip-reuse", help="CGNAT session guard: exit-IP reuse per IP + mid-session IP changes")

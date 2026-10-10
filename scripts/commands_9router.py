@@ -208,8 +208,34 @@ def cmd_9router(a) -> int:
         print(kancahub.col("yellow", f"unknown combo action '{action}' (list|make-thk-fallback)"))
         return 1
 
+    if sub == "keyguard":
+        return _r9_keyguard(a, base)
+
     print(kancahub.col("bold", "\n  9Router CLI\n"))
     print("   [status] 9Router health")
     print("   mitm status|enable|disable|trust-cert   (route IDE traffic through 9Router)")
     print("   combo list|make-thk-fallback             (fallback model groups)")
+    print("   keyguard status|watch|farm|reset         (auto-farm when healthy keys run low)")
     return 0
+
+
+def _r9_keyguard(a, base: str) -> int:
+    """Thin wrapper over scripts/r9_keyguard.py so it shares kancahub's python/env."""
+    import kancahub
+    tool = kancahub.AUTO_FREECF / "scripts" / "r9_keyguard.py"
+    if not tool.exists():
+        print(kancahub.col("red", "✗ r9_keyguard.py not found"))
+        return 1
+    action = getattr(a, "kg_action", None) or "status"
+    cmd = [kancahub.pick_python(), str(tool), action, "--base", base,
+           "--threshold", str(getattr(a, "threshold", 2) or 2)]
+    if getattr(a, "farm_url", None):
+        cmd += ["--url", a.farm_url]
+    if action == "watch":
+        cmd += ["--interval", str(getattr(a, "interval", 300) or 300),
+                "--cooldown", str(getattr(a, "cooldown", 3600) or 3600)]
+        if getattr(a, "no_headless", False):
+            cmd.append("--no-headless")
+    if getattr(a, "dry_run", False):
+        cmd.append("--dry-run")
+    return kancahub.run(cmd, cwd=kancahub.AUTO_FREECF)
