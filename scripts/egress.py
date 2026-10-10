@@ -152,6 +152,37 @@ def _try_freepool(target_url: str, verbose: bool, *, limit: int = 8,
     return None
 
 
+def _try_proxyma(target_url: str, verbose: bool, *, timeout: float = 12.0) -> str | None:
+    """Anonymous, keyless HTTPS proxies from proxyma.space (datacenter exits).
+
+    ponytail: hosting-flagged IPs clear Cloudflare gates but NOT Google reCAPTCHA
+    audio. Upgrade path: none free; needs a residential/mobile exit.
+    """
+    import json as _json
+    import urllib.request as _ur
+
+    try:
+        def _get(path, secret=None):
+            req = _ur.Request("https://proxyma.space" + path,
+                              headers={"X-Proxy-Secret": secret or "", "User-Agent": "Mozilla/5.0"})
+            return _json.load(_ur.urlopen(req, timeout=timeout))
+        secret = _get("/api/secret")["secret"]
+        cred = _get("/api/proxy-credentials", secret)["data"]
+        nodes = [n for n in _get("/api/proxies?nodes=1", secret)["data"] if n.get("status") == "online"]
+    except Exception as exc:  # noqa: BLE001
+        if verbose:
+            print(f"  [egress] • Proxyma unavailable ({exc})", file=sys.stderr)
+        return None
+    for n in sorted(nodes, key=lambda x: x.get("latency_ms", 9999))[:4]:
+        cand = f"https://{cred['username']}:{cred['password']}@{n['host']}:{n['port']}"
+        st = probe_status(target_url, proxy=cand, timeout=timeout)
+        if 200 <= st < 400 and not is_blocked(st):
+            if verbose:
+                print(f"  [egress] ✓ Proxyma {n['region']} verified for {target_url} (HTTP {st})", file=sys.stderr)
+            return cand
+    return None
+
+
 def _check_warp_up() -> bool:
     """Check if Cloudflare WARP tunnel is active via scripts/warp_manager.py."""
     try:
@@ -298,6 +329,9 @@ def auto_egress(
         fp = _try_freepool(target_url, verbose)
         if fp:
             return fp, None, "freepool"
+        px = _try_proxyma(target_url, verbose)
+        if px:
+            return px, None, "proxyma"
 
     # 3. Escalate to WARP / residential
     # 3a. Check if WARP is up
