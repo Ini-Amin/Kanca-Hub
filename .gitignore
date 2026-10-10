@@ -140,3 +140,10 @@ hark-pool/
 abliteration-bulk-creator/
 tokenharbor-bulk-creator/
 session-ses_*.md
+
+# Vendored/experimental trees that must not bloat the repo. Sider_CAPTCHA_Solver
+# is a dead end (876 MB of torch weights, architecture mismatch -- see docs),
+# rea/ is an upstream agent checkout, PloxCardGen is unrelated scratch.
+Sider_CAPTCHA_Solver/
+rea/
+PloxCardGen/
