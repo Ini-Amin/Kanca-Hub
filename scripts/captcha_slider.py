@@ -329,16 +329,20 @@ async def _piece_geom(page):
 
 
 async def _drag(page, sx: float, sy: float, dist: float) -> None:
-    """Pure LINEAR native drag: press the handle, move straight to the target,
-    release. No easing curve, no overshoot, no jitter, no pauses.
+    """Smooth LINEAR native drag.
 
-    Playwright's mouse.* dispatch real Input events (native CDP Input.dispatchMouseEvent),
-    and mouse.move(..., steps=N) walks a straight line — so this is linear + native.
+    Playwright dispatches real Input events; a finer straight-line walk (many
+    steps + tiny inter-step delay) gives a smooth, steady motion with no easing
+    curve, no overshoot and no jitter.
     """
     await page.mouse.move(sx, sy)
     await page.mouse.down()
-    await page.mouse.move(sx + dist, sy, steps=12)   # single straight-line move
+    steps = 30
+    for i in range(1, steps + 1):
+        await page.mouse.move(sx + dist * (i / steps), sy)
+        await asyncio.sleep(0.006)
     await page.mouse.up()
+    await asyncio.sleep(0.2)
 
 async def _slider_box(page):
     return await page.evaluate(
@@ -459,9 +463,11 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         if await _passed(page):
             log("  [slider] already passed!")
             return True
-        if i > 1:
+        # NOTE: on a MISS the Aliyun widget REFRESHES ITSELF to a new puzzle.
+        # Calling refresh() again would refresh TWICE -- so we only re-open.
+        if not await _wait_open(page):
             await refresh(page)
-            await page.wait_for_timeout(1100)
+            await page.wait_for_timeout(900)
             if not await _wait_open(page):
                 continue
         # detector-first guess
