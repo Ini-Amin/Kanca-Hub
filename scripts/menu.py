@@ -169,8 +169,14 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
                 print(kancahub.col("red", "\n✗ Step 1 failed: Proxy gateway did not start. Stopping pipeline to avoid IP block."))
                 return rc_start
         else:
-            print(kancahub.col("red", "\n✗ Step 1 stopped: Clean proxy egress is required for farm operations."))
-            return 1
+            print(kancahub.col("yellow", "\n• Gateway declined — trying WARP as egress fallback…"))
+            rc_warp = kancahub.dispatch(p, p.parse_args(["warp", "up"]))
+            if rc_warp == 0 and kancahub.dispatch(p, p.parse_args(["proxy", "verify"])) == 0:
+                farm_args += ["--proxy", "warp"]
+                print(kancahub.col("green", "✓ Step 1 fallback: WARP egress verified.\n"))
+            else:
+                print(kancahub.col("red", "\n✗ Step 1 stopped: Clean proxy egress is required for farm operations."))
+                return 1
     print(kancahub.col("green", "✓ Step 1 complete: Egress proxy verified.\n"))
 
     # ── Step (b): Account Farm ──
