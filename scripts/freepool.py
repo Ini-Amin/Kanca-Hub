@@ -293,6 +293,35 @@ def cmd_filter(a) -> int:
     return 0
 
 
+def cmd_proxyma(a) -> int:
+    """Write a verified Proxyma pool file (one https://user:pass@host:port per line).
+
+    Drops nodes that fail, are slow, or re-sign TLS (curl verify error), so a
+    round-robin gateway over this file never lands on a laggy/broken node.
+    ponytail: datacenter exits; Cloudflare gates only, not Google reCAPTCHA.
+    """
+    import subprocess
+    def g(path, secret=""):
+        req = urllib.request.Request("https://proxyma.space" + path,
+                                     headers={"X-Proxy-Secret": secret, "User-Agent": _UA})
+        return json.load(urllib.request.urlopen(req, timeout=15, context=_CTX))
+    s = g("/api/secret")["secret"]
+    c = g("/api/proxy-credentials", s)["data"]
+    nodes = [n for n in g("/api/proxies?nodes=1", s)["data"] if n.get("status") == "online"]
+    urls = [f"https://{c['username']}:{c['password']}@{n['host']}:{n['port']}" for n in nodes]
+    def probe(u):
+        r = subprocess.run(["curl", "-s", "-m", str(int(a.max_time)), "-x", u, "-o", "/dev/null",
+                            "-w", "%{http_code} %{ssl_verify_result}", "https://tokenharbor.ai/login"],
+                           capture_output=True, text=True)
+        return u, r.stdout.strip() == "200 0"
+    with cf.ThreadPoolExecutor(8) as ex:
+        good = [u for u, ok in ex.map(probe, urls) if ok]
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(a.out).write_text("\n".join(good) + ("\n" if good else ""))
+    print(f"proxyma: {len(good)}/{len(urls)} nodes verified -> {a.out}")
+    return 0 if good else 1
+
+
 def cmd_show(_a) -> int:
     if not POOL_JSON.exists():
         print(f"no pool at {POOL_JSON}")
@@ -323,6 +352,10 @@ def main() -> int:
     f.add_argument("--timeout", type=float, default=15.0)
     f.add_argument("--workers", type=int, default=30)
     f.set_defaults(fn=cmd_filter)
+    px = sub.add_parser("proxyma", help="write a verified keyless Proxyma pool")
+    px.add_argument("--out", default="/tmp/opencode/proxyma_ok.txt")
+    px.add_argument("--max-time", type=float, default=10.0, help="drop nodes slower than this")
+    px.set_defaults(fn=cmd_proxyma)
     sub.add_parser("show", help="what is on disk").set_defaults(fn=cmd_show)
     a = ap.parse_args()
     return a.fn(a)
