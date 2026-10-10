@@ -105,7 +105,8 @@ def cmd_k12(a) -> int:
         env = kancahub._proxy_env(choice)  # None when direct (so --no-proxy stays clean)
         # The school mailbox provider is a process-wide default, not a proxy var:
         # set it in os.environ so it reaches the child even on the direct path.
-        kancahub.os.environ.setdefault("K12_MAIL_PROVIDER", "school")
+        if not kancahub.os.environ.get("K12_MAIL_PROVIDER"):
+            kancahub.os.environ["K12_MAIL_PROVIDER"] = "school"
         if camoufox_flow.exists():
             print(kancahub.col("cyan", "Full auto flow: ChatGPT signup -> OTP -> SheerID -> K12Verifier"))
             print(kancahub.col("dim", "  uses YOUR school mailbox (binus.ac.id via K12_MAIL_PROVIDER=school) + Camoufox"))
