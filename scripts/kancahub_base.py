@@ -198,9 +198,11 @@ _egress_unavailable = False        # import failed -> keep legacy behavior
 
 PROXY_HELP = (
     "egress mode (default: auto). auto = smart auto-wire (local gateway -> pool "
-    "gateway -> WARP -> residential -> direct, verified per target); none = force "
-    "direct; WARP = force the Cloudflare WARP tunnel; or an explicit proxy URL "
-    "such as http://127.0.0.1:8888 (an explicit URL always wins over auto)"
+    "gateway -> free pool -> WARP -> residential -> direct, verified per target); "
+    "none = force direct; WARP = force the Cloudflare WARP tunnel; freepool = use a "
+    "browser-grade proxy from the harvested free pool (scripts/freepool.py); or an "
+    "explicit proxy URL such as http://127.0.0.1:8888 (an explicit URL always wins "
+    "over auto)"
 )
 
 def _looks_like_proxy(mode: str) -> bool:
@@ -289,6 +291,22 @@ def _choose_egress(
 
     if low in (PROXY_NONE, "direct", "off", "no"):
         return EgressChoice(None, "none", direct=True)
+
+    # Explicit `freepool`: skip the ladder and go straight to a scored free proxy.
+    if low == "freepool":
+        try:
+            if str(SCRIPTS_DIR) not in sys.path:
+                sys.path.insert(0, str(SCRIPTS_DIR))
+            import egress as _eg
+            picked = _eg._try_freepool(target_url, True)
+        except Exception as exc:  # noqa: BLE001
+            print(col("yellow", f"  [proxy] freepool lookup failed ({exc})"))
+            picked = None
+        if picked:
+            return EgressChoice(picked, "freepool")
+        print(col("yellow", "  [proxy] freepool: no browser-grade proxy available; "
+                            "continuing with the auto ladder"))
+        low = PROXY_AUTO
 
     # Scheme-less proxies (127.0.0.1:8888, user:pass@host:port) are explicit
     # hops: give them a scheme so auto_egress's matcher sees them as such.

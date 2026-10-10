@@ -113,6 +113,45 @@ def is_port_open(host: str = "127.0.0.1", port: int = 8888, timeout: float = 0.5
         return False
 
 
+def _try_freepool(target_url: str, verbose: bool, *, limit: int = 8,
+                  timeout: float = 12.0) -> str | None:
+    """Pick the best browser-grade proxy from the harvested free pool.
+
+    scripts/freepool.py scores proxies at two levels: reachable (an IP echo
+    answers) and browser-grade (the real target page loads, non-trivially). Only
+    level-2 survivors are trusted here, because a reachable-but-tiny response is
+    what makes a signup look "failed" for reasons that are really the proxy.
+
+    Free lists are ~1% alive and rarely browser-grade, so this takes the first
+    few candidates only -- a slow search costs more than it is worth.
+    """
+    from pathlib import Path as _P
+
+    pool = _P.home() / ".config" / "auto-freecf" / "freepool_browser.txt"
+    if not pool.exists() or pool.stat().st_size == 0:
+        if verbose:
+            print("  [egress] • No free pool scored yet "
+                  "(run: scripts/freepool.py fetch && scripts/freepool.py filter)",
+                  file=sys.stderr)
+        return None
+    try:
+        cands = [ln.strip() for ln in pool.read_text().splitlines() if ln.strip()][:max(1, limit)]
+    except Exception:  # noqa: BLE001
+        return None
+    for cand in cands:
+        st = probe_status(target_url, proxy=cand, timeout=timeout)
+        if 200 <= st < 400 and not is_blocked(st):
+            if verbose:
+                print(f"  [egress] ✓ Free-pool proxy {cand} verified for {target_url} (HTTP {st})",
+                      file=sys.stderr)
+            return cand
+        if verbose:
+            print(f"  [egress] • Free-pool {cand} returned HTTP {st} for {target_url}", file=sys.stderr)
+    if verbose:
+        print("  [egress] ✗ No free-pool proxy passed for this target", file=sys.stderr)
+    return None
+
+
 def _check_warp_up() -> bool:
     """Check if Cloudflare WARP tunnel is active via scripts/warp_manager.py."""
     try:
@@ -249,6 +288,16 @@ def auto_egress(
             if gw_proc is not None:
                 stop_gateway(gw_proc)
                 gw_proc = None
+
+    # 2b. Harvested FREE pool (scripts/freepool.py). Free lists are ~1% alive and
+    #     rarely browser-grade, so this is a low rung: try a handful of the best
+    #     candidates, verified against THIS target, and give up quickly. It exists
+    #     because a new user has no residential key and free is all they have.
+    #     Skipped when a caller pins prefer_pool: an explicit pool is a promise.
+    if not prefer_pool:
+        fp = _try_freepool(target_url, verbose)
+        if fp:
+            return fp, None, "freepool"
 
     # 3. Escalate to WARP / residential
     # 3a. Check if WARP is up
