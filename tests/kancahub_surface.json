@@ -10,6 +10,38 @@
 "models",
 "name"
 ],
+"9router keyguard": [
+"base",
+"help",
+"kg_action"
+],
+"9router keyguard farm": [
+"dry_run",
+"farm_url",
+"help",
+"threshold"
+],
+"9router keyguard reset": [
+"dry_run",
+"farm_url",
+"help",
+"threshold"
+],
+"9router keyguard status": [
+"dry_run",
+"farm_url",
+"help",
+"threshold"
+],
+"9router keyguard watch": [
+"cooldown",
+"dry_run",
+"farm_url",
+"help",
+"interval",
+"no_headless",
+"threshold"
+],
 "9router mitm": [
 "action",
 "api_key",
