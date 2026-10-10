@@ -199,7 +199,7 @@ _egress_unavailable = False        # import failed -> keep legacy behavior
 PROXY_HELP = (
     "egress mode (default: auto). auto = smart auto-wire (local gateway -> pool "
     "gateway -> free pool -> WARP -> residential -> direct, verified per target); "
-    "none = force direct; WARP = force the Cloudflare WARP tunnel; freepool = use a "
+    "none = force direct; WARP = force the Cloudflare WARP tunnel; vpngate[:CC] = free VPN Gate relay (system-wide, torn down on exit); freepool = use a "
     "browser-grade proxy from the harvested free pool (scripts/freepool.py); or an "
     "explicit proxy URL such as http://127.0.0.1:8888 (an explicit URL always wins "
     "over auto)"
@@ -291,6 +291,20 @@ def _choose_egress(
 
     if low in (PROXY_NONE, "direct", "off", "no"):
         return EgressChoice(None, "none", direct=True)
+
+    # `vpngate[:CC]`: system-wide OpenVPN relay (scripts/vpngate.py), torn down at exit.
+    # Direct-style choice: the tunnel carries the traffic, no proxy URL needed.
+    if low.split(":")[0] == "vpngate":
+        import atexit
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import vpngate as _vg
+        cc = raw.split(":", 1)[1] if ":" in raw else None
+        if _vg.up(cc, 0) == 0:
+            atexit.register(_vg.down)
+            return EgressChoice(None, "vpngate", direct=True)
+        print(col("yellow", "  [proxy] vpngate: no relay connected; continuing with the auto ladder"))
+        low = PROXY_AUTO
 
     # Explicit `freepool`: skip the ladder and go straight to a scored free proxy.
     if low == "freepool":
