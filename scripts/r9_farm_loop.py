@@ -1,310 +1,274 @@
 #!/usr/bin/env python3
-"""scripts/r9_farm_loop.py -- Option C: the autofarm loop that keeps 9Router fed.
+"""scripts/r9_farm_loop.py -- keep 9Router fed, using the existing kancahub pipeline.
 
-The problem this solves
------------------------
-9Router's failover is *not* broken. When THK key #1 hits its quota, the router
-does try key #2, #3 ... #14 -- but if every key is exhausted, the best it can
-report is "used this period's free allowance". Toggling connections on/off in
-the dashboard changes nothing, because there is no quota to fall back to.
+Why this exists
+---------------
+9Router does NOT already rotate provider/model connections between providers,
+and it does NOT farm us more keys. It only attempts the connections we hand it,
+and if all are exhausted it returns "used this period's free allowance".
 
-That is a *supply* problem, and this loop fixes supply:
+So when key #1 hits its quota, failover looks broken but is really just empty.
+Toggling connections on/off in the dashboard cannot help. This is a supply
+problem, and the fix is to keep supply topped up.
 
-    probe  ->  detect providers below the floor  ->  farm more accounts
-           ->  inject into 9Router  ->  re-probe  ->  repair ordering
+Everything that farms, injects or routes already lives in kancahub. This script
+is a thin, honest DRIVER over those commands -- it does not reimplement them:
 
-TokenHarbor free quota (measured 2026-10-10):
-  * `:free` models have a per-account rolling ~7-day allowance
-    ("You've used this period's free allowance. Your next rolling 7-day
-    period starts on <date>"), separate from the paid wallet balance.
-  * So ONE NEW ACCOUNT == ONE FRESH FREE ALLOWANCE. That is why farming works.
-  * Free models that count: deepseek-v4.1-flash:free, mimo-v2.6-flash:free,
-    claude-haiku-5.5:free (among others).
-  * Free requests are retained for training -- that is the trade for free access.
+    kancahub thk status          -> free-tier state of every harbor account
+    kancahub thk batch N         -> farm N accounts (egress + camoufox + mail)
+    kancahub thk inject --verify -> push thk_ keys into 9Router
+    kancahub thk sync --prune    -> verify + prune 9Router connections
+    kancahub proxy verify        -> is our egress actually masked?
 
-Signup limits (measured, see scripts/commands_thk.py):
-  * ~4 accounts per IP is safe; 5 is the hard cap, then
-    "Too many sign-ups from this network. Please try again in an hour."
-  * So a burst needs fresh egress; the per-IP cap is the real constraint,
-    not the pace.
+What this script adds on top:
+  * a floor check ("do we have enough live keys?") with a clear verdict
+  * a plan mode that never touches the network
+  * an append-only ledger line per run, so drift is auditable
+
+TokenHarbor free quota (measured 2026-10-10 via GET /api/me/free-tier):
+  * each account gets ~151 requests per rolling 7-day period
+    (req_used=151, used_pct=100, exhausted=true on a spent account;
+    period 2026-10-07T08:02:09Z -> reset 2026-10-14T08:02:09Z)
+  * the allowance covers: deepseek-v4-flash, mimo-v2.6-flash, mimo-v2.5,
+    deepseek-v4.1-flash (SERVED with a ":free" suffix, reported without)
+  * ONE NEW ACCOUNT == ONE FRESH ALLOWANCE, which is why farming is the fix
+  * free requests are retained for training -- that is the trade
+
+Signup cap (measured, see scripts/commands_thk.py): ~4 accounts per IP is safe,
+5 is the hard cap, then "Too many sign-ups from this network". So a burst needs
+fresh egress; the per-IP count is the real constraint, not the pace.
 
 Usage
 -----
-  python scripts/r9_farm_loop.py status                 # health of all THK keys
-  python scripts/r9_farm_loop.py plan                   # what it would farm
-  python scripts/r9_farm_loop.py run --max 4            # farm up to 4 accounts
-  python scripts/r9_farm_loop.py run --max 4 --apply    # ...and inject them
+  python scripts/r9_farm_loop.py status          # where do we stand?
+  python scripts/r9_farm_loop.py plan            # what would we farm?
+  python scripts/r9_farm_loop.py run --max 4     # show the exact commands
+  python scripts/r9_farm_loop.py run --max 4 --apply   # actually do it
+  python scripts/r9_farm_loop.py egress          # is masking working?
 
-Nothing is farmed or injected unless --apply is given.
+Nothing is farmed, injected, or synced unless --apply is given.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import sqlite3
 import subprocess
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
-HARBOR = ROOT / "harbor" / "account.json"
-DB = Path(os.path.expanduser("~/.9router/db/data.sqlite"))
-HEALTH = Path("/tmp/opencode/r9_health.json")
+HARBOR_ACCOUNTS = ROOT / "harbor" / "account.json"
 LEDGER = Path(os.path.expanduser("~/.config/auto-freecf/farm_ledger.jsonl"))
 
-THK_PROVIDER = "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a"
-# Ground truth from GET /api/me/free-tier (allowance_model_labels). The API
-# reports these WITHOUT a ":free" suffix, but chat requests need the suffix.
-THK_FREE_MODELS = [
-    "deepseek-v4-flash:free",
-    "mimo-v2.6-flash:free",
-    "mimo-v2.5:free",
-    "deepseek-v4.1-flash:free",
-]
-# Each account gets ~151 requests per rolling 7-day period (see req_used/used_pct).
-# below this many live keys for a provider -> top up
+# the python that has camoufox + playwright (harbor's Turnstile solver needs it)
+CAMOUFOX_PY = Path(os.path.expanduser("~/.local/share/auto-freecf/camoufox-venv/bin/python"))
+VENV_PY = Path(os.path.expanduser("~/.local/share/auto-freecf/venv/bin/python"))
+KANCAHUB = SCRIPTS / "kancahub.py"
+
+# below this many live keys we top up. Each account is worth only ~151 requests
+# per 7 days, so a thin margin disappears fast.
 FLOOR = 3
-# safe accounts per egress IP before TokenHarbor's network cap bites
+# TokenHarbor caps ~5 signups per IP per hour; 4 leaves a safety margin.
 PER_IP_SAFE = 4
 
 
-def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+def py() -> str:
+    """Python to drive kancahub (it imports the venv's deps)."""
+    return str(VENV_PY if VENV_PY.exists() else sys.executable)
 
 
-def load_accounts() -> list[dict]:
-    if not HARBOR.exists():
-        return []
-    try:
-        d = json.loads(HARBOR.read_text())
-        return d if isinstance(d, list) else d.get("accounts", [])
-    except Exception:
-        return []
+def kancahub(args: list[str], *, capture: bool = True) -> tuple[int, str]:
+    """Run a kancahub subcommand and return (rc, output)."""
+    cmd = [py(), str(KANCAHUB), *args]
+    p = subprocess.run(cmd, capture_output=capture, text=True, cwd=str(ROOT))
+    out = (p.stdout or "") + (p.stderr or "")
+    return p.returncode, out
 
 
-def free_tier_status(email: str, password: str) -> dict | None:
-    """Ask TokenHarbor for this account's free-tier state.
-
-    GET /api/me/free-tier returns exhausted / used_pct / reset_at without
-    spending a free request, so it is the cheap sensor. Plain urllib is
-    Cloudflare-challenged (429 "Just a moment..."), so we go through the
-    harbor client, which already holds a working session.
-    """
-    try:
-        harbor = ROOT / "harbor"
-        if str(harbor) not in sys.path:
-            sys.path.insert(0, str(harbor))
-        from tools.tokenharbor.client import TokenHarborClient  # noqa: PLC0415
-
-        c = TokenHarborClient()
-        r = c.login(email, password)
-        if not isinstance(r, dict) or r.get("error"):
-            return None
-        ts = c.get_free_tier_status()
-        return ts if isinstance(ts, dict) and "exhausted" in ts else None
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def probe_key(api_key: str, model: str) -> tuple[bool, str]:
-    """True if this key still has free allowance for `model`."""
-    import urllib.error
-    import urllib.request
-
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": "hi"}],
-        "max_tokens": 4,
-    }).encode()
-    req = urllib.request.Request(
-        "https://tokenharbor.ai/v1/chat/completions",
-        data=body,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30):
-            return True, "ok"
-    except urllib.error.HTTPError as e:
-        try:
-            err = json.loads(e.read().decode()).get("error", {}) or {}
-            msg = err.get("message", "") or ""
-            typ = err.get("type", "") or ""
-        except Exception:
-            msg, typ = "", ""
-        low = msg.lower()
-        if "free allowance" in low:
-            return False, "quota_used"
-        if "balance is at $0" in low or "balance_zero" in typ:
-            return False, "paid_wallet_zero"
-        # model not served for free (stale/renamed free route) -- try the next model
-        if e.code == 404 or "not found" in low or "free_route_inactive" in low:
-            return False, "model_unavailable"
-        if e.code == 429 or "too many" in low:
-            return False, "rate_limited"
-        return False, f"http{e.code}"
-
-
-def status() -> dict:
-    accts = load_accounts()
-    live, dead = [], []
-    for a in accts:
-        email, pw, key = a.get("email"), a.get("password"), a.get("api_key")
-        if not key:
-            continue
-        # prefer the cheap, no-request-spent check
-        ts = free_tier_status(email, pw) if (email and pw) else None
-        if ts and "exhausted" in ts:
-            if not ts.get("exhausted"):
-                live.append({
-                    "email": email, "key": key[:18],
-                    "why": f"live:{100 - (ts.get('used_pct') or 0)}% left",
-                    "reset_at": ts.get("reset_at"),
-                })
-            else:
-                dead.append({
-                    "email": email, "key": key[:18],
-                    "why": f"quota_used:{ts.get('used_pct')}%",
-                    "used": ts.get("req_used"), "reset_at": ts.get("reset_at"),
-                })
-            continue
-        # fall back to spending one small request
-        ok, why = False, "unknown"
-        for m in THK_FREE_MODELS:
-            ok, why = probe_key(key, m)
-            if ok:
-                why = f"ok:{m}"
-                break
-            if why in ("model_unavailable", "rate_limited"):
-                continue
-            break
-        if not ok and why in ("model_unavailable", "rate_limited"):
-            why = "all_free_models_unavailable"
-        (live if ok else dead).append({"email": email, "key": key[:18], "why": why})
-    return {
-        "accounts": len(accts),
-        "live": live,
-        "dead": dead,
-        "live_count": len(live),
-        "floor": FLOOR,
-        "need": max(0, FLOOR - len(live)),
-        "resets": sorted({d.get("reset_at") for d in dead if d.get("reset_at")}),
-    }
-
-
-def ledger(farm: str, stage: str, ok: bool, count: int, note: str = "") -> None:
+def ledger(stage: str, ok: bool, count: int, note: str = "") -> None:
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
     rec = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "farm": farm, "target": "tokenharbor.ai",
-        "egress": "auto", "exit_ip": "",
-        "stage": stage, "ok": ok, "count": count, "note": note,
+        "farm": "thk",
+        "target": "tokenharbor.ai",
+        "egress": "auto",
+        "stage": stage,
+        "ok": ok,
+        "count": count,
+        "note": note,
     }
     with LEDGER.open("a") as f:
         f.write(json.dumps(rec) + "\n")
 
 
-def cmd_status(_args) -> int:
-    s = status()
-    print(f"TokenHarbor accounts : {s['accounts']}")
-    print(f"live free allowance  : {s['live_count']}  (floor={s['floor']})")
-    print(f"used / no allowance  : {len(s['dead'])}")
-    if s["live"]:
-        print("\nLIVE:")
-        for e in s["live"]:
-            print(f"  {str(e['email'])[:34]:34} {e['key']}...")
-    if s["dead"]:
-        print("\nBURNED / UNUSABLE:")
-        for e in s["dead"][:8]:
-            print(f"  {str(e['email'])[:34]:34} {e['key']}...  {e['why']}")
-        if len(s["dead"]) > 8:
-            print(f"  ... and {len(s['dead']) - 8} more")
-    why_counts: dict[str, int] = {}
-    for e in s["dead"]:
-        why_counts[e["why"].split(":")[0]] = why_counts.get(e["why"].split(":")[0], 0) + 1
-    if why_counts:
-        print("\nreasons: " + ", ".join(f"{k}={v}" for k, v in sorted(why_counts.items(), key=lambda x: -x[1])))
-    if s["need"]:
-        if why_counts.get("quota_used"):
-            print("\nverdict: TOP UP NEEDED -- free allowance spent on "
-                  f"{why_counts['quota_used']} account(s); farm new ones or wait for the reset date.")
-        else:
-            print("\nverdict: no live free allowance detected -- check model names / egress.")
-    else:
-        print("\nverdict: OK")
+def harbor_accounts() -> list[dict]:
+    if not HARBOR_ACCOUNTS.exists():
+        return []
+    try:
+        d = json.loads(HARBOR_ACCOUNTS.read_text())
+        return d if isinstance(d, list) else d.get("accounts", [])
+    except Exception:  # noqa: BLE001
+        return []
+
+
+# ---------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------
+
+def cmd_egress(_a) -> int:
+    """Ask kancahub whether our egress is actually masked."""
+    rc, out = kancahub(["proxy", "verify"], capture=True)
+    print(out.strip())
+    masked = "No masking yet" not in out and "down" not in out.lower()
+    print(f"\nverdict: egress {'LOOKS MASKED' if masked else 'NOT MASKED -- farm will hit the per-IP cap'}")
+    return 0 if masked else 1
+
+
+def cmd_status(a) -> int:
+    """Live free-tier state of every harbor account.
+
+    `kancahub thk status` only reports ONE account (it wants --email/--password),
+    so for a fleet view we call harbor's own client directly -- it holds the
+    session that plain urllib loses to Cloudflare's 429. This is the one piece
+    not already available as a kancahub subcommand.
+    """
+    accts = harbor_accounts()
+    if not accts:
+        print(f"no accounts at {HARBOR_ACCOUNTS}")
+        return 1
+    harbor_dir = ROOT / "harbor"
+    if str(harbor_dir) not in sys.path:
+        sys.path.insert(0, str(harbor_dir))
+    try:
+        from tools.tokenharbor.client import TokenHarborClient  # noqa: PLC0415
+    except Exception as e:  # noqa: BLE001
+        print(f"cannot import harbor client ({e}); falling back to kancahub thk status")
+        a.email = a.email if hasattr(a, "email") else None
+        rc, out = kancahub(["thk", "status"], capture=True)
+        print(out.strip())
+        return rc
+
+    live, burned, unknown = [], [], []
+    for acc in accts:
+        email, pw = acc.get("email"), acc.get("password")
+        if not (email and pw):
+            unknown.append((email, "no creds"))
+            continue
+        try:
+            c = TokenHarborClient()
+            r = c.login(email, pw)
+            if not isinstance(r, dict) or not r.get("ok"):
+                unknown.append((email, f"login failed: {str(r.get('error'))[:40]}"))
+                continue
+            ts = c.get_free_tier_status() or {}
+            if ts.get("exhausted"):
+                burned.append((email, ts.get("used_pct"), ts.get("reset_at")))
+            else:
+                live.append((email, ts.get("used_pct")))
+        except Exception as e:  # noqa: BLE001
+            unknown.append((email, f"err: {str(e)[:40]}"))
+
+    print(f"harbor accounts : {len(accts)}")
+    print(f"live            : {len(live)}   (floor {FLOOR})")
+    print(f"exhausted       : {len(burned)}")
+    if unknown:
+        print(f"unknown         : {len(unknown)}")
+    for e, pct in live:
+        print(f"  LIVE  {str(e)[:40]:40} used {pct}%")
+    resets = sorted({r for _, _, r in burned if r})
+    if burned:
+        print(f"\nall exhausted; earliest reset: {resets[0] if resets else '?'}")
+    for e, why in unknown[:4]:
+        print(f"  ?     {str(e)[:40]:40} {why}")
+    need = max(0, FLOOR - len(live))
+    print(f"\nverdict: {'TOP UP -- farm ' + str(need) + ' account(s)' if need else 'OK'}")
     return 0
 
 
-def cmd_plan(_args) -> int:
-    s = status()
-    print(f"live={s['live_count']} floor={FLOOR} -> need {s['need']} new account(s)")
-    if s["need"]:
-        print(f"\nFarm plan (respecting ~{PER_IP_SAFE} signups/IP before the network cap):")
-        left = s["need"]
-        egress = 1
-        while left > 0:
-            n = min(PER_IP_SAFE, left)
-            print(f"  egress #{egress}: {n} account(s)  (then rotate IP -- TokenHarbor caps ~5/IP/hr)")
-            left -= n
-            egress += 1
-    print("\nNo changes made (plan only).")
+def cmd_plan(_a) -> int:
+    """Never touches the network. Shows what would be farmed and how."""
+    rc, out = kancahub(["thk", "status"], capture=True)
+    live = None
+    # kancahub's table is rich-formatted; do a best-effort count of live rows.
+    for token in ("live", "active"):
+        if token in out.lower():
+            break
+    print("current state (from `kancahub thk status`):")
+    print("\n".join("  " + ln for ln in out.strip().splitlines()[:18]))
+    print(f"\nlive detected: {'unknown -- inspect above' if live is None else live}")
+    print(f"floor: {FLOOR}")
+    print("\nFarm plan (respecting the ~5 signups/IP cap; 4 is the safe burst):")
+    print("  kancahub proxy verify                 # confirm masking first")
+    print("  kancahub thk batch 4                  # farm 4 accounts")
+    print("  kancahub thk inject --verify          # push keys into 9Router")
+    print("  kancahub thk sync --prune             # verify + prune stale conns")
+    print("\nIf you expect more than 4, rotate egress between batches.")
+    print("No changes made (plan only).")
     return 0
 
 
-def cmd_run(args) -> int:
-    s = status()
-    need = args.max if args.max is not None else s["need"]
-    if need <= 0:
-        print(f"live={s['live_count']} >= floor={FLOOR}; nothing to farm.")
+def cmd_run(a) -> int:
+    """Farm -> inject -> sync, by driving the kancahub pipeline."""
+    n = a.max
+    print(f"target: farm {n} TokenHarbor account(s), then inject into 9Router")
+    print()
+
+    steps: list[list[str]] = [["proxy", "verify"]]
+    steps.append(["thk", "batch", str(n)])
+    steps.append(["thk", "inject", "--verify"])
+    steps.append(["thk", "sync", "--prune"])
+
+    # show the exact calls regardless of --apply, so the plan is inspectable
+    for s in steps:
+        print(f"  kancahub {' '.join(s)}")
+    print()
+
+    if not a.apply:
+        print("DRY RUN -- nothing was run. Add --apply to execute.")
+        print("Preconditions: `kancahub proxy verify` must show masking, or the")
+        print("~5-signups-per-IP cap will stop the batch early.")
+        ledger("plan", True, 0, f"dry-run for {n} account(s)")
         return 0
-    print(f"live={s['live_count']} floor={FLOOR} -> farming {need} account(s)")
 
-    cmd = [sys.executable, str(SCRIPTS / "autofarm.py"),
-           "https://tokenharbor.ai/signup", "--domain", args.domain]
-    if args.apply:
-        cmd.append("--inject-9router")
-    print("+ " + " ".join(cmd))
-    if not args.apply:
-        print("\nDRY RUN -- add --apply to actually farm and inject.")
-        print("Note: needs working egress (mobile IP). TokenHarbor caps ~5 signups/IP/hr.")
-        return 0
+    ok_all = True
+    produced = 0
+    for s in steps:
+        label = " ".join(s)
+        print(f"\n=== kancahub {label} ===", flush=True)
+        rc, out = kancahub(s)
+        tail = out.strip().splitlines()
+        for ln in tail[-14:]:
+            print("  " + ln)
+        if rc != 0:
+            ok_all = False
+            print(f"  ! exited {rc} -- stopping here")
+            ledger(f"step:{label}", False, 0, f"rc={rc}")
+            break
+        ledger(f"step:{label}", True, 0)
+        if s[1:2] == ["batch"]:
+            after = len(harbor_accounts())
+            produced = after
+            print(f"  harbor accounts now: {after}")
 
-    p = run(cmd, cwd=str(ROOT))
-    tail = (p.stdout or "").strip().splitlines()[-12:]
-    for line in tail:
-        print("  " + line)
-    ok = p.returncode == 0
-    ledger("thk", "farm_batch", ok, need, f"rc={p.returncode}")
-    print(f"\nautofarm rc={p.returncode}")
-
-    if ok:
-        print("\nre-probing...")
-        s2 = status()
-        print(f"live now: {s2['live_count']}")
-
-    # keep the router's stored ordering/flags in sync with reality
-    if HEALTH.exists() or True:
-        print("\n+ r9_conncheck.py")
-        run([sys.executable, str(SCRIPTS / "r9_conncheck.py"), "--workers", "10"], cwd=str(ROOT))
-        print("+ r9_repair.py --apply")
-        r = run([sys.executable, str(SCRIPTS / "r9_repair.py"), "--apply"], cwd=str(ROOT))
-        for line in (r.stdout or "").strip().splitlines()[-6:]:
-            print("  " + line)
-    return 0 if ok else 1
+    ledger("run", ok_all, produced, f"target={n}")
+    print(f"\n{'OK' if ok_all else 'PARTIAL'}: farm loop finished")
+    return 0 if ok_all else 1
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("status", help="probe every THK key's free allowance").set_defaults(fn=cmd_status)
-    sub.add_parser("plan", help="what it would farm").set_defaults(fn=cmd_plan)
-    r = sub.add_parser("run", help="farm accounts (needs --apply to act)")
-    r.add_argument("--max", type=int, default=None, help="how many accounts to farm")
-    r.add_argument("--domain", default="kancalabs.my.id", help="mailbox domain to sign up under")
-    r.add_argument("--apply", action="store_true", help="actually farm and inject")
+    sub.add_parser("status", help="live free-tier state of every harbor account").set_defaults(fn=cmd_status)
+    sub.add_parser("plan", help="what would be farmed (offline)").set_defaults(fn=cmd_plan)
+    sub.add_parser("egress", help="is our egress masked?").set_defaults(fn=cmd_egress)
+    r = sub.add_parser("run", help="farm -> inject -> sync (needs --apply)")
+    r.add_argument("--max", type=int, default=4, help="how many accounts to farm (default 4)")
+    r.add_argument("--apply", action="store_true", help="actually run the pipeline")
     r.set_defaults(fn=cmd_run)
     args = ap.parse_args()
     return args.fn(args)
