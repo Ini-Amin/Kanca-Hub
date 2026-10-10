@@ -7,7 +7,8 @@
     "bg_h": 300,
     "drag_left_px": "206px",
     "solved": true,
-    "puzzle": 1
+    "puzzle": 1,
+    "gap_x_vision": 167
   },
   {
     "stamp": "1791557266",
@@ -17,7 +18,8 @@
     "bg_h": 300,
     "drag_left_px": "223px",
     "solved": true,
-    "puzzle": 2
+    "puzzle": 2,
+    "gap_x_vision": 194
   },
   {
     "stamp": "1791557287",
@@ -27,7 +29,8 @@
     "bg_h": 300,
     "drag_left_px": "213px",
     "solved": true,
-    "puzzle": 3
+    "puzzle": 3,
+    "gap_x_vision": 177
   },
   {
     "stamp": "1791557314",
@@ -37,7 +40,8 @@
     "bg_h": 300,
     "drag_left_px": "246px",
     "solved": true,
-    "puzzle": 4
+    "puzzle": 4,
+    "gap_x_vision": 234
   },
   {
     "stamp": "1791557363",
@@ -47,7 +51,8 @@
     "bg_h": 300,
     "drag_left_px": "228px",
     "solved": true,
-    "puzzle": 5
+    "puzzle": 5,
+    "gap_x_vision": 202
   },
   {
     "stamp": "1791600089",
@@ -57,7 +62,8 @@
     "bg_h": 300,
     "drag_left_px": "248px",
     "solved": true,
-    "puzzle": 1
+    "puzzle": 1,
+    "gap_x_vision": 167
   },
   {
     "stamp": "1791600110",
@@ -67,7 +73,8 @@
     "bg_h": 300,
     "drag_left_px": "217px",
     "solved": true,
-    "puzzle": 2
+    "puzzle": 2,
+    "gap_x_vision": 194
   },
   {
     "stamp": "1791600129",
@@ -77,7 +84,8 @@
     "bg_h": 300,
     "drag_left_px": "188px",
     "solved": true,
-    "puzzle": 3
+    "puzzle": 3,
+    "gap_x_vision": 177
   },
   {
     "stamp": "1791600153",
@@ -87,7 +95,8 @@
     "bg_h": 300,
     "drag_left_px": "219px",
     "solved": true,
-    "puzzle": 4
+    "puzzle": 4,
+    "gap_x_vision": 234
   },
   {
     "stamp": "1791600180",
@@ -97,7 +106,8 @@
     "bg_h": 300,
     "drag_left_px": "219px",
     "solved": true,
-    "puzzle": 5
+    "puzzle": 5,
+    "gap_x_vision": 202
   },
   {
     "stamp": "1791600199",
@@ -107,7 +117,8 @@
     "bg_h": 300,
     "drag_left_px": "248px",
     "solved": true,
-    "puzzle": 6
+    "puzzle": 6,
+    "gap_x_vision": 237
   },
   {
     "stamp": "1791600218",
@@ -117,7 +128,8 @@
     "bg_h": 300,
     "drag_left_px": "219px",
     "solved": true,
-    "puzzle": 7
+    "puzzle": 7,
+    "gap_x_vision": 184
   },
   {
     "stamp": "1791600240",
@@ -127,7 +139,8 @@
     "bg_h": 300,
     "drag_left_px": "218px",
     "solved": true,
-    "puzzle": 8
+    "puzzle": 8,
+    "gap_x_vision": 140
   },
   {
     "stamp": "1791600267",
@@ -137,7 +150,8 @@
     "bg_h": 300,
     "drag_left_px": "217px",
     "solved": true,
-    "puzzle": 9
+    "puzzle": 9,
+    "gap_x_vision": 187
   },
   {
     "stamp": "1791600290",
@@ -147,7 +161,8 @@
     "bg_h": 300,
     "drag_left_px": "206px",
     "solved": true,
-    "puzzle": 10
+    "puzzle": 10,
+    "gap_x_vision": 187
   },
   {
     "stamp": "1791600309",
@@ -157,7 +172,8 @@
     "bg_h": 300,
     "drag_left_px": "192px",
     "solved": true,
-    "puzzle": 11
+    "puzzle": 11,
+    "gap_x_vision": 237
   },
   {
     "stamp": "1791600332",
@@ -167,6 +183,7 @@
     "bg_h": 300,
     "drag_left_px": "192px",
     "solved": true,
-    "puzzle": 12
+    "puzzle": 12,
+    "gap_x_vision": 187
   }
 ]
