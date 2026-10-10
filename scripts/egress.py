@@ -354,6 +354,16 @@ def auto_egress(
             elif verbose:
                 print(f"  [egress] • WARP is up but probe returned HTTP {st} for {target_url}", file=sys.stderr)
 
+    # 3a'. VPN Gate relay (system-wide OpenVPN, ~100 free IPs). Opt-in: it replaces
+    #      the default route. ponytail: Cloudflare gates only, never Google reCAPTCHA.
+    if os.environ.get("KANCAHUB_VPNGATE") == "1":
+        import vpngate
+        if vpngate.up(os.environ.get("KANCAHUB_VPNGATE_COUNTRY"), 0) == 0:
+            st = probe_status(target_url, proxy=None, timeout=10.0)
+            if 200 <= st < 400 and not is_blocked(st):
+                return None, None, "vpngate"
+            vpngate.down()
+
     # 3b. PetaniProxy residential pool
     petani_res = Path.home() / "petani-proxy" / "output" / "webshare_residential.txt"
     if not petani_res.exists() or petani_res.stat().st_size == 0:
