@@ -30,7 +30,7 @@ TIMEOUT = 25
 
 # a cheap model per provider family to probe with (first that the provider serves)
 PROBE_MODEL = {
-    "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a": "deepseek-v4.1-flash",
+    "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a": "deepseek-v4-flash:free",
     "antigravity": "gemini-3.5-flash-low",
 }
 
