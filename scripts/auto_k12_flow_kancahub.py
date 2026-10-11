@@ -27,6 +27,7 @@ import re
 import random
 import string
 import urllib.request
+from pathlib import Path
 from DrissionPage import Chromium, ChromiumOptions
 
 try:
