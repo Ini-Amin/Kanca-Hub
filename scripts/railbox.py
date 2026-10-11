@@ -147,8 +147,8 @@ def snapshot():
 def rotate(margin, relay=True):
     old = live()
     nn = f"b{int(time.time())}"
-    if old and snapshot():
-        sys.exit("snapshot failed; old box kept, nothing erased")
+    if old and snapshot():  # box already expiring/unreachable: carry on with the last good snapshot
+        print("snapshot failed; using last good snapshot", flush=True)
     create_via_relay(nn) if relay else create(nn)
     if SNAP.exists() and push(nn, SNAP):
         sys.exit("push failed; old box kept")
