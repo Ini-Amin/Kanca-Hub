@@ -23,7 +23,7 @@ ROOT = Path.home() / ".config" / "auto-freecf" / "railbox"
 STATE = ROOT / "boxes.json"
 SNAP = Path.home() / ".local" / "share" / "auto-freecf" / "railbox-snapshot"
 REPO = Path(__file__).resolve().parent.parent
-EXCLUDE = [".git/objects", "rea", "Sider_CAPTCHA_Solver", "PloxCardGen", "node_modules", "__pycache__", "*.pyc"]
+EXCLUDE = ["*accounts*.json", "*.sqlite", ".env", "*.key", "secrets", ".git/objects", "rea", "Sider_CAPTCHA_Solver", "PloxCardGen", "node_modules", "__pycache__", "*.pyc"]
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[a-zA-Z]|\x1b[()][0-9A-B]")
 
 
