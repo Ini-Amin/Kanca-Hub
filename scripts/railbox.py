@@ -36,8 +36,8 @@ def save(d):
 
 
 def ssh_base(name):
-    return ["ssh", "-i", str(ROOT / name / "key"), "-o", "IdentitiesOnly=yes",
-            "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=20", "railway.new"]
+    return ["ssh", "-T", "-i", str(ROOT / name / "key"), "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=20", "-o", "LogLevel=ERROR", "railway.new"]
 
 
 def create(name):
