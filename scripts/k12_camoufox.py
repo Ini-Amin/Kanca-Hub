@@ -308,7 +308,8 @@ def poll_mail(jwt: str, provider: str | None = None) -> list[dict]:
 
 
 def school_otp_via_subprocess(timeout: int = 180, cwd: Path | None = None,
-                              exclude: list[str] | None = None) -> str | None:
+                              exclude: list[str] | None = None,
+                              cutoff: float | None = None) -> str | None:
     """Read the next OpenAI OTP from the real school mailbox.
 
     Shells out to scripts/school_mail_browser.py, which drives a nodriver Chrome
@@ -317,15 +318,21 @@ def school_otp_via_subprocess(timeout: int = 180, cwd: Path | None = None,
     `school_mail_browser.py login`) once by hand to establish it, and re-run it
     whenever Microsoft expires it (MFA cannot be completed unattended).
     The child prints `[school] OTP ...: <code>` and we scrape the 6 digits back.
+    `cutoff` (epoch seconds) marks the signup trigger: mails older than it are
+    other triggers' codes and are ignored by the reader.
     """
     if not SCHOOL_MAIL_SCRIPT.exists():
         print(f"      ✗ school_mail_browser.py not found at {SCHOOL_MAIL_SCRIPT}", flush=True)
         return None
 
+
+
     py = _school_mail_python()
     cmd = [py, str(SCHOOL_MAIL_SCRIPT), "otp", "--timeout", str(int(timeout))]
     if exclude:
         cmd += ["--exclude", ",".join(str(c) for c in exclude)]
+    if cutoff:
+        cmd += ["--cutoff", str(cutoff)]
     print(f"      [school] $ {' '.join(cmd)}", flush=True)
     try:
         proc = subprocess.run(
@@ -359,11 +366,13 @@ def _blob(m: dict) -> str:
 
 
 async def wait_for_otp(jwt: str, timeout: int = 180, provider: str | None = None,
-                       exclude: list[str] | None = None) -> str | None:
+                       exclude: list[str] | None = None,
+                       cutoff: float | None = None) -> str | None:
     prov = (provider or MAIL_PROVIDER or "relay").strip().lower()
     if prov == "school":
         print(f"      [school] reading OTP from the real M365 inbox (max {timeout}s)…", flush=True)
-        return await asyncio.to_thread(school_otp_via_subprocess, timeout, None, exclude or [])
+        return await asyncio.to_thread(school_otp_via_subprocess, timeout, None,
+                                       exclude or [], cutoff)
     print(f"      [mail] polling relay for OTP (max {timeout}s)…", flush=True)
     start = time.time()
     seen = set()
@@ -858,6 +867,7 @@ async def run_flow(
             result["error"] = "email_input_not_found"
             return result
         await asyncio.sleep(1)
+        signup_triggered_at = time.time()  # reader ignores mails older than this
         await click_continue(page)
         await asyncio.sleep(4)
 
@@ -887,7 +897,14 @@ async def run_flow(
         print(f"[4/6] Waiting for OTP from "
               f"{'the school mailbox (binus.ac.id)' if prov == 'school' else 'relay'}…", flush=True)
         used_otp: list[str] = []
-        otp = await wait_for_otp(jwt, timeout=180, provider=prov, exclude=used_otp)
+        # Fresh signup: OpenAI sends exactly ONE code for this brand-new
+        # plus-address, but the inbox is shared with older triggers' mails.
+        # The reader gets signup_triggered_at as a cutoff so it never returns
+        # a stale code; retries (same flow) keep the exclude guard.
+        first_wait = prov == "school"
+        otp = await wait_for_otp(jwt, timeout=180, provider=prov,
+                                 exclude=[] if first_wait else used_otp,
+                                 cutoff=signup_triggered_at if first_wait else None)
         if otp:
             used_otp.append(otp)
             otp_sel = None
