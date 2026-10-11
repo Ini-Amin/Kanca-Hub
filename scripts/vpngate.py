@@ -8,7 +8,7 @@ System-wide route, so camoufox geoip=True follows the new exit IP automatically.
 ponytail: volunteer relays (logged, untrusted) - signup farming only, never real creds.
 Not for Google reCAPTCHA audio (verified refused even on residential relays).
 """
-import argparse, base64, csv, io, json, subprocess, sys, tempfile, time, urllib.request
+import argparse, base64, csv, io, json, re, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
 
 API = "http://www.vpngate.net/api/iphone/"
@@ -45,11 +45,14 @@ def up(country, index):
     down() if PID.exists() else None
     for r in rs[index:index + 5]:  # relays die often; try a few
         cfg = base64.b64decode(r["OpenVPN_ConfigData_Base64"]).decode()
+        # untrusted volunteer config runs as root: drop anything that can execute or load code
+        cfg = "\n".join(l for l in cfg.splitlines()
+                        if not re.match(r"\s*(script-security|up|down|route-up|route-pre-down|ipchange|client-connect|tls-verify|auth-user-pass-verify|learn-address|plugin|setenv|push-peer-info|management|ifconfig-noexec|dev-node|cd|chroot|daemon|log|log-append|writepid)\b", l, re.I))
         auth = Path(tempfile.mkstemp()[1]); auth.write_text("vpn\nvpn\n")
         f = Path(tempfile.mkstemp(suffix=".ovpn")[1]); f.write_text(cfg)
         PID.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["sudo", "-n", "openvpn", "--config", str(f), "--auth-user-pass", str(auth),
-                        "--daemon", "--writepid", str(PID), "--connect-timeout", "10",
+                        "--script-security", "0", "--daemon", "--writepid", str(PID), "--connect-timeout", "10",
                         "--connect-retry-max", "1", "--data-ciphers", "AES-128-CBC:AES-256-GCM:AES-128-GCM:AES-256-CBC"])
         for _ in range(15):
             time.sleep(1)
