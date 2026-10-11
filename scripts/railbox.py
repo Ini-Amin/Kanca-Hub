@@ -126,15 +126,34 @@ def create_via_relay(name, tries=4):
     sys.exit("no relay produced a box")
 
 
+def snapshot():
+    """Pull the live box into SNAP (atomic: tmp dir then swap) so expiry or a crash never loses work."""
+    n = live()
+    if not n:
+        return 1
+    tmp = SNAP.with_name(SNAP.name + ".tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    if pull(n, tmp):
+        shutil.rmtree(tmp, ignore_errors=True)
+        return 1
+    shutil.rmtree(SNAP, ignore_errors=True); tmp.rename(SNAP)
+    return 0
+
+
 def rotate(margin, relay=True):
     old = live()
     nn = f"b{int(time.time())}"
-    if old:
-        if pull(old, SNAP): sys.exit("pull failed; old box kept, nothing erased")
+    if old and snapshot():
+        sys.exit("snapshot failed; old box kept, nothing erased")
     create_via_relay(nn) if relay else create(nn)
+    if SNAP.exists() and push(nn, SNAP):
+        sys.exit("push failed; old box kept")
     if old:
-        if push(nn, SNAP): sys.exit("push failed; old box kept")
         wipe(old)
+    d = load()
+    for k in [k for k, b in d.items() if b["expires"] < time.time() and k != nn]:  # forget expired boxes + keys
+        shutil.rmtree(ROOT / k, ignore_errors=True); d.pop(k)
+    save(d)
     return nn
 
 
@@ -149,11 +168,16 @@ def main():
             print(n, f"{(b['expires']-time.time())/60:.0f} min left", b["claim"], b["preview"])
     elif a.cmd == "rotate": rotate(a.margin, not a.no_relay)
     elif a.cmd == "daemon":
+        last = 0
         while True:
-            n = live()
-            if not n or load()[n]["expires"] - time.time() <= a.margin * 60:
-                try: rotate(a.margin, not a.no_relay)
-                except SystemExit as e: print("rotate:", e)
+            try:
+                n = live()
+                if not n or load()[n]["expires"] - time.time() <= a.margin * 60:
+                    rotate(a.margin, not a.no_relay)
+                elif time.time() - last > 600:
+                    snapshot(); last = time.time()
+            except (Exception, SystemExit) as e:  # noqa: BLE001 - daemon must survive any failure
+                print("daemon:", e, flush=True); time.sleep(60)
             time.sleep(30)
     else:
         n = a.name or live() or sys.exit("no live box")
