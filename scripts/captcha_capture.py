@@ -47,6 +47,13 @@ _IMGS = """() => {
 }"""
 
 
+def _zacct():
+    """ZCode login from ZB_EMAIL/ZB_PW or ~/.config/auto-freecf/zcode_account.json (never committed)."""
+    import json, os
+    p = os.path.expanduser("~/.config/auto-freecf/zcode_account.json")
+    d = json.load(open(p)) if os.path.exists(p) else {}
+    return os.environ.get("ZB_EMAIL") or d.get("email", ""), os.environ.get("ZB_PW") or d.get("password", "")
+
 async def _puzzle(page) -> dict | None:
     """Open the widget and wait for the user to solve it; return a label."""
     for sel in ("#aliyunCaptcha-captcha-body", "#aliyunCaptcha-captcha-wrapper"):
@@ -105,7 +112,7 @@ async def main_async(puzzles: int) -> None:
                 await page.get_by_text("Sign up", exact=True).last.click()
                 await page.wait_for_timeout(2500)
                 await page.fill('input[type="email"]', box.address)
-                await page.fill('input[type="password"]', "Zx9!mqR7pLs2Vw")
+                await page.fill('input[type="password"]', _zacct()[1])
             except Exception as e:  # noqa: BLE001
                 print(f"[{n}] setup error: {e}")
             label = await _puzzle(page)
