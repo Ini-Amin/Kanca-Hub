@@ -36,9 +36,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 STATE = Path.home() / ".config" / "auto-freecf" / "mobile_saving.json"
 
 
-def _adb(*args: str, timeout: int = 20) -> str:
+def _adb(*args: str, serial: str | None = None, timeout: int = 20) -> str:
     try:
-        return subprocess.run(["adb", *args], capture_output=True, text=True, timeout=timeout).stdout
+        cmd = ["adb"] + (["-s", serial] if serial else []) + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
     except Exception:
         return ""
 
