@@ -222,6 +222,13 @@ class _Oracle:
                 "err": int(o.get("nerr") or 0), "last": o.get("last"), "net": len(self.events)}
 
 
+def _zacct():
+    """ZCode login from ZB_EMAIL/ZB_PW or ~/.config/auto-freecf/zcode_account.json (never committed)."""
+    import json, os
+    p = os.path.expanduser("~/.config/auto-freecf/zcode_account.json")
+    d = json.load(open(p)) if os.path.exists(p) else {}
+    return os.environ.get("ZB_EMAIL") or d.get("email", ""), os.environ.get("ZB_PW") or d.get("password", "")
+
 async def _install_hook(page) -> None:
     try:
         await page.add_init_script(_HOOK_PRE)
@@ -270,7 +277,7 @@ async def _fill_form(page, box) -> None:
             pass
     try:
         await page.fill('input[type="email"]', box.address, timeout=8000)
-        await page.fill('input[type="password"]', "Zx9!mqR7pLs2Vw", timeout=8000)
+        await page.fill('input[type="password"]', _zacct()[1], timeout=8000)
     except Exception:  # noqa: BLE001
         pass
 

@@ -170,7 +170,7 @@ def cmd_mint(a):
         print("minting", email, "->", out)
         rc = subprocess.call([PY_BROWSER, MINT], env=env)
         print("mint rc=%s for %s (%s)" % (rc, email, "ok" if os.path.exists(out) else "FAILED"))
-        if os.path.exists(out) and email == "b3mnvlqbvf@kancalabs.biz.id":
+        if os.path.exists(out) and email == os.environ.get("ZB_EMAIL"):
             # keep legacy path in sync (standalone tools read it)
             write("/tmp/opencode/zc_jwt.txt", read(out).strip() + "\n")
 
