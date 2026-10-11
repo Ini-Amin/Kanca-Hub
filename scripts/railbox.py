@@ -16,7 +16,7 @@ then plain ssh/tar pipes work; 60 min build window; max 3 boxes per IP per day.
 ponytail: unclaimed boxes live 60 min, so "forever" = rotation, capped at 3/day/IP
 (run it from different egress, e.g. `vpngate.py up`); claiming (account) is the real fix.
 """
-import argparse, fcntl, json, os, pty, re, select, shutil, struct, subprocess, sys, termios, time
+import argparse, fcntl, json, os, pty, re, select, shutil, socket, struct, subprocess, sys, termios, time
 from pathlib import Path
 
 ROOT = Path.home() / ".config" / "auto-freecf" / "railbox"
@@ -32,7 +32,9 @@ def load():
 
 
 def save(d):
-    ROOT.mkdir(parents=True, exist_ok=True); STATE.write_text(json.dumps(d, indent=1))
+    ROOT.mkdir(parents=True, exist_ok=True)
+    tmp = STATE.with_suffix(".tmp"); tmp.write_text(json.dumps(d, indent=1))
+    os.replace(tmp, STATE)  # atomic: a power cut mid-write never leaves a half file
 
 
 def ssh_base(name):
@@ -172,10 +174,28 @@ def rotate(margin, relay=True):
     return nn
 
 
+def online(host="railway.new", port=22):
+    try:
+        socket.create_connection((host, port), 5).close(); return True
+    except OSError:
+        return False
+
+
+def battery_low(pct=15, root=Path("/sys/class/power_supply")):
+    """True only when discharging at/below pct (a power cut): a desktop without BAT* never counts."""
+    for b in root.glob("BAT*"):
+        try:
+            if (b / "status").read_text().strip() == "Discharging" and int((b / "capacity").read_text()) <= pct:
+                return True
+        except (OSError, ValueError):
+            pass
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["new", "status", "push", "pull", "ssh", "wipe", "rotate", "daemon"])
-    ap.add_argument("rest", nargs="*"); ap.add_argument("--name"); ap.add_argument("--margin", type=int, default=10); ap.add_argument("--no-relay", action="store_true")
+    ap.add_argument("rest", nargs="*"); ap.add_argument("--name"); ap.add_argument("--margin", type=int, default=10); ap.add_argument("--no-relay", action="store_true"); ap.add_argument("--min-battery", type=int, default=15)
     a = ap.parse_args()
     if a.cmd == "new": create(a.name or f"b{int(time.time())}")
     elif a.cmd == "status":
@@ -183,9 +203,19 @@ def main():
             print(n, f"{(b['expires']-time.time())/60:.0f} min left", b["claim"], b["preview"])
     elif a.cmd == "rotate": rotate(a.margin, not a.no_relay)
     elif a.cmd == "daemon":
-        last = 0
+        last, saved_low, down = 0, False, False
         while True:
             try:
+                if not online():  # wifi/router down: don't burn relay tries or the 3/day cap
+                    if not down: print("offline; waiting", flush=True)
+                    down = True; time.sleep(30); continue
+                if down: print("back online", flush=True); down = False
+                if battery_low(a.min_battery):  # power cut: save work once, stop creating boxes
+                    if not saved_low:
+                        print("battery low; final snapshot, rotation paused", flush=True)
+                        snapshot(); saved_low = True
+                    time.sleep(60); continue
+                saved_low = False
                 n = live()
                 if not n or load()[n]["expires"] - time.time() <= a.margin * 60:
                     rotate(a.margin, not a.no_relay)
