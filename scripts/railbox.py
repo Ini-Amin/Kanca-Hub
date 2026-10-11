@@ -154,6 +154,12 @@ def rotate(margin, relay=True):
         sys.exit("push failed; old box kept")
     if old:
         wipe(old)
+    if SNAP.exists():  # fresh box has no deps: install them (venv lives outside /app/work, so never in SNAP)
+        try:
+            r = run(nn, "test -f /app/work/scripts/railbox_bootstrap.sh && sh /app/work/scripts/railbox_bootstrap.sh", timeout=900)
+            print("bootstrap rc", r.returncode, flush=True)
+        except subprocess.TimeoutExpired:
+            print("bootstrap timeout", flush=True)
     d = load()
     for k in [k for k, b in d.items() if b["expires"] < time.time() and k != nn]:  # forget expired boxes + keys
         shutil.rmtree(ROOT / k, ignore_errors=True); d.pop(k)
