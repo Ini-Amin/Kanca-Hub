@@ -12,8 +12,15 @@ CDP="http://127.0.0.1:9222"
 CLIENT_ID="client_P8X5CMWmlaRO9gyO-KSqtg"
 REDIRECT_URI="https://zcode.z.ai/app/oauth/login?redirect=zcode://oauth/callback"
 # multi-account: ZB_EMAIL/ZB_PW env or argv[1]/argv[2] (used by scripts/zcode.py mint)
-EMAIL=os.environ.get("ZB_EMAIL") or (sys.argv[1] if len(sys.argv)>1 else 'b3mnvlqbvf@kancalabs.biz.id')
-PW=os.environ.get("ZB_PW") or (sys.argv[2] if len(sys.argv)>2 else 'Zx9!mqR7pLs2Vw')
+def _zacct():
+    """ZCode login from ZB_EMAIL/ZB_PW or ~/.config/auto-freecf/zcode_account.json (never committed)."""
+    import json, os
+    p = os.path.expanduser("~/.config/auto-freecf/zcode_account.json")
+    d = json.load(open(p)) if os.path.exists(p) else {}
+    return os.environ.get("ZB_EMAIL") or d.get("email", ""), os.environ.get("ZB_PW") or d.get("password", "")
+
+EMAIL=(sys.argv[1] if len(sys.argv)>1 else '') or _zacct()[0]
+PW=(sys.argv[2] if len(sys.argv)>2 else '') or _zacct()[1]
 OUT=os.environ.get("ZB_OUT") or "/tmp/opencode/zc_jwt.txt"
 JS="(t)=>{const e=[...document.querySelectorAll('button,a,div,span')].filter(x=>(x.innerText||'').trim()===t&&x.children.length===0);if(e.length){e[e.length-1].click();return true}return false}"
 def exchange(code,state):

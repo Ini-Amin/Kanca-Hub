@@ -24,6 +24,13 @@ sys.path.insert(0, str(SCRIPTS))
 AUTH = "https://chat.z.ai/auth"
 
 
+def _zacct():
+    """ZCode login from ZB_EMAIL/ZB_PW or ~/.config/auto-freecf/zcode_account.json (never committed)."""
+    import json, os
+    p = os.path.expanduser("~/.config/auto-freecf/zcode_account.json")
+    d = json.load(open(p)) if os.path.exists(p) else {}
+    return os.environ.get("ZB_EMAIL") or d.get("email", ""), os.environ.get("ZB_PW") or d.get("password", "")
+
 async def run(*, count: int, out: Path, headless: bool, log=print) -> None:
     import mailboxes as M
     import captcha_slider as CS
@@ -49,7 +56,7 @@ async def run(*, count: int, out: Path, headless: bool, log=print) -> None:
             if nm:
                 await nm.fill("Collector")
             await page.fill('input[type="email"]', box.address)
-            await page.fill('input[type="password"]', "Zx9!mqR7pLs2Vw")
+            await page.fill('input[type="password"]', _zacct()[1])
             await CS._wait_open(page)
 
         await fresh()
