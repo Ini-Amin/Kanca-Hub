@@ -92,14 +92,19 @@ def push(name, src):
 
 def pull(name, dst):
     dst = Path(dst); dst.mkdir(parents=True, exist_ok=True)
-    r = subprocess.Popen(ssh_base(name) + ["tar czf - -C /app/work ."], stdout=subprocess.PIPE)
+    tmp = dst.with_name(dst.name + ".tgz")  # to a file first: a piped tar choked on the ssh stream
     try:
-        t = subprocess.run(["tar", "xzf", "-", "-C", str(dst)], stdin=r.stdout, timeout=300)
-        r.wait(timeout=30)
-    except subprocess.TimeoutExpired:  # a stuck ssh must not freeze the daemon
-        r.kill(); print("pull timeout"); return 1
-    print("pull rc", r.returncode, t.returncode)
-    return r.returncode or t.returncode
+        with open(tmp, "wb") as f:
+            r = subprocess.run(ssh_base(name) + ["tar czf - -C /app/work ."], stdout=f, timeout=300)
+        if r.returncode:
+            print("pull ssh rc", r.returncode); return r.returncode
+        t = subprocess.run(["tar", "xzf", str(tmp), "-C", str(dst)])
+    except subprocess.TimeoutExpired:
+        print("pull timeout"); return 1
+    finally:
+        tmp.unlink(missing_ok=True)
+    print("pull rc", t.returncode)
+    return t.returncode
 
 
 def wipe(name):
