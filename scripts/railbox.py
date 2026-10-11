@@ -9,6 +9,7 @@
   railbox.py wipe [--name N]    erase box files + forget its key
   railbox.py rotate [--margin 10]  pull -> new box -> push -> wipe old
   railbox.py daemon [--margin 10]  rotate forever, ~margin min before expiry
+  (create runs through a VPN Gate relay, transfers run direct; --no-relay to skip)
 
 Facts (railway.com/free-vm): identity = SSH key; box needs a pty ONCE to be created,
 then plain ssh/tar pipes work; 60 min build window; max 3 boxes per IP per day.
@@ -104,12 +105,33 @@ def wipe(name):
     d = load(); d.pop(name, None); save(d); print("wiped", name)
 
 
-def rotate(margin):
+def create_via_relay(name, tries=4):
+    """Create only: a VPN Gate relay is up for the ~5 s create, then dropped, so file
+    transfers go direct and the relay (volunteer-run, logged) never sees our data.
+    Plain ssh reaches the box from any IP (verified), so only creation is IP-capped."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import vpngate
+    for i in range(tries):
+        try:
+            if vpngate.up(None, i * 5) != 0:
+                continue
+            try:
+                return create(name)
+            except SystemExit as e:
+                print("create:", str(e).strip().splitlines()[-1:] or e)
+            finally:
+                vpngate.down()
+        except Exception as e:  # noqa: BLE001
+            print("relay:", e)
+    sys.exit("no relay produced a box")
+
+
+def rotate(margin, relay=True):
     old = live()
     nn = f"b{int(time.time())}"
     if old:
         if pull(old, SNAP): sys.exit("pull failed; old box kept, nothing erased")
-    create(nn)
+    create_via_relay(nn) if relay else create(nn)
     if old:
         if push(nn, SNAP): sys.exit("push failed; old box kept")
         wipe(old)
@@ -119,18 +141,18 @@ def rotate(margin):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["new", "status", "push", "pull", "ssh", "wipe", "rotate", "daemon"])
-    ap.add_argument("rest", nargs="*"); ap.add_argument("--name"); ap.add_argument("--margin", type=int, default=10)
+    ap.add_argument("rest", nargs="*"); ap.add_argument("--name"); ap.add_argument("--margin", type=int, default=10); ap.add_argument("--no-relay", action="store_true")
     a = ap.parse_args()
     if a.cmd == "new": create(a.name or f"b{int(time.time())}")
     elif a.cmd == "status":
         for n, b in load().items():
             print(n, f"{(b['expires']-time.time())/60:.0f} min left", b["claim"], b["preview"])
-    elif a.cmd == "rotate": rotate(a.margin)
+    elif a.cmd == "rotate": rotate(a.margin, not a.no_relay)
     elif a.cmd == "daemon":
         while True:
             n = live()
             if not n or load()[n]["expires"] - time.time() <= a.margin * 60:
-                try: rotate(a.margin)
+                try: rotate(a.margin, not a.no_relay)
                 except SystemExit as e: print("rotate:", e)
             time.sleep(30)
     else:
