@@ -95,7 +95,7 @@ def pull(name, dst):
     tmp = dst.with_name(dst.name + ".tgz")  # to a file first: a piped tar choked on the ssh stream
     try:
         with open(tmp, "wb") as f:
-            r = subprocess.run(ssh_base(name) + ["tar czf - -C /app/work ."], stdout=f, timeout=300)
+            r = subprocess.run(ssh_base(name) + ["tar czf - -C /app/work ."], stdout=f, stdin=subprocess.DEVNULL, timeout=300)
         if r.returncode:
             print("pull ssh rc", r.returncode); return r.returncode
         t = subprocess.run(["tar", "xzf", str(tmp), "-C", str(dst)])
