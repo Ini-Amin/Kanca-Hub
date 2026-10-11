@@ -3,7 +3,7 @@
 set -e
 cd /app/work
 apt-get update -qq >/dev/null 2>&1 || true
-apt-get install -y -qq libzstd-dev build-essential >/dev/null 2>&1 || true
+apt-get install -y -qq libzstd-dev build-essential libgtk-3-0 libdbus-glib-1-2 libasound2t64 libx11-xcb1 libxt6 libxtst6 libnss3 fonts-liberation >/dev/null 2>&1 || true
 uv venv -q --python 3.12 /app/venv   # box default is 3.15: too new for most wheels
 uv pip install -q --python /app/venv/bin/python -r requirements.txt camoufox playwright
 /app/venv/bin/python -m camoufox fetch >/dev/null 2>&1 || true
