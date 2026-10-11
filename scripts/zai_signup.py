@@ -157,8 +157,12 @@ def main(argv=None) -> int:
     ap.add_argument("--headless", action="store_true")
     ap.add_argument("--attempts", type=int, default=3)
     ap.add_argument("-o", "--out", default=None, help="write the token to this file")
+    ap.add_argument("--out-json", default=None,
+                    help="write the full record (incl. email/password) to this JSON file")
     a = ap.parse_args(argv)
     rec = asyncio.run(signup(headless=a.headless, attempts=a.attempts))
+    if a.out_json:
+        Path(a.out_json).write_text(json.dumps(rec))
     print(json.dumps({k: v for k, v in rec.items() if k != "token"}, indent=2))
     if rec.get("status") == "ok":
         LEDGER.parent.mkdir(parents=True, exist_ok=True)
