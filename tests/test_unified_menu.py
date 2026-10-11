@@ -197,8 +197,8 @@ class TestRunEndToEndFlow(unittest.TestCase):
         with patch("builtins.input", return_value="n"):
             rc = run_end_to_end_flow(p, farm_choice="1")
             self.assertEqual(rc, 1)
-            # Should not run account farm
-            self.assertEqual(mock_dispatch.call_count, 1)
+            # proxy verify + the WARP fallback (`warp up`); never the account farm
+            self.assertEqual(mock_dispatch.call_count, 2)
 
     @patch("scripts.kancahub.dispatch")
     def test_stops_if_account_farm_fails(self, mock_dispatch: MagicMock) -> None:
