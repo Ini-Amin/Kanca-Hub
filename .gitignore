@@ -147,3 +147,8 @@ session-ses_*.md
 Sider_CAPTCHA_Solver/
 rea/
 PloxCardGen/
+
+# opencode / railbox scratch (ASUS pull-only clone)
+.opencode/
+session-*.md
+.railbox/
