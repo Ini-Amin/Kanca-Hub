@@ -325,6 +325,14 @@ def run_flow():
                 save_session(sess2, email)
         else:
             print(f"\n[Status] Halaman browser saat ini: {tab.url}", flush=True)
+        # Final capture attempt: by now login is settled regardless of the
+        # SheerID branch taken above (first capture often runs too early).
+        time.sleep(3)
+        sess2 = capture_chatgpt_session(tab)
+        if sess2.get("accessToken"):
+            save_session(sess2, email)
+        else:
+            print(f"[!] final session capture: {sess2.get('error', 'no token yet')}", flush=True)
 
         out_file = os.path.join(os.path.dirname(__file__), "created_k12_accounts.txt")
         with open(out_file, "a", encoding="utf-8") as f:
