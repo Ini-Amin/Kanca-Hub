@@ -138,6 +138,12 @@ async def do_login(tab, email: str, password: str) -> None:
     pw_sel = "input[type=password],input[name=passwd]"
 
     # email step
+    # 'Pick an account' tile list (from a previous session) blocks the email field;
+    # click our own tile first, fall back to 'Use another account'.
+    if "Pick an account" in ((await _js(tab, "document.body ? document.body.innerText : ''", "")) or ""):
+        if not await _maybe_click(tab, email):
+            await _maybe_click(tab, "Use another account")
+        await asyncio.sleep(3)
     for _ in range(20):
         if await _js(tab, "!!document.querySelector(%s)" % repr(email_sel).replace("'", '"'), False):
             break
@@ -245,10 +251,22 @@ async def run(action: str, timeout: int = 180, exclude_codes: list[str] | None =
     # otp — the inbox keeps the LAST mail open, so a naive scan returns the SAME
     # (already-used) code forever -> OpenAI "max_check_attempts". Baseline the
     # codes present now and only return a NEW one; also honour --exclude.
+    async def _rows() -> list[str]:
+        # Subject lines carry a TRUNCATED code ("...continue: 52193"); scrape the
+        # FULL row text (subject + preview snippet) so all six digits are visible
+        # for every mail, not just the one currently open in the reading pane.
+        raw = await _js(tab, """JSON.stringify(
+            [...document.querySelectorAll('[role=option],[role=listitem]')]
+            .map(e=>(e.innerText||'').replace(/\\n/g,' ')).filter(t=>t))""", "[]")
+        import json as _json
+        try:
+            return _json.loads(raw) if isinstance(raw, str) else []
+        except Exception:
+            return []
+
     async def _scan() -> list[str]:
         found = []
-        subs = await read_subjects(tab)
-        for s in subs:
+        for s in await _rows():
             m = re.search(r"\b(\d{6})\b", s)
             if m and any(k in s.lower() for k in ("openai", "chatgpt", "code", "verif", "confirm")):
                 found.append(m.group(1))
@@ -257,12 +275,55 @@ async def run(action: str, timeout: int = 180, exclude_codes: list[str] | None =
             found.append(m.group(1))
         return found
 
-    baseline = set(await _scan())
-    skip = set(baseline) | {str(c).strip() for c in exclude_codes if str(c).strip()}
-    print(f"      [school] baseline codes present: {sorted(baseline) or 'none'} "
-          f"| excluding: {sorted(skip) or 'none'}", flush=True)
+    fresh = not exclude_codes  # first OTP wait of a fresh signup
+    cutoff = getattr(run, "_cutoff_ts", None)  # epoch seconds; set by main()
+    if fresh:
+        # The inbox is SHARED (every plus-tag lands in raymondi@). The flow
+        # triggers the signup mail BEFORE starting this reader, but the mail can
+        # land AFTER the reader starts (browser startup ordering varies) — and
+        # older triggers' mails are still at the top. With a cutoff we ignore
+        # everything older and wait for the first mail newer than it; without a
+        # cutoff (manual `otp` runs) the newest ChatGPT code at start IS ours.
+        if cutoff:
+            print(f"      [school] fresh mode: ignoring mails older than "
+                  f"{time.strftime('%H:%M:%S', time.localtime(cutoff))}; waiting…", flush=True)
+            # The flow triggers THIS signup's mail before starting the reader,
+            # but delivery can lag the reader start, so no code past the cutoff
+            # exists yet at this moment. Exclude every code now in the box and
+            # accept the first NEW arrival — it can only be our signup's mail.
+            skip: set[str] = set(await _scan())
+        else:
+            top_code = None
+            for s in await _rows():
+                m = re.search(r"\b(\d{6})\b", s)
+                if m and "chatgpt" in s.lower():
+                    top_code = m.group(1)
+                    break
+            if top_code:
+                print(f"      [school] fresh mode: newest ChatGPT mail code={top_code}", flush=True)
+                print(f"      [school] OTP (new): {top_code}", flush=True)
+                browser.stop()
+                return 0
+            print("      [school] fresh mode: no ChatGPT mail yet; waiting…", flush=True)
+            skip = set()
+    else:
+        baseline = set(await _scan())
+        skip = baseline | {str(c).strip() for c in exclude_codes if str(c).strip()}
+        print(f"      [school] baseline codes present: {sorted(baseline) or 'none'} "
+              f"| excluding: {sorted(skip) or 'none'}", flush=True)
     start = time.time()
+    n = 0
     while time.time() - start < timeout:
+        n += 1
+        if n > 1:
+            # Outlook web does not reliably live-refresh; reload to see new mail.
+            try:
+                await tab.reload()
+                await asyncio.sleep(6)
+                if not await wait_inbox(tab, timeout=30):
+                    print("      [school] inbox lost after reload; retrying", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"      [school] reload failed: {e}", flush=True)
         for code in await _scan():
             if code not in skip:
                 print(f"      [school] OTP (new): {code}", flush=True)
@@ -282,10 +343,13 @@ def main() -> int:
     o = sub.add_parser("otp", help="wait for an OpenAI OTP")
     o.add_argument("--timeout", type=int, default=180)
     o.add_argument("--exclude", default="", help="comma-separated codes already used (skipped)")
+    o.add_argument("--cutoff", type=float, default=None,
+                   help="epoch seconds: ignore mails dated before this (fresh-signup mode)")
     a = ap.parse_args()
     if not a.cmd:
         ap.print_help(); return 0
     excl = [c for c in (getattr(a, "exclude", "") or "").split(",") if c.strip()]
+    run._cutoff_ts = getattr(a, "cutoff", None)
     return asyncio.run(run(a.cmd, timeout=getattr(a, "timeout", 180), exclude_codes=excl))
 
 

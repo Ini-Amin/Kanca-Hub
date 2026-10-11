@@ -160,14 +160,18 @@ def poll_temp_tf_otp(email, max_wait=90, delay=3):
         except Exception:
             pass
         print(".", end="", flush=True)
+
     print()
     return None
 
-
 def generate_strong_password():
-    chars = string.ascii_letters + string.digits
-    core = "".join(random.choices(chars, k=10))
-    return f"TeacherK12!{core}#2026"
+    """Vary the shape per account: the fixed 'TeacherK12!...#2026' pattern got
+    accounts flagged for forced password rotation at first login."""
+    core = "".join(random.choices(string.ascii_letters + string.digits, k=12))
+    sym = random.choice(["!", "#", "?", "%"])
+    year = random.choice(["2024", "2025", "2026", ""])
+    return f"{random.choice(['Tc','Kx','Vn','Zr'])}{core}{sym}{year}"
+
 
 
 def _turnstile_ext() -> str | None:
@@ -281,8 +285,11 @@ def run_flow():
                 about_btn = tab.ele('tag:button@type=submit', timeout=2) or tab.ele('text:Continue', timeout=2)
                 if about_btn:
                     about_btn.click()
-                    time.sleep(3)
-                break
+                    time.sleep(4)
+                # Only leave the loop when the URL actually moved off about-you;
+                # a single click often doesn't register (empty field first try).
+                if "about-you" not in tab.url:
+                    break
             elif "k12-verification" in curr_url:
                 break
             time.sleep(1)
