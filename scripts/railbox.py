@@ -93,8 +93,12 @@ def push(name, src):
 def pull(name, dst):
     dst = Path(dst); dst.mkdir(parents=True, exist_ok=True)
     r = subprocess.Popen(ssh_base(name) + ["tar czf - -C /app/work ."], stdout=subprocess.PIPE)
-    t = subprocess.run(["tar", "xzf", "-", "-C", str(dst)], stdin=r.stdout)
-    r.wait(); print("pull rc", r.returncode, t.returncode)
+    try:
+        t = subprocess.run(["tar", "xzf", "-", "-C", str(dst)], stdin=r.stdout, timeout=300)
+        r.wait(timeout=30)
+    except subprocess.TimeoutExpired:  # a stuck ssh must not freeze the daemon
+        r.kill(); print("pull timeout"); return 1
+    print("pull rc", r.returncode, t.returncode)
     return r.returncode or t.returncode
 
 
