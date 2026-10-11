@@ -3,7 +3,7 @@
 
 Generate the OAuth URL (zcode_oauth_url pattern) -> sign in -> consent -> code ->
 POST /api/v1/oauth/token -> ZCode JWT. Verified live (code 0, token minted)."""
-import asyncio, sys, json, secrets, urllib.request, urllib.parse
+import asyncio, os, sys, json, secrets, urllib.request, urllib.parse
 sys.path.insert(0,'/home/amen/Auto-FreeCF/scripts'); sys.path.insert(0,'/tmp/opencode')
 import captcha_slider as CS
 from consent_hard import accept_consent
@@ -11,7 +11,10 @@ from playwright.async_api import async_playwright
 CDP="http://127.0.0.1:9222"
 CLIENT_ID="client_P8X5CMWmlaRO9gyO-KSqtg"
 REDIRECT_URI="https://zcode.z.ai/app/oauth/login?redirect=zcode://oauth/callback"
-EMAIL='b3mnvlqbvf@kancalabs.biz.id'; PW='Zx9!mqR7pLs2Vw'
+# multi-account: ZB_EMAIL/ZB_PW env or argv[1]/argv[2] (used by scripts/zcode.py mint)
+EMAIL=os.environ.get("ZB_EMAIL") or (sys.argv[1] if len(sys.argv)>1 else 'b3mnvlqbvf@kancalabs.biz.id')
+PW=os.environ.get("ZB_PW") or (sys.argv[2] if len(sys.argv)>2 else 'Zx9!mqR7pLs2Vw')
+OUT=os.environ.get("ZB_OUT") or "/tmp/opencode/zc_jwt.txt"
 JS="(t)=>{const e=[...document.querySelectorAll('button,a,div,span')].filter(x=>(x.innerText||'').trim()===t&&x.children.length===0);if(e.length){e[e.length-1].click();return true}return false}"
 def exchange(code,state):
     req=urllib.request.Request("https://zcode.z.ai/api/v1/oauth/token",
@@ -34,7 +37,10 @@ async def main():
             print("captcha:", await CS.solve_aliyun(page, puzzles=25), flush=True)
             await page.evaluate(JS,"Sign in"); await page.wait_for_timeout(6000)
         except Exception as e: print("signin skip:", str(e)[:40], flush=True)
-        ok=await accept_consent(page)
+        # consent_hard clicks any "Continue" leaf — on the login chooser that is
+        # "Continue with Github" (github detour). Only run it off the login page.
+        chooser = await page.evaluate("() => document.body.innerText.includes('Continue with Github')")
+        ok = await accept_consent(page) if not chooser and "code=" not in page.url else False
         print("consent:", ok, "url:", page.url[:100], flush=True)
         q=urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
         code=(q.get('code') or [''])[0]
@@ -44,7 +50,7 @@ async def main():
             try:
                 r=exchange(code,state); print("EXCHANGE:", json.dumps(r)[:400], flush=True)
                 tok=(r.get("data") or {}).get("token")
-                if tok: open("/tmp/opencode/zc_jwt.txt","w").write(tok); print("JWT SAVED", tok[:24], flush=True)
+                if tok: open(OUT,"w").write(tok); print("JWT SAVED", tok[:24], "->", OUT, flush=True)
             except Exception as e:
                 print("exchange ERR", str(e)[:150], flush=True)
                 try: print("body", e.read().decode()[:200])

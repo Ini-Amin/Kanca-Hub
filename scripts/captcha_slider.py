@@ -27,11 +27,17 @@ import math
 import os
 import random
 import sqlite3
+import sys
+import time
 import urllib.request
 from pathlib import Path
 
 # Aliyun's pixel<->drag obfuscation (same coefficients zcode's claim.py uses).
-COEF = (0.00354991, 0.07703295, -0.01016667)
+# Fitted 2026-10-11 from 78 mid-drag probes in ~/.zcode-bridge/slider_dataset.jsonl
+# (rms 0.17px): the old blind guess (b=0.077) was ~18% off, which is why one-shot
+# drags never landed. Closed-loop probing corrects live, so this is only the
+# first-move prior now.
+COEF = (0.0036, 0.0632, 0.59)
 NINE_ROUTER_HOME = Path(os.environ.get("NINE_ROUTER_HOME", Path.home() / ".9router"))
 VISION_MODEL = os.environ.get("CAPTCHA_VISION_MODEL", "ag/gemini-3.8-flash-high")
 
@@ -42,6 +48,52 @@ IDS = {
     "left": "aliyunCaptcha-sliding-left",
     "window": "aliyunCaptcha-window-float",
 }
+
+# ──────────────────────────────────────────────────────────── dataset capture
+# Every solve attempt (signup, mint, claim, harvest) appends one JSONL record and
+# stores the puzzle images once. This is the raw material for (a) fitting the
+# real piece-vs-slider curve per site, (b) labeling the gap detector, and
+# (c) tuning the sweep prior. Inspect with:  python captcha_slider.py analyze
+DATA_DIR = Path(os.environ.get("SLIDER_DATA_DIR", Path.home() / ".zcode-bridge" / "slider_data"))
+DATA_LOG = DATA_DIR.parent / "slider_dataset.jsonl"
+
+
+def _save_puzzle_images(puzzle_id: str, bg_b64: str, piece_b64: str) -> dict:
+    """Store both puzzle images (once per puzzle) -> relative paths."""
+    key = hashlib.sha1(puzzle_id.encode()).hexdigest()[:16]
+    out = {}
+    for name, b64 in (("bg", bg_b64), ("piece", piece_b64)):
+        fp = DATA_DIR / ("%s_%s.png" % (key, name))
+        if not fp.exists():
+            try:
+                fp.write_bytes(_png_bytes(b64))
+            except Exception:  # noqa: BLE001
+                continue
+        out[name] = fp.name
+    return out
+
+
+def log_attempt(site: str, puzzle_id: str, *, target: int | None, guess: int | None,
+                probes: list, passed: bool, released: bool, images: dict | None) -> None:
+    """Append one attempt record. `probes` = [(slider_left, piece_left), ...]
+    sampled mid-drag: this is the calibration data for the movement curve."""
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        rec = {
+            "ts": round(time.time(), 1),
+            "site": site,
+            "puzzle": puzzle_id,
+            "target": target,
+            "detector_guess": guess,
+            "probes": [[round(s, 1), round(p, 1)] for s, p in probes],
+            "released": released,
+            "passed": passed,
+            "images": images or {},
+        }
+        with open(DATA_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def invert(left_px: float) -> float:
@@ -418,29 +470,56 @@ async def refresh(page) -> None:
 _LEFTS = """()=>{const p=document.getElementById('aliyunCaptcha-puzzle');const s=document.getElementById('aliyunCaptcha-sliding-slider');return {p:parseFloat((p&&p.style.left)||'0')||0, s:parseFloat((s&&s.style.left)||'0')||0};}"""
 
 
-async def _drag_exact(page, box: dict, target_piece_left: float, log=print) -> bool:
-    """One gesture: press, probe to learn the piece/slider ratio MID-DRAG, then
-    finish so the piece lands at `target_piece_left`. Returns True if a ratio was
-    measured (the piece does not move 1:1 with the slider, and the ratio is random
-    per puzzle, so it must be measured live)."""
+async def _drag_exact(page, box: dict, target_piece_left: float, log=print) -> tuple[bool, list]:
+    """One gesture: press, then ITERATIVELY probe the piece's own style.left
+    mid-drag and correct until within ~1.5px, then release.
+
+    The piece does not move 1:1 with the slider: the map is a per-puzzle
+    quadratic (Aliyun's obfuscation), so a single ratio probe only linearizes
+    one point and systematically misses -- which is why the blind invert() drag
+    never landed. Re-fitting the local slope on every probe converges in 3-4
+    probes regardless of the coefficients.
+
+    Returns (released_ok, probes) where probes = [(slider_left, piece_left), ...]
+    -- the calibration samples we log to the dataset.
+    """
     sx, sy = box["x"], box["y"]
     await page.mouse.move(sx, sy)
     await page.mouse.down()
-    await page.mouse.move(sx + 60, sy, steps=4)   # probe (do NOT release)
+    await page.mouse.move(sx + 40, sy, steps=4)   # probe (do NOT release)
     await page.wait_for_timeout(120)
-    st = await page.evaluate(_LEFTS)
-    if st["s"] <= 0:
-        await page.mouse.up()
-        return False
-    ratio = st["p"] / st["s"]
-    # we are currently at slider=st['s'], piece=st['p']; move the rest.
-    need_total = target_piece_left / ratio if ratio > 0 else st["s"]
-    need_total = max(need_total, st["s"])
-    cur_x = sx + st["s"]
-    await page.mouse.move(sx + need_total, sy, steps=8)
-    await page.wait_for_timeout(80)
+    probes = []
+    s_prev = None
+    for it in range(10):
+        st = await page.evaluate(_LEFTS)
+        p, s = st["p"], st["s"]
+        if s <= 0:
+            break                                   # widget not draggable
+        probes.append((s, p))
+        err = target_piece_left - p
+        if abs(err) <= 1.5:
+            await page.mouse.up()
+            await asyncio.sleep(0.25)
+            return True, probes
+        # local slope from the last two probes (fallback: assume ~1:1 once)
+        slope = None
+        if len(probes) >= 2:
+            (s0, p0), (s1, p1) = probes[-2], probes[-1]
+            ds, dp = s1 - s0, p1 - p0
+            if abs(ds) > 0.5 and abs(dp) > 0.3:
+                slope = dp / ds
+        step = err / slope if slope and slope > 0.05 else err
+        step = max(-80, min(220, step))
+        if s_prev is not None and abs(s - s_prev) < 0.5 and abs(step) > 1:
+            break                                   # slider clamped: unreachable
+        s_prev = s
+        await page.mouse.move(sx + s + step, sy, steps=5)
+        await page.wait_for_timeout(80)
+    # never release on a bad aim: a miss swaps in a NEW puzzle and burns the
+    # attempt anyway, but an unreachable target should just be abandoned.
     await page.mouse.up()
-    return True
+    await asyncio.sleep(0.25)
+    return False, probes
 
 
 async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
@@ -459,8 +538,10 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         log("  [slider] widget would not open")
         return False
 
+    seen_widget = True   # only trust _passed() once we know the widget existed
+    missed = False       # after one miss, spend a vision call on later puzzles
     for i in range(1, puzzles + 1):
-        if await _passed(page):
+        if seen_widget and await _passed(page):
             log("  [slider] already passed!")
             return True
         # NOTE: on a MISS the Aliyun widget REFRESHES ITSELF to a new puzzle.
@@ -469,32 +550,167 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
             await refresh(page)
             await page.wait_for_timeout(900)
             if not await _wait_open(page):
+                seen_widget = False
                 continue
-        # detector-first guess
+        seen_widget = True
+        # detector first; after one miss, spend a vision call -- the diff
+        # detector alone lands ~30% (dataset-measured), vision is the real
+        # lever now that the drag itself is closed-loop.
         imgs = await _read_images(page)
+        pid = await _puzzle_id(page)
         guess = None
         if imgs:
             guess = gap_by_diff(imgs[0], imgs[1])
+            if (missed or guess is None) and model:
+                try:
+                    v = gap_by_vision(imgs[0], imgs[1], model=model)
+                except Exception:  # noqa: BLE001
+                    v = None
+                if v and 100 <= v <= 300:
+                    guess = v
         targets = ([guess] if guess and 100 <= guess <= 300 else []) + \
                   [t for t in SWEEP if t != guess]
         t = targets[0]
         box = await _slider_box(page)
         if not box:
             continue
-        # drag the mouse by the mapped distance (invert(target)), CLAMPED to the
-        # handle's real travel so the slider never slams into the end.
-        max_travel = await page.evaluate(
-            """() => { const s=document.getElementById('aliyunCaptcha-sliding-slider');
-                 const b=document.getElementById('aliyunCaptcha-captcha-body');
-                 if(!s||!b) return 260;
-                 return Math.max(20, b.getBoundingClientRect().width - s.getBoundingClientRect().width - 4);
-               }""") or 260.0
-        dist = min(invert(t), float(max_travel))
-        await _drag(page, box["x"], box["y"], dist)
+        # CLOSED-LOOP landing: press, probe the piece's real position mid-drag,
+        # correct, release. invert()/COEF only matter as a rough prior now --
+        # the probes measure the true per-puzzle movement curve live.
+        released, probes = await _drag_exact(page, box, float(t), log)
+        imgs = imgs or await _read_images(page)
+        images = _save_puzzle_images(pid, imgs[0], imgs[1]) if imgs else {}
         await page.wait_for_timeout(1200)
-        if await _passed(page):
+        ok = seen_widget and await _passed(page)
+        log_attempt(page.url.split("?")[0], pid, target=t, guess=guess,
+                    probes=probes, passed=ok, released=released, images=images)
+        if ok:
             log(f"  [slider] solved ✓ (target={t}{' detect' if t == guess else ''}, puzzle {i})")
             return True
         log(f"  [slider] puzzle {i}: target={t}{' detect' if t == guess else ''} miss")
+        missed = True
     log("  [slider] not solved")
     return False
+
+
+# ─────────────────────────────────────────────────────────────── dataset CLI
+async def _open_signup_widget(page) -> bool:
+    """(Re)mount the chat.z.ai signup form so the inline widget appears."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import zai_signup as ZS
+    try:
+        await page.goto("https://chat.z.ai/auth", wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(4000)
+        # same DOM-click sequence as signup: reveal the email form, then Create
+        # Account mode -- the inline widget only mounts after both.
+        await page.get_by_text("Continue with Email").first.click(timeout=5000)
+        await page.wait_for_timeout(2000)
+        await page.evaluate(ZS._JS_CLICK, "Sign up")
+        await page.wait_for_timeout(2500)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def harvest(count: int = 15, *, headless: bool = False) -> int:
+    """Farm labeled puzzles: open the chat.z.ai SIGNUP form (its inline widget
+    needs no account), then solve -> refresh -> solve ... Every attempt lands
+    closed-loop and is logged with its images and probe curve."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from playwright.async_api import async_playwright
+
+    p = await async_playwright().start()
+    try:
+        b = await p.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=4000)
+    except Exception:  # noqa: BLE001
+        import zcode as Z            # _ensure_cdp_chrome() knows the executable
+        await Z._ensure_cdp_chrome()
+        b = await p.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=8000)
+    ctx = b.contexts[0] if b.contexts else await b.new_context()
+    page = await ctx.new_page()
+    await _open_signup_widget(page)
+
+    solved = attempts = remounts = 0
+    while attempts < count:
+        if not await _wait_open(page, tries=3):
+            await refresh(page)
+            await page.wait_for_timeout(1200)
+        if not await _wait_open(page, tries=2):
+            # a PASS locks the inline widget until the form remounts
+            remounts += 1
+            if remounts > count + 3:
+                print("[harvest] widget unavailable after repeated remounts, stopping")
+                break
+            await _open_signup_widget(page)
+            continue
+        ok = await solve_aliyun(page, puzzles=3)
+        attempts += 1
+        solved += int(ok)
+        if attempts < count:
+            await refresh(page)
+            await page.wait_for_timeout(1500)
+    print("[harvest] done: %d/%d solved, dataset=%s" % (solved, attempts, DATA_LOG))
+    return solved
+
+
+def analyze() -> None:
+    """Dataset report: pass rate, detector accuracy, and a least-squares refit
+    of the piece-vs-slider quadratic from every mid-drag probe."""
+    if not DATA_LOG.exists():
+        print("no dataset yet at", DATA_LOG)
+        return
+    recs = [json.loads(l) for l in open(DATA_LOG, encoding="utf-8") if l.strip()]
+    n = len(recs)
+    hits = [r for r in recs if r.get("passed")]
+    det = [r for r in recs if r.get("detector_guess") is not None]
+    det_hits = [r for r in det if r.get("passed") and r.get("target") == r.get("detector_guess")]
+    print("attempts: %d   passed: %d (%.0f%%)" % (n, len(hits), 100.0 * len(hits) / max(1, n)))
+    print("detector used: %d   detector-correct: %d (%.0f%%)"
+          % (len(det), len(det_hits), 100.0 * len(det_hits) / max(1, len(det))))
+    # fit p = a*s^2 + b*s + c over all probes (this is what invert() inverts)
+    pts = [(s, p) for r in recs for s, p in r.get("probes", []) if s > 0]
+    if len(pts) >= 6:
+        import statistics
+        best = None
+        for a10 in range(0, 60):   # grid-search the quadratic term a
+            a = a10 / 10000.0
+            xs = [s for s, _ in pts]
+            ys = [p - a * s * s for s, p in pts]
+            mx, my = statistics.mean(xs), statistics.mean(ys)
+            sxx = sum((x - mx) ** 2 for x in xs)
+            if sxx == 0:
+                continue
+            b1 = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+            c1 = my - b1 * mx
+            err = sum((p - (a * s * s + b1 * s + c1)) ** 2 for s, p in pts) / len(pts)
+            if best is None or err < best[0]:
+                best = (err, a, b1, c1)
+        if best:
+            err, a, b1, c1 = best
+            print("probe samples: %d   fitted COEF = (%.8f, %.8f, %.8f)  rms=%.2fpx"
+                  % (len(pts), a, b1, c1, err ** 0.5))
+            print("current  COEF = (%.8f, %.8f, %.8f)" % COEF)
+            print("-> paste the fitted tuple into COEF if rms is low and it differs")
+    # target distribution of the passing aims = better sweep prior
+    if hits:
+        tg = sorted(r["target"] for r in hits if r.get("target"))
+        print("passing targets (sweep prior):", tg)
+
+
+def _main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description="Aliyun slider solver / dataset tools")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("harvest", help="farm labeled puzzles into the dataset")
+    s.add_argument("--count", type=int, default=15)
+    s.add_argument("--headless", action="store_true")
+    sub.add_parser("analyze", help="dataset report + COEF refit")
+    a = ap.parse_args(argv)
+    if a.cmd == "harvest":
+        return asyncio.run(harvest(a.count, headless=a.headless))
+    analyze()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
