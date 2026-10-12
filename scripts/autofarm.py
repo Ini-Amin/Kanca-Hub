@@ -489,6 +489,13 @@ async def _drive_page(
         print("  ✗ No supported auth method found — refusing to fill or write a success file.")
         return result
 
+    blocked = newapi_signup_block(await _newapi_status(page))
+    if blocked:
+        result["stopped_at"] = "signup_disabled"
+        result["error"] = blocked
+        print(f"  ✗ {blocked}")
+        return result
+
     if inspect_only:
         result["stopped_at"] = "inspect_only"
         print("  ✓ Inspect-only: stopping before any fill/submit.")
@@ -859,6 +866,30 @@ async def _extract_visible_text(page) -> str:
         }""")
     except Exception:
         return ""
+
+
+def newapi_signup_block(status: dict | None) -> str:
+    """New API / One API relays publish signup settings at /api/status.
+    Returns a plain reason when self-service email/password signup is off."""
+    if not isinstance(status, dict) or "password_register_enabled" not in status:
+        return ""
+    if status.get("register_enabled") is False:
+        return "site has registration closed (/api/status register_enabled=false)"
+    if status.get("password_register_enabled") is False:
+        oauth = [k.replace("_oauth", "") for k in ("github_oauth", "linuxdo_oauth", "oidc_enabled", "telegram_oauth")
+                 if status.get(k)]
+        return ("site disabled email/password signup (/api/status); only "
+                + (", ".join(oauth) or "third-party") + " login works")
+    return ""
+
+
+async def _newapi_status(page) -> dict | None:
+    """Same-origin GET /api/status through the browser (same IP/cookies)."""
+    try:
+        return await page.evaluate(
+            "() => fetch('/api/status').then(r => r.ok ? r.json() : null).then(j => j && j.data).catch(() => null)")
+    except Exception:
+        return None
 
 
 async def _reveal_email_form(page) -> bool:

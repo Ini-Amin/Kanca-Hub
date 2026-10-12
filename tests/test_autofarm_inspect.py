@@ -29,6 +29,13 @@ class TestClassifyAuthTruthTable(unittest.TestCase):
         self.assertFalse(got["has_email_form"])
         self.assertEqual(got["preferred"], "github")
 
+    def test_newapi_signup_block(self):
+        self.assertIn("github", autofarm.newapi_signup_block(
+            {"register_enabled": True, "password_register_enabled": False, "github_oauth": True}))
+        self.assertEqual(autofarm.newapi_signup_block({"register_enabled": True, "password_register_enabled": True}), "")
+        self.assertEqual(autofarm.newapi_signup_block({"version": "x"}), "")  # not a New API site
+        self.assertEqual(autofarm.newapi_signup_block(None), "")
+
     def test_continue_with_email_button_is_routable(self):
         # ZenMux: email input hidden behind a "Continue with Email" button
         got = autofarm.classify_auth(
