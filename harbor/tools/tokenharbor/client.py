@@ -65,15 +65,33 @@ class TokenHarborClient:
     # HTTP helpers
     # ------------------------------------------------------------------
 
+    def _retry(self, call, url: str, **kwargs) -> requests.Response:
+        """Retry transient network failures.
+
+        tokenharbor.ai intermittently accepts a request instantly and then times out
+        on the next one (measured 2026-10-12: 3/5 signup POSTs answered). A single
+        read timeout aborts a whole farm chunk, so retry a few times with backoff.
+        Only connection-level errors are retried; HTTP status codes are returned.
+        """
+        last: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                return call(url, **kwargs)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last = e
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+        raise last  # type: ignore[misc]
+
     def _get(self, url: str, **kwargs) -> requests.Response:
         if self._proxies:
             kwargs.setdefault("proxies", self._proxies)
-        return self.session.get(url, **kwargs)
+        return self._retry(self.session.get, url, **kwargs)
 
     def _post(self, url: str, **kwargs) -> requests.Response:
         if self._proxies:
             kwargs.setdefault("proxies", self._proxies)
-        return self.session.post(url, **kwargs)
+        return self._retry(self.session.post, url, **kwargs)
 
     # ------------------------------------------------------------------
     # Deployment info extraction
