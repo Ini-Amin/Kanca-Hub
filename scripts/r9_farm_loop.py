@@ -217,7 +217,10 @@ def cmd_run(a) -> int:
     print()
 
     steps: list[list[str]] = [["proxy", "verify"]]
-    steps.append(["thk", "batch", str(n)])
+    batch = ["thk", "batch", str(n)]
+    if a.proxy:
+        batch += ["--proxy", a.proxy]
+    steps.append(batch)
     steps.append(["thk", "inject", "--verify"])
     steps.append(["thk", "sync", "--prune"])
 
@@ -268,6 +271,9 @@ def main() -> int:
     sub.add_parser("egress", help="is our egress masked?").set_defaults(fn=cmd_egress)
     r = sub.add_parser("run", help="farm -> inject -> sync (needs --apply)")
     r.add_argument("--max", type=int, default=4, help="how many accounts to farm (default 4)")
+    r.add_argument("--proxy", default=None,
+                   help="egress for the batch: vpngate[:CC] (free relay, never our own IP), "
+                        "WARP, freepool, or a proxy URL. Recommended: vpngate:JP")
     r.add_argument("--apply", action="store_true", help="actually run the pipeline")
     r.set_defaults(fn=cmd_run)
     args = ap.parse_args()
