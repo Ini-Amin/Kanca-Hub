@@ -67,6 +67,12 @@ GOOGLE_TEXT_HINTS = (
     "continue with google", "sign in with google", "sign up with google",
     "login with google", "log in with google", "with google",
 )
+# Buttons that reveal a (often passwordless) email form, e.g. ZenMux.
+EMAIL_REVEAL_HINTS = (
+    "continue with email", "sign in with email", "sign up with email",
+    "login with email", "log in with email", "use email", "with email",
+)
+RATE_LIMIT_HINTS = ("too many requests", "rate limit", "try again later")
 GITHUB_HREF_HINTS = ("github.com/login/oauth", "github.com/login", "github.com/signup")
 GOOGLE_HREF_HINTS = ("accounts.google.com/o/oauth2", "accounts.google.com")
 
@@ -113,6 +119,7 @@ def classify_auth(
                 break
 
     has_email_form = bool((has_email and has_pass) or (has_email and effective_has_next))
+    email_reveal = not has_email_form and any(h in text for h in EMAIL_REVEAL_HINTS)
 
     step = None
     if has_email_form:
@@ -120,9 +127,11 @@ def classify_auth(
             step = "email_only"
         else:
             step = "email_password"
+    elif email_reveal:
+        step = "email_reveal"
 
     methods: list[str] = []
-    if has_email_form:          # email/password FIRST (self-service signup)
+    if has_email_form or email_reveal:  # email FIRST (self-service signup)
         methods.append("email")
     if has_github:              # GitHub as fallback
         methods.append("github")
@@ -483,6 +492,8 @@ async def _drive_page(
     # ── PHASE 2: ROUTE (email FIRST per user directive, then github, then google)
     if result.get("has_email_form") or "email" in methods:
         print("  [route] Email/password form selected (preferred).")
+        if classification.get("step") == "email_reveal":
+            await _reveal_email_form(page)
         return await _route_email(page, url, email, password, username, host, result, mailbox=mailbox)
 
     if "github" in methods:
@@ -555,6 +566,9 @@ async def _find_clickable_next_button(page):
         "button:has-text('Sign up')",
         "button:has-text('Sign Up')",
         "button:has-text('Submit')",
+        "button:has-text('Send Email')",
+        "button:has-text('Send code')",
+        "button:has-text('Send link')",
         "button:has-text('Register')",
         "button:has-text('Daftar')",
         "button:has-text('Lanjut')",
@@ -626,7 +640,7 @@ async def _is_phone_otp_present(page) -> bool:
             "input[id*='otp' i]",
             "input[name*='code' i]",
             "input[id*='code' i]",
-            "input[placeholder*='code' i]",
+            "input[placeholder*='code' i]:not([placeholder*='invite' i]):not([placeholder*='referral' i])",
             "input[type='tel']",
             "input[name*='phone' i]",
             "input[id*='phone' i]",
@@ -693,7 +707,7 @@ async def _fill_known_fields(page, email: str, password: str, username: str) -> 
     filled_any = False
 
     # Email
-    email_sel = "input[type='email'], input[name*='email' i], input[id*='email' i]"
+    email_sel = "input[type='email'], input[name*='email' i], input[id*='email' i], input[placeholder*='email' i], input[autocomplete='email']"
     try:
         el = await page.query_selector(email_sel)
         if el and await el.is_visible():
@@ -842,6 +856,30 @@ async def _extract_visible_text(page) -> str:
         return ""
 
 
+async def _reveal_email_form(page) -> bool:
+    """Click a 'Continue with Email'-style button so the email input appears."""
+    for hint in EMAIL_REVEAL_HINTS:
+        try:
+            el = page.get_by_text(hint, exact=False).first
+            if await el.is_visible():
+                print(f"  • Clicking '{hint}' to reveal the email form…")
+                await el.click()
+                await page.wait_for_timeout(2000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _rate_limited(page) -> str:
+    """Visible rate-limit message on the page, or ''."""
+    try:
+        body = (await _extract_visible_text(page)).lower()
+    except Exception:
+        return ""
+    return next((h for h in RATE_LIMIT_HINTS if h in body), "")
+
+
 async def _route_email(page, url, email, password, username, host, result,
                        max_steps: int = 8, mailbox=None) -> dict:
     """Fill email/password signup and drive multi-step flows up to max_steps."""
@@ -860,6 +898,11 @@ async def _route_email(page, url, email, password, username, host, result,
         return result
 
     submit_btn = await _find_clickable_next_button(page)
+    for _ in range(25):  # Turnstile keeps the button disabled until it passes
+        if submit_btn:
+            break
+        await page.wait_for_timeout(1000)
+        submit_btn = await _find_clickable_next_button(page)
     if not submit_btn:
         result["stopped_at"] = "no_submit_button"
         result["error"] = "no submit or Next button found on step 1"
@@ -878,6 +921,13 @@ async def _route_email(page, url, email, password, username, host, result,
     # Respect rate limits: 1-3s between actions
     delay = random.uniform(1.5, 3.0)
     await page.wait_for_timeout(int(delay * 1000))
+
+    limited = await _rate_limited(page)
+    if limited:
+        result["stopped_at"] = "rate_limited"
+        result["error"] = f"site says '{limited}' — retry later or from another IP"
+        print(f"  ⚠ Site rate-limited this IP ('{limited}') — stopping; retry later or rotate IP.")
+        return result
 
     session = await _capture_session(page, host)
     result["final_url"] = page.url
@@ -943,6 +993,23 @@ async def _route_email(page, url, email, password, username, host, result,
         filled = await _fill_known_fields(page, email, password, username)
 
         next_btn = await _find_clickable_next_button(page)
+        if not next_btn and not filled and mailbox is not None:
+            # Passwordless "check your inbox" page: follow the emailed magic link.
+            base = ".".join(host.split(".")[-2:])
+            link = await asyncio.to_thread(
+                mailbox.link, rf"https?://[^\s\"'<>]*{re.escape(base)}[^\s\"'<>]*", 150.0)
+            if link:
+                print(f"  • Magic link received — opening {link[:80]}…")
+                await page.goto(link.replace("&amp;", "&"), wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(4000)
+                session = await _capture_session(page, host)
+                result["final_url"], result["session"] = page.url, session
+                if _post_login_signal(page.url, session, url, host):
+                    result["success"] = True
+                    result["stopped_at"] = "post_login_verified"
+                    print(f"  ✓ Verified post-login signal at {page.url}")
+                    return result
+                continue
         if not next_btn and not filled:
             vis_text = await _extract_visible_text(page)
             result["stopped_at"] = "stop_unknown"
@@ -1087,7 +1154,7 @@ async def inspect_auth_methods(page, target_url: str) -> dict:
     has_pass = False
     try:
         has_email = await page.query_selector(
-            "input[type='email'], input[name*='email' i], input[id*='email' i]"
+            "input[type='email'], input[name*='email' i], input[id*='email' i], input[placeholder*='email' i], input[autocomplete='email']"
         ) is not None
     except Exception:
         pass

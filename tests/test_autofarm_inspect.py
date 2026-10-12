@@ -29,6 +29,14 @@ class TestClassifyAuthTruthTable(unittest.TestCase):
         self.assertFalse(got["has_email_form"])
         self.assertEqual(got["preferred"], "github")
 
+    def test_continue_with_email_button_is_routable(self):
+        # ZenMux: email input hidden behind a "Continue with Email" button
+        got = autofarm.classify_auth(
+            ["Continue with Google", "Continue with Github", "Continue with Email"], [], False, False)
+        self.assertEqual(got["methods"], ["email", "github", "google"])
+        self.assertEqual(got["step"], "email_reveal")
+        self.assertFalse(got["has_email_form"])
+
     def test_github_via_oauth_href_without_text(self):
         got = autofarm.classify_auth(
             ["Sign in"], ["https://github.com/login/oauth/authorize?client_id=x"], False, False)
