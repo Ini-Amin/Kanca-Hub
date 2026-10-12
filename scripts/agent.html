@@ -1,76 +1,208 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Kanca Agent</title>
+<html lang="en"><head><meta charset="utf-8"><title>Kanca</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Layout and palette adapted from OpenDots (MIT, (c) Atai Barkai, github.com/CopilotKit/OpenDots). -->
 <style>
-:root{color-scheme:dark;--bg:#0f1115;--card:#181b22;--fg:#e6e6e6;--mut:#8a8f98;--acc:#7aa2ff}
-body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);display:flex;flex-direction:column;height:100vh}
-header{display:flex;gap:.6rem;align-items:center;padding:.6rem 1rem;border-bottom:1px solid #222}
-header a{color:var(--mut);margin-left:auto}
-#log{flex:1;overflow:auto;padding:1rem;display:flex;flex-direction:column;gap:.6rem}
-.me{align-self:flex-end;background:#243049;padding:.5rem .8rem;border-radius:10px;max-width:75%;white-space:pre-wrap}
-.ai{background:var(--card);padding:.5rem .8rem;border-radius:10px;max-width:85%;white-space:pre-wrap}
-details{background:#11141a;border:1px solid #262a33;border-radius:8px;padding:.3rem .6rem;max-width:90%}
-summary{cursor:pointer;color:var(--acc);font-family:monospace}
-pre{margin:.4rem 0 0;max-height:300px;overflow:auto;font-size:12px;color:#b9c0cc;white-space:pre-wrap}
-.err{color:#ff7a7a}
-form{display:flex;gap:.5rem;padding:.8rem 1rem;border-top:1px solid #222}
-textarea{flex:1;resize:none;background:var(--card);color:var(--fg);border:1px solid #333;border-radius:8px;padding:.5rem;font:inherit}
-button,select,input{background:var(--card);color:var(--fg);border:1px solid #333;border-radius:8px;padding:.4rem .7rem;font:inherit}
-button{cursor:pointer}
+:root{--ink:#333641;--muted:#8c8d97;--line:#e9e8e6;--bg:#f8f7f4;--side:#f8f7f4;--blue:#7285d5;--lav:#eeeffa;--teal:#5aaea6;--teal-d:#4a968f;--card:#fff}
+@media (prefers-color-scheme:dark){:root{--ink:#e4e4ea;--muted:#8d8f99;--line:#2a2c33;--bg:#16171b;--side:#1b1c21;--lav:#262a3d;--card:#1f2026}}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg)}
+button,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0}
+:focus-visible{outline:3px solid #b8c4fa;outline-offset:2px}
+aside{width:250px;flex:none;display:flex;flex-direction:column;padding:26px 18px 16px;background:var(--side);border-right:1px solid var(--line)}
+.logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:21px;letter-spacing:-.02em}
+.logo i{display:grid;grid-template-columns:repeat(2,5px);gap:3px}.logo i b{width:5px;height:5px;border-radius:50%;background:var(--blue)}
+.tag{font-size:9.5px;letter-spacing:.14em;color:var(--muted);margin:4px 0 22px 2px;text-transform:uppercase}
+.newc{display:flex;gap:10px;align-items:center;width:100%;padding:10px 14px;border-radius:9px;background:var(--lav);color:#4b5aa3}
+@media (prefers-color-scheme:dark){.newc{color:#b9c3f5}}
+h2{font-size:10.5px;font-weight:600;letter-spacing:.14em;color:var(--muted);margin:26px 12px 8px;text-transform:uppercase}
+#convs{list-style:none;margin:0;padding:0;overflow:auto;flex:1}
+#convs li{display:flex;align-items:center;border-radius:8px}
+#convs li.on{background:var(--lav)}
+#convs .open{flex:1;text-align:left;padding:7px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+#convs .dot{width:7px;height:7px;border-radius:50%;background:var(--teal);margin-left:10px;flex:none;animation:p 1s infinite alternate}
+@keyframes p{to{opacity:.25}}
+#convs .del{opacity:0;padding:4px 10px;color:var(--muted)}#convs li:hover .del{opacity:1}
+.foot a{display:flex;gap:10px;padding:9px 12px;font-size:13px;color:var(--ink);text-decoration:none;border-radius:8px}.foot a:hover{background:var(--lav)}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+.top{height:64px;flex:none;display:flex;align-items:center;gap:12px;padding:0 32px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.top b{color:var(--ink);font-weight:500}
+.model{margin-left:auto;display:flex;align-items:center;gap:8px}
+.model input{width:280px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:12.5px}
+.model input:invalid{border-color:#e7a1a1}
+#scroll{flex:1;overflow:auto}
+.col{max-width:770px;margin:0 auto;padding:24px 20px}
+.who{display:flex;align-items:center;gap:12px;padding-bottom:18px;border-bottom:1px solid var(--line);margin-bottom:22px}
+.who .av{width:38px;height:38px;border-radius:50% 50% 45% 45%;background:linear-gradient(#a9b4f0,#7285d5);display:grid;place-items:center;color:#fff;font-weight:700}
+.who small{display:block;color:var(--muted);font-size:11px}
+.me{margin:14px 0 14px auto;width:fit-content;max-width:75%;background:var(--teal);color:#fff;font-weight:500;padding:10px 15px;border-radius:12px;white-space:pre-wrap}
+.ai{margin:14px 0;white-space:normal}.ai p{margin:.4em 0}
+.ai pre,.card pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px;white-space:pre-wrap}
+.ai code{background:var(--lav);border-radius:4px;padding:0 4px;font-size:.92em}.ai pre code{background:none;padding:0}
+.card{margin:10px 0;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.card summary{list-style:none;display:flex;align-items:center;gap:10px;padding:9px 13px;cursor:pointer;font-size:13px}
+.card summary::-webkit-details-marker{display:none}
+.card .st{width:18px;height:18px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:11px;color:#fff;background:var(--teal)}
+.card .st.run{background:none;border:2px solid var(--teal);border-right-color:transparent;animation:s .8s linear infinite}
+.card .st::after{content:"✓"}.card .st.run::after{content:""}.card .st.bad::after{content:"!"}
+.card .st.bad{background:#d97a7a}
+@keyframes s{to{transform:rotate(360deg)}}
+.card code{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card pre{margin:0 12px 12px;max-height:320px}
+.err{color:#c25555;font-size:13px}
+.empty{text-align:center;color:var(--muted);margin-top:12vh}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px}
+.chips button{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:7px 14px;font-size:12.5px}
+.chips button:hover{background:var(--lav)}
+form{max-width:770px;width:100%;margin:0 auto;padding:12px 20px 6px;display:flex;align-items:flex-end;gap:10px;border-top:1px solid var(--line)}
+textarea{flex:1;resize:none;border:0;background:none;padding:10px 4px;max-height:200px}
+textarea:focus{outline:none}
+#go{width:34px;height:34px;border-radius:50%;background:var(--teal);color:#fff;font-size:17px;flex:none}
+#go:hover{background:var(--teal-d)}#go.stop{background:var(--ink)}
+.hint{text-align:center;font-size:10.5px;color:var(--muted);padding:0 0 10px}
 </style></head><body>
-<header>
-  <strong>Kanca Agent</strong>
-  <label>Model <input id="model" list="models" size="32" placeholder="pick a model" required></label>
-  <datalist id="models"></datalist>
-  <button id="new" type="button">New chat</button>
-  <a href="/dashboard">9Router dashboard</a>
-</header>
-<main id="log" aria-live="polite"></main>
-<form id="f">
-  <label for="q" hidden>Message</label>
-  <textarea id="q" rows="2" placeholder="e.g. start 2 Railway boxes running autofarm on https://site/signup"></textarea>
-  <button id="go">Send</button>
-</form>
+<aside>
+  <div class="logo"><i><b></b><b></b><b></b><b></b></i>Kanca</div>
+  <div class="tag">free models · your tools</div>
+  <button class="newc" id="new">＋ New conversation</button>
+  <h2>Conversations</h2>
+  <ul id="convs"></ul>
+  <nav class="foot">
+    <a href="/dashboard" target="_blank">◫ 9Router dashboard</a>
+    <a href="/dashboard/providers" target="_blank">⚙ Providers &amp; keys</a>
+  </nav>
+</aside>
+<main>
+  <div class="top"><span>Kanca</span>/<b id="crumb">New conversation</b>
+    <label class="model">Model <input id="model" list="models" placeholder="pick a model…" required autocomplete="off"></label>
+    <datalist id="models"></datalist>
+  </div>
+  <div id="scroll"><div class="col" id="log" aria-live="polite"></div></div>
+  <form id="f">
+    <label for="q" hidden>Message</label>
+    <textarea id="q" rows="1" placeholder="Message Kanca…"></textarea>
+    <button id="go" aria-label="Send">↑</button>
+  </form>
+  <div class="hint">Runs your Auto-FreeCF tools on this laptop · Enter to send, Shift+Enter for a new line</div>
+</main>
 <script>
 const $ = (s) => document.querySelector(s), log = $("#log");
-let history = JSON.parse(sessionStorage.kancaChat || "[]"), ctl = null;
-$("#model").value = sessionStorage.kancaModel || localStorage.kancaModel || "";
-fetch("/agent/api/models").then(r => r.json()).then(ids => $("#models").replaceChildren(...ids.map(id => Object.assign(document.createElement("option"), { value: id }))));
+const KEY = "kancaConvs";
+let convs = JSON.parse(localStorage[KEY] || "[]"), cur = null;
+const runs = {};  // conv id -> {ctl, pending events}; several conversations can run at once
+const save = () => localStorage[KEY] = JSON.stringify(convs);
+const conv = () => convs.find((c) => c.id === cur);
 
-function add(cls, text, tag = "div") { const e = document.createElement(tag); e.className = cls; e.textContent = text; log.append(e); log.scrollTop = log.scrollHeight; return e; }
-function render() { log.replaceChildren(); for (const m of history) if (m.role === "user") add("me", m.content); else if (m.role === "assistant" && m.content) add("ai", m.content); }
-render();
+fetch("/agent/api/models").then((r) => r.json()).then((ids) =>
+  $("#models").replaceChildren(...ids.map((id) => Object.assign(document.createElement("option"), { value: id }))));
 
-$("#new").onclick = () => { ctl?.abort(); history = []; sessionStorage.kancaChat = "[]"; render(); };
-$("#q").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#f").requestSubmit(); } };
-$("#f").onsubmit = async (e) => {
-  e.preventDefault();
-  if (ctl) { ctl.abort(); return; }
-  const q = $("#q").value.trim(); if (!q) return;
-  $("#q").value = ""; add("me", q); history.push({ role: "user", content: q });
-  sessionStorage.kancaModel = localStorage.kancaModel = $("#model").value;
-  ctl = new AbortController(); $("#go").textContent = "Stop";
-  let pre = null;
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+function md(s) {  // tiny markdown: code blocks, inline code, bold, links, paragraphs
+  return esc(s).split(/```\w*\n?/).map((part, i) => i % 2 ? `<pre><code>${part}</code></pre>` :
+    part.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/(https?:\/\/[^\s<)]+)/g, '<a href="$1" target="_blank">$1</a>')
+      .split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("")).join("");
+}
+function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
+function card(tool, args, state) {
+  const d = el(`<details class="card"><summary><span class="st ${state}"></span><b>${esc(tool || "?")}</b><code>${esc((args || []).join(" "))}</code></summary><pre></pre></details>`);
+  if (state === "run") d.open = true;
+  return d;
+}
+const stick = () => { const s = $("#scroll"); s.scrollTop = s.scrollHeight; };
+
+function renderList() {
+  $("#convs").replaceChildren(...convs.map((c) => {
+    const li = el(`<li class="${c.id === cur ? "on" : ""}">${runs[c.id] ? '<span class="dot" title="running"></span>' : ""}<button class="open"></button><button class="del" aria-label="Delete">×</button></li>`);
+    li.querySelector(".open").textContent = c.title;
+    li.querySelector(".open").onclick = () => open(c.id);
+    li.querySelector(".del").onclick = () => { runs[c.id]?.ctl.abort(); convs = convs.filter((x) => x !== c); save(); if (cur === c.id) open(null); else renderList(); };
+    return li;
+  }));
+}
+
+function renderChat() {
+  const c = conv(); log.replaceChildren();
+  $("#crumb").textContent = c?.title || "New conversation";
+  log.append(el(`<div class="who"><div class="av">K</div><div><b>Kanca</b><small>${esc(c?.model || $("#model").value || "no model picked")}</small></div></div>`));
+  if (!c || !c.messages.length) {
+    const e = el(`<div class="empty"><p>What should I do?</p><div class="chips"></div></div>`);
+    for (const t of ["Show my Railway boxes", "Is WARP on?", "How many THK keys are live?", "Sign up on a URL with a temp inbox"])
+      e.lastChild.append(Object.assign(document.createElement("button"), { type: "button", textContent: t, onclick: () => { $("#q").value = t; $("#q").focus(); } }));
+    return log.append(e);
+  }
+  let last = null;
+  for (const m of c.messages) {
+    if (m.role === "user") log.append(Object.assign(el('<div class="me"></div>'), { textContent: m.content }));
+    else if (m.role === "assistant") {
+      if (m.content) log.append(el(`<div class="ai">${md(m.content)}</div>`));
+      for (const tc of m.tool_calls || []) {
+        let a = {}; try { a = JSON.parse(tc.function.arguments || "{}"); } catch {}
+        last = log.appendChild(card(a.tool, a.args, "")); last.dataset.id = tc.id;
+      }
+    } else if (m.role === "tool") {
+      const d = log.querySelector(`[data-id="${CSS.escape(m.tool_call_id)}"]`) || last;
+      if (d) { d.querySelector("pre").textContent = m.content; if (/\[exit [1-9]/.test(m.content)) d.querySelector(".st").className = "st bad"; }
+    }
+  }
+  for (const ev of runs[c.id]?.pending || []) show(ev);
+  stick();
+}
+
+let liveCard = null;
+function show(ev) {  // draw one streaming event into the visible chat
+  if (ev.type === "text") log.append(el(`<div class="ai">${md(ev.text)}</div>`));
+  else if (ev.type === "tool") { liveCard?.querySelector(".st.run")?.classList.remove("run"); liveCard = log.appendChild(card(ev.tool, ev.args, "run")); }
+  else if (ev.type === "out" && liveCard) { const p = liveCard.querySelector("pre"); p.textContent += ev.text; p.scrollTop = p.scrollHeight; }
+  else if (ev.type === "error") log.append(Object.assign(el('<div class="err"></div>'), { textContent: ev.text }));
+  stick();
+}
+
+function open(id) {
+  cur = id; const c = conv();
+  if (c?.model) $("#model").value = c.model;
+  $("#go").classList.toggle("stop", !!runs[cur]); $("#go").textContent = runs[cur] ? "■" : "↑";
+  liveCard = null; renderList(); renderChat(); $("#q").focus();
+}
+
+async function send(q) {
+  const model = $("#model").value.trim();
+  if (!model) { $("#model").focus(); return; }
+  localStorage.kancaModel = model;
+  let c = conv();
+  if (!c) { c = { id: crypto.randomUUID(), title: q.slice(0, 40), model, messages: [] }; convs.unshift(c); cur = c.id; }
+  c.model = model; c.messages.push({ role: "user", content: q }); save();
+  const run = runs[c.id] = { ctl: new AbortController(), pending: [] };
+  open(c.id);
+  const emit = (ev) => { run.pending.push(ev); if (cur === c.id) show(ev); };
   try {
-    const r = await fetch("/agent/api/chat", { method: "POST", signal: ctl.signal, headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: $("#model").value, messages: history }) });
+    const r = await fetch("/agent/api/chat", { method: "POST", signal: run.ctl.signal, headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, messages: c.messages }) });
     if (!r.ok) throw new Error(await r.text());
     const rd = r.body.pipeThrough(new TextDecoderStream()).getReader(); let buf = "";
     for (;;) {
       const { value, done } = await rd.read(); if (done) break;
-      buf += value; const lines = buf.split("\n"); buf = lines.pop();
+      const lines = (buf += value).split("\n"); buf = lines.pop();
       for (const l of lines.filter(Boolean)) {
         const ev = JSON.parse(l);
-        if (ev.type === "text") add("ai", ev.text);
-        else if (ev.type === "tool") { const d = add("", "", "details"); d.open = true;
-          d.append(Object.assign(document.createElement("summary"), { textContent: `▶ ${ev.tool} ${ev.args.join(" ")}` }));
-          pre = d.appendChild(document.createElement("pre")); }
-        else if (ev.type === "out" && pre) { pre.textContent += ev.text; pre.scrollTop = pre.scrollHeight; log.scrollTop = log.scrollHeight; }
-        else if (ev.type === "error") add("ai err", ev.text);
-        else if (ev.type === "done") { history = ev.messages; sessionStorage.kancaChat = JSON.stringify(history); }
+        if (ev.type === "done") c.messages = ev.messages; else emit(ev);
       }
     }
-  } catch (err) { if (err.name !== "AbortError") add("ai err", String(err.message || err)); else add("ai err", "stopped"); }
-  ctl = null; $("#go").textContent = "Send";
+  } catch (err) { c.messages.push({ role: "assistant", content: err.name === "AbortError" ? "_stopped_" : `⚠ ${err.message || err}` }); }
+  delete runs[c.id]; save();
+  if (cur === c.id) open(c.id); else renderList();
+}
+
+$("#new").onclick = () => open(null);
+$("#q").oninput = (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; };
+$("#q").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#f").requestSubmit(); } };
+$("#f").onsubmit = (e) => {
+  e.preventDefault();
+  if (runs[cur]) return runs[cur].ctl.abort();
+  const q = $("#q").value.trim(); if (!q) return;
+  $("#q").value = ""; $("#q").style.height = "auto"; send(q);
 };
+$("#model").value = localStorage.kancaModel || "";
+open(convs[0]?.id || null);
 </script></body></html>
