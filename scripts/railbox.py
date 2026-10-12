@@ -7,6 +7,7 @@
   railbox.py pull [dir]         box:/app/work -> local dir
   railbox.py ssh [cmd...]       shell/command on the live box
   railbox.py wipe [--name N]    erase box files + forget its key
+  railbox.py swarm N "script args"  N boxes, each clones+bootstraps then runs the script
   railbox.py rotate [--margin 10]  pull -> new box -> push -> wipe old
   railbox.py daemon [--margin 10]  rotate forever, ~margin min before expiry
   (create runs through a VPN Gate relay, transfers run direct; --no-relay to skip)
@@ -200,13 +201,21 @@ def battery_low(pct=15, root=Path("/sys/class/power_supply")):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["new", "status", "push", "pull", "ssh", "wipe", "rotate", "daemon"])
+    ap.add_argument("cmd", choices=["new", "status", "push", "pull", "ssh", "wipe", "rotate", "daemon", "swarm"])
     ap.add_argument("rest", nargs="*"); ap.add_argument("--name"); ap.add_argument("--margin", type=int, default=10); ap.add_argument("--no-relay", action="store_true"); ap.add_argument("--min-battery", type=int, default=15)
     a = ap.parse_args()
     if a.cmd == "new": create(a.name or f"b{int(time.time())}")
     elif a.cmd == "status":
         for n, b in load().items():
             print(n, f"{(b['expires']-time.time())/60:.0f} min left", b["claim"], b["preview"])
+    elif a.cmd == "swarm":  # swarm N 'cmd': N boxes, each runs cmd in background (Railway caps ~3 boxes/IP/day)
+        n, cmd = int(a.rest[0]), " ".join(a.rest[1:]) or "true"
+        boot = ("cd /app && { [ -d work/.git ] || git clone -q --depth 1 https://github.com/Ini-Amin/Kanca-Hub.git work; }"
+                f" && cd work && sh scripts/railbox_bootstrap.sh > /tmp/boot.log 2>&1 && xvfb-run -a /app/venv/bin/python {cmd}")
+        for i in range(n):
+            name = create(f"s{int(time.time())}{i}")
+            run(name, f"nohup sh -c {shlex.quote(boot)} > /tmp/job.log 2>&1 &", timeout=60)
+            print(f"{name}: started (log: railbox.py ssh --name {name} -- tail /tmp/job.log)")
     elif a.cmd == "rotate": rotate(a.margin, not a.no_relay)
     elif a.cmd == "daemon":
         last, saved_low, down = 0, False, False

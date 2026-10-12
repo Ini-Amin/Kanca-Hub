@@ -109,40 +109,6 @@ Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy
 | `kancahub grok pool` | Show the grok2api token pool | `kancahub grok pool` |
 | `kancahub grok inject` | Inject Grok SSO tokens into 9Router via a grok2api bridge | `kancahub grok inject --base-url http://127.0.0.1:8787/v1 --dry-run` |
 
-### Grok SSO → 9Router (`grok2api_bridge`)
-
-9Router's built-in `xai` provider is OAuth-only, so grok.com **SSO cookie**
-tokens need a "grok2api" OpenAI-compatible endpoint. `scripts/grok2api_bridge.py`
-provides one locally. The upstream is **grounded** (probed 2026-10-05):
-
-- SSO cookie auth → `POST https://grok.com/rest/app-chat/conversations/new` with
-  cookies `sso=<t>; sso-rw=<t>` (what `registration_browser.py` / `sso_risk.py`
-  use). This is the bridge's **default** (`--auth-mode cookie`). It translates the
-  OpenAI body to Grok's `{message, modelName}` and folds the reply back into an
-  OpenAI `chat.completion`; `--raw` skips translation.
-- OAuth Bearer auth → `https://cli-chat-proxy.grok.com/v1` (what the CPA export
-  mints). Anonymous probe answers `401 no auth context`; use
-  `--upstream-base https://cli-chat-proxy.grok.com --upstream-path /v1/chat/completions --auth-mode bearer`.
-
-grok.com is behind Cloudflare, so the bridge uses curl_cffi Chrome TLS
-impersonation by default (`--no-impersonate` forces httpx).
-
-```bash
-# start the bridge (managed venv)
-/home/amen/.local/share/auto-freecf/venv/bin/python scripts/grok2api_bridge.py --port 8787
-# point 9Router at it
-kancahub grok inject --base-url http://127.0.0.1:8787/v1
-# or set the env var used by grok_9router.py
-export GROK2API_BASE=http://127.0.0.1:8787
-```
-
-Flags: `--host` `--port` (default `127.0.0.1:8787`), `--tokens FILE`,
-`--upstream-base`, `--upstream-path`, `--auth-mode cookie|bearer`,
-`--cf-clearance`, `--no-impersonate`, `--raw`, `--model-map find=replace`.
-Live-probed: `/healthz` and `/v1/models` return 200; a dummy/unauthenticated
-`/v1/chat/completions` returns grok.com's real `401 Bad credentials` (proving the
-route + cookie auth, awaiting a valid SSO).
-
 ## `github` — GitHub Education signup helper
 
 > Helper flow only. Arkose/CAPTCHA puzzles, the student-ID photo / identity
