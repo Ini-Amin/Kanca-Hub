@@ -932,7 +932,7 @@ async def _route_email(page, url, email, password, username, host, result,
     session = await _capture_session(page, host)
     result["final_url"] = page.url
     result["session"] = session
-    if _post_login_signal(page.url, session, url, host):
+    if await _verified(page, session, url, host):
         result["success"] = True
         result["stopped_at"] = "post_login_verified"
         print(f"  ✓ Verified post-login signal at {page.url}")
@@ -969,7 +969,7 @@ async def _route_email(page, url, email, password, username, host, result,
                         session = await _capture_session(page, host)
                         result["final_url"] = page.url
                         result["session"] = session
-                        if _post_login_signal(page.url, session, url, host):
+                        if await _verified(page, session, url, host):
                             result["success"] = True
                             result["stopped_at"] = "post_login_verified"
                             print(f"  ✓ Verified post-login signal at {page.url}")
@@ -1004,7 +1004,7 @@ async def _route_email(page, url, email, password, username, host, result,
                 await page.wait_for_timeout(4000)
                 session = await _capture_session(page, host)
                 result["final_url"], result["session"] = page.url, session
-                if _post_login_signal(page.url, session, url, host):
+                if await _verified(page, session, url, host):
                     result["success"] = True
                     result["stopped_at"] = "post_login_verified"
                     print(f"  ✓ Verified post-login signal at {page.url}")
@@ -1038,7 +1038,7 @@ async def _route_email(page, url, email, password, username, host, result,
         session = await _capture_session(page, host)
         result["final_url"] = page.url
         result["session"] = session
-        if _post_login_signal(page.url, session, url, host):
+        if await _verified(page, session, url, host):
             result["success"] = True
             result["stopped_at"] = "post_login_verified"
             print(f"  ✓ Verified post-login signal at {page.url}")
@@ -1192,6 +1192,19 @@ async def inspect_auth_methods(page, target_url: str) -> dict:
     classification = classify_auth(labels, hrefs, has_email, has_pass, has_next=has_next)
     classification["target"] = target_url
     return classification
+
+async def _verified(page, session: dict, target_url: str, host: str) -> bool:
+    """Post-login signal AND the login/email form is gone (pre-login cookies
+    alone fooled the gate on ZenMux while 'Send Email' was still showing)."""
+    try:
+        el = await page.query_selector(
+            "input[type='email'], input[placeholder*='email' i], input[type='password']")
+        if el and await el.is_visible():
+            return False
+    except Exception:
+        pass
+    return _post_login_signal(page.url, session, target_url, host)
+
 
 def _post_login_signal(page_url: str, session: dict, target_url: str, host: str) -> bool:
     """Strict post-login check — delegated to the proven github_to_anything gate."""
