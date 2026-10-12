@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Kanca Agent</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{color-scheme:dark;--bg:#0f1115;--card:#181b22;--fg:#e6e6e6;--mut:#8a8f98;--acc:#7aa2ff}
+body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);display:flex;flex-direction:column;height:100vh}
+header{display:flex;gap:.6rem;align-items:center;padding:.6rem 1rem;border-bottom:1px solid #222}
+header a{color:var(--mut);margin-left:auto}
+#log{flex:1;overflow:auto;padding:1rem;display:flex;flex-direction:column;gap:.6rem}
+.me{align-self:flex-end;background:#243049;padding:.5rem .8rem;border-radius:10px;max-width:75%;white-space:pre-wrap}
+.ai{background:var(--card);padding:.5rem .8rem;border-radius:10px;max-width:85%;white-space:pre-wrap}
+details{background:#11141a;border:1px solid #262a33;border-radius:8px;padding:.3rem .6rem;max-width:90%}
+summary{cursor:pointer;color:var(--acc);font-family:monospace}
+pre{margin:.4rem 0 0;max-height:300px;overflow:auto;font-size:12px;color:#b9c0cc;white-space:pre-wrap}
+.err{color:#ff7a7a}
+form{display:flex;gap:.5rem;padding:.8rem 1rem;border-top:1px solid #222}
+textarea{flex:1;resize:none;background:var(--card);color:var(--fg);border:1px solid #333;border-radius:8px;padding:.5rem;font:inherit}
+button,select,input{background:var(--card);color:var(--fg);border:1px solid #333;border-radius:8px;padding:.4rem .7rem;font:inherit}
+button{cursor:pointer}
+</style></head><body>
+<header>
+  <strong>Kanca Agent</strong>
+  <label>Model <input id="model" list="models" size="32" value="kilo/kilo-auto/free"></label>
+  <datalist id="models"></datalist>
+  <button id="new" type="button">New chat</button>
+  <a href="/dashboard">9Router dashboard</a>
+</header>
+<main id="log" aria-live="polite"></main>
+<form id="f">
+  <label for="q" hidden>Message</label>
+  <textarea id="q" rows="2" placeholder="e.g. start 2 Railway boxes running autofarm on https://site/signup"></textarea>
+  <button id="go">Send</button>
+</form>
+<script>
+const $ = (s) => document.querySelector(s), log = $("#log");
+let history = JSON.parse(localStorage.kancaChat || "[]"), ctl = null;
+$("#model").value = localStorage.kancaModel || $("#model").value;
+fetch("/agent/api/models").then(r => r.json()).then(ids => $("#models").replaceChildren(...ids.map(id => Object.assign(document.createElement("option"), { value: id }))));
+
+function add(cls, text, tag = "div") { const e = document.createElement(tag); e.className = cls; e.textContent = text; log.append(e); log.scrollTop = log.scrollHeight; return e; }
+function render() { log.replaceChildren(); for (const m of history) if (m.role === "user") add("me", m.content); else if (m.role === "assistant" && m.content) add("ai", m.content); }
+render();
+
+$("#new").onclick = () => { ctl?.abort(); history = []; localStorage.kancaChat = "[]"; render(); };
+$("#q").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#f").requestSubmit(); } };
+$("#f").onsubmit = async (e) => {
+  e.preventDefault();
+  if (ctl) { ctl.abort(); return; }
+  const q = $("#q").value.trim(); if (!q) return;
+  $("#q").value = ""; add("me", q); history.push({ role: "user", content: q });
+  localStorage.kancaModel = $("#model").value;
+  ctl = new AbortController(); $("#go").textContent = "Stop";
+  let pre = null;
+  try {
+    const r = await fetch("/agent/api/chat", { method: "POST", signal: ctl.signal, headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: $("#model").value, messages: history }) });
+    if (!r.ok) throw new Error(await r.text());
+    const rd = r.body.pipeThrough(new TextDecoderStream()).getReader(); let buf = "";
+    for (;;) {
+      const { value, done } = await rd.read(); if (done) break;
+      buf += value; const lines = buf.split("\n"); buf = lines.pop();
+      for (const l of lines.filter(Boolean)) {
+        const ev = JSON.parse(l);
+        if (ev.type === "text") add("ai", ev.text);
+        else if (ev.type === "tool") { const d = add("", "", "details"); d.open = true;
+          d.append(Object.assign(document.createElement("summary"), { textContent: `▶ ${ev.tool} ${ev.args.join(" ")}` }));
+          pre = d.appendChild(document.createElement("pre")); }
+        else if (ev.type === "out" && pre) { pre.textContent += ev.text; pre.scrollTop = pre.scrollHeight; log.scrollTop = log.scrollHeight; }
+        else if (ev.type === "error") add("ai err", ev.text);
+        else if (ev.type === "done") { history = ev.messages; localStorage.kancaChat = JSON.stringify(history); }
+      }
+    }
+  } catch (err) { if (err.name !== "AbortError") add("ai err", String(err.message || err)); else add("ai err", "stopped"); }
+  ctl = null; $("#go").textContent = "Send";
+};
+</script></body></html>
