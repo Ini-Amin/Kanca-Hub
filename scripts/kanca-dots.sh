@@ -11,5 +11,7 @@ systemctl --user start zcode-bridge deepseek-bridge 2>/dev/null
 up 4174 || nohup luvus web --control --origin http://panes.localhost:20128 --no-open >"$D/luvus-web.log" 2>&1 &
 up 20128 || nohup "$NODE" scripts/kanca_dots.mjs >"$D/kanca-dots.log" 2>&1 &
 sleep 3
-[ "${1:-}" = --no-open ] || xdg-open "http://panes.localhost:20128/$(grep -oE '#pair=[^ ]+' "$D/luvus-web.log" | tail -1)" >/dev/null 2>&1 &
+# One app window (no tabs/URL bar) via Brave app mode; own profile so it gets its own taskbar icon.
+[ "${1:-}" = --no-open ] || nohup brave-browser --app="http://panes.localhost:20128/$(grep -oE '#pair=[^ ]+' "$D/luvus-web.log" | tail -1)" \
+  --user-data-dir="$HOME/.local/share/kanca-dots/window" --class=Kanca-Dots >/dev/null 2>&1 &
 echo "9router: http://localhost:20128   panes: http://panes.localhost:20128"
