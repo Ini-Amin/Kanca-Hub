@@ -2,14 +2,11 @@
 # Kanca-Dots: start 9Router (:20129) + ZCode bridge + Luvus web + the :20128 front door, open panes.
 set -u
 cd "$(dirname "$0")/.."
-NODE=~/.local/share/node24/bin/node
 up() { ss -ltn | grep -q "127.0.0.1:$1 \|0.0.0.0:$1 \|\*:$1 "; }
 D=/tmp/opencode; mkdir -p "$D"
 
-up 20129 || nohup "$NODE" ~/.npm-global/lib/node_modules/9router/cli.js --port 20129 --host 127.0.0.1 --skip-update >"$D/9router.log" 2>&1 &
-systemctl --user start zcode-bridge deepseek-bridge 2>/dev/null
+systemctl --user start app-9router@autostart zcode-bridge deepseek-bridge kanca-dots 2>/dev/null
 up 4174 || nohup luvus web --control --origin http://panes.localhost:20128 --no-open >"$D/luvus-web.log" 2>&1 &
-up 20128 || nohup "$NODE" scripts/kanca_dots.mjs >"$D/kanca-dots.log" 2>&1 &
 sleep 3
 # One app window (no tabs/URL bar) via Brave app mode; own profile so it gets its own taskbar icon.
 [ "${1:-}" = --no-open ] || nohup brave-browser --app="http://panes.localhost:20128/$(grep -oE '#pair=[^ ]+' "$D/luvus-web.log" | tail -1)" \
