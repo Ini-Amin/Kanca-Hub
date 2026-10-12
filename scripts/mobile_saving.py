@@ -22,6 +22,11 @@ Usage:
   python scripts/mobile_saving.py start --cap-mb 50            # begin a budgeted session
   python scripts/mobile_saving.py used                          # mobile MB since start
   python scripts/mobile_saving.py stop
+  python scripts/mobile_saving.py run --cap-mb 20 -- python job.py   # kill job past 20 MB
+
+Laptop side: NM profile "phone-tether" (enp0s20f0u2) keeps its default route in
+table 900, so only traffic bound to that interface (curl --interface, a proxy
+bound to it) uses mobile data; everything else stays on Wi-Fi.
 """
 from __future__ import annotations
 
@@ -45,36 +50,42 @@ def _adb(*args: str, serial: str | None = None, timeout: int = 20) -> str:
 
 
 def _serial() -> str | None:
+    """First USB phone; network adb targets (Waydroid ip:port) are skipped."""
     out = _adb("devices")
     for line in out.splitlines()[1:]:
-        if line.strip().endswith("device"):
+        if line.strip().endswith("device") and ":" not in line.split()[0]:
             return line.split()[0]
     return None
 
 
+# rmnet_data*/ccmni* carry the billed traffic; rmnet_ipa0 is the hardware link
+# underneath them, so counting it too would double every byte.
+MOBILE_PREFIXES = ("rmnet_data", "ccmni", "wwan")
+
+
+def parse_net_dev(text: str) -> dict[str, tuple[int, int]]:
+    """/proc/net/dev -> {iface: (rx, tx)} for the mobile interfaces."""
+    out = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        name, rest = line.split(":", 1)
+        name, f = name.strip(), rest.split()
+        if name.startswith(MOBILE_PREFIXES) and len(f) >= 9:
+            out[name] = (int(f[0]), int(f[8]))
+    return out
+
+
 def _mobile_iface(serial: str) -> str | None:
-    """The phone's mobile data interface (rmnet*/ccmni*), if any."""
-    out = _adb("shell", "ip", "-o", "link", "show", serial=serial)
-    for line in out.splitlines():
-        for tok in line.split():
-            if tok.startswith(("rmnet", "ccmni", "wwan")):
-                return tok.split("@")[0]
-    return None
+    """Comma-joined mobile interfaces, if any."""
+    names = parse_net_dev(_adb("shell", "cat", "/proc/net/dev", serial=serial))
+    return ",".join(sorted(names)) or None
 
 
 def _mobile_rx_tx(serial: str) -> tuple[int, int]:
-    """Bytes rx/tx on the mobile interface (cumulative)."""
-    iface = _mobile_iface(serial)
-    if not iface:
-        return 0, 0
-    out = _adb("shell", "cat", f"/sys/class/net/{iface}/statistics/rx_bytes", serial=serial)
-    out2 = _adb("shell", "cat", f"/sys/class/net/{iface}/statistics/tx_bytes", serial=serial)
-    def _n(s: str) -> int:
-        try:
-            return int(s.strip().splitlines()[0])
-        except Exception:
-            return 0
-    return _n(out), _n(out2)
+    """Bytes rx/tx summed over all mobile interfaces (cumulative since boot)."""
+    v = parse_net_dev(_adb("shell", "cat", "/proc/net/dev", serial=serial)).values()
+    return sum(r for r, _ in v), sum(t for _, t in v)
 
 
 def status() -> int:
@@ -115,6 +126,30 @@ def used() -> int:
     return 5 if over else 0  # exit 5 = over budget (callers can stop the farm)
 
 
+def run(cap_mb: float, cmd: list[str], poll: float = 3.0) -> int:
+    """Run cmd; kill it once phone mobile data used since start passes cap_mb."""
+    s = _serial()
+    if not s:
+        print("  ✗ no Android device"); return 3
+    base = sum(_mobile_rx_tx(s))
+    p = subprocess.Popen(cmd)
+    mb = 0.0
+    while p.poll() is None:
+        time.sleep(poll)
+        mb = (sum(_mobile_rx_tx(s)) - base) / 1e6
+        if mb >= cap_mb:
+            p.terminate()
+            try:
+                p.wait(10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            print(f"  ⛔ mobile data {mb:.1f} MB ≥ cap {cap_mb} MB — job killed")
+            return 5
+    mb = (sum(_mobile_rx_tx(s)) - base) / 1e6
+    print(f"  mobile data used: {mb:.1f} MB (cap {cap_mb} MB)")
+    return p.returncode
+
+
 def stop() -> int:
     STATE.unlink(missing_ok=True)
     print("  stopped")
@@ -128,7 +163,12 @@ def main(argv=None) -> int:
     s = sub.add_parser("start"); s.add_argument("--cap-mb", type=float, default=50)
     sub.add_parser("used")
     sub.add_parser("stop")
+    r = sub.add_parser("run", help="run a job, kill it past the cap: run --cap-mb 20 -- cmd ...")
+    r.add_argument("--cap-mb", type=float, default=20); r.add_argument("job", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
+    if a.cmd == "run":
+        job = a.job[1:] if a.job[:1] == ["--"] else a.job
+        return run(a.cap_mb, job) if job else ap.error("run needs a command")
     return {"status": status, "start": lambda: start(a.cap_mb), "used": used, "stop": stop}[a.cmd]()
 
 

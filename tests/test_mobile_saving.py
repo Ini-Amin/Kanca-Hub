@@ -21,6 +21,23 @@ class TestSaving(unittest.TestCase):
             M.STATE = Path(d) / "none.json"
             self.assertEqual(M.used(), 1)
 
+    def test_parse_net_dev_skips_ipa_and_wifi(self):
+        dev = ("Inter-|   Receive\n face |bytes\n"
+               "  wlan0: 900 1 0 0 0 0 0 0 800 1 0 0 0 0 0 0\n"
+               "rmnet_ipa0: 999 1 0 0 0 0 0 0 999 1 0 0 0 0 0 0\n"
+               "rmnet_data2: 100 1 0 0 0 0 0 0 40 1 0 0 0 0 0 0\n"
+               "rmnet_data1: 10 1 0 0 0 0 0 0 5 1 0 0 0 0 0 0\n")
+        self.assertEqual(M.parse_net_dev(dev), {"rmnet_data2": (100, 40), "rmnet_data1": (10, 5)})
+
+    def test_run_kills_job_over_cap(self):
+        counter = iter(range(0, 10**9, 30_000_000))  # +30 MB per poll
+        old = (M._serial, M._mobile_rx_tx)
+        M._serial, M._mobile_rx_tx = (lambda: "x"), (lambda s: (next(counter), 0))
+        try:
+            self.assertEqual(M.run(20, [sys.executable, "-c", "import time; time.sleep(30)"], poll=0.1), 5)
+        finally:
+            M._serial, M._mobile_rx_tx = old
+
     def test_status_no_device(self):
         old = M._serial
         M._serial = lambda: None
