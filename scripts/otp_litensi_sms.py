@@ -64,8 +64,42 @@ async def _pick_cheapest_price(page) -> str | None:
     return None
 
 
+async def active_order() -> tuple[str, "object", "object"] | None:
+    """Return (number, page, browser) for an existing 'Waiting for SMS' order,
+    or None. Logging in opens a session whose OTP page lists active orders —
+    reusing one avoids paying for a second number (cancel/refund both burn
+    the fee, so salvage beats buy-then-cancel)."""
+    from camoufox.async_api import AsyncCamoufox
+    import litensi_account as L
+    import residential_proxy_signup as R
+    import re as _re
+    acct = L.load_account()
+    browser = await AsyncCamoufox(headless=True, os="windows", humanize=True).__aenter__()
+    page = await browser.new_page()
+    try:
+        await L._do_login(page, R, acct["username"], acct["password"])
+        await page.goto("https://litensi.id/otp", wait_until="networkidle", timeout=60000)
+        await asyncio.sleep(4)
+        # find the row containing 'Waiting for SMS', climb to the one holding the number
+        hit = await page.evaluate("""(()=>{
+          const t=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&/waiting for sms/i.test(e.textContent));
+          if(!t) return null;
+          let el=t.parentElement, hops=0;
+          while(el&&hops<14){ if(/\\b628\\d{9,13}\\b/.test(el.innerText||'')&&el.innerText.includes('Waiting')) break; el=el.parentElement; hops++; }
+          const m=el? (el.innerText||'').match(/\\b(628\\d{9,13})\\b/) : null;
+          return m? m[1] : null;})()""")
+        if hit:
+            return hit, page, browser
+        await browser.__aexit__(None, None, None)
+        return None
+    except Exception:
+        try: await browser.__aexit__(None, None, None)
+        except Exception: pass
+        return None
+
 async def order_number(country: str, service: str, *, headless: bool = False,
                        dry_run: bool = False) -> dict:
+
     """Order a Litensi phone number and return {'number', 'page'} (page stays open)."""
     from camoufox.async_api import AsyncCamoufox
     import litensi_account as L

@@ -141,6 +141,19 @@ async def main():
                           "enter your phone", "verify your phone"))
         await p.screenshot(path=str(shot), full_page=True)
         print("SCREENSHOT:", shot)
+        if phone_gate:  # QR gate: decode the QR to its deep link, hand it to the phone over adb
+            import subprocess
+            link = subprocess.run(["zbarimg", "-q", "--raw", str(shot)], capture_output=True, text=True).stdout.strip()
+            print("QR_LINK:", link[:120])
+            if link.startswith("http"):
+                Path(REPORTS / "gmail_qr_link.txt").write_text(link)
+                s = os.environ.get("PHONE_SERIAL", "c8ec3d70")
+                subprocess.run(["adb", "-s", s, "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
+                subprocess.run(["adb", "-s", s, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", link])
+                print("link sent to phone", s)
+                await p.wait_for_timeout(int(os.environ.get("QR_WAIT_MS", "120000")))
+                print("URL AFTER PHONE STEP:", p.url[:110])
+                await p.screenshot(path=str(REPORTS / "gmail_after_phone.png"), full_page=True)
         print("PHONE_GATE:", phone_gate)
         print("EMAIL:", f"{UNAME}@gmail.com", "PASSWORD:", PASSWORD)
 asyncio.run(main())

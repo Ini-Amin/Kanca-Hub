@@ -85,27 +85,23 @@ async def _pick_combobox(page, label: str, option_text: str) -> bool:
 
 
 async def _solve_phone_gate(page, first: str, last: str, uname: str, password: str) -> dict:
-    """At Google's phone gate: order a Litensi number, enter it, read the SMS
-    from the webhook (sms_latest.json), enter the code, and continue."""
-    import subprocess, json as _json
-    from pathlib import Path as _P
-    latest = _P.home() / ".config" / "auto-freecf" / "sms_latest.json"
-    scripts = _P(__file__).resolve().parent
-    # order a number (browser-driven; Litensi has no REST for phone activations)
-    print("  → ordering a Litensi number …")
-    try:
-        out = subprocess.run([sys.executable, str(scripts / "otp_litensi_sms.py"),
-                              "--country", "Indonesia", "--service", "Google,youtube,Gmail"],
-                             capture_output=True, text=True, timeout=300)
-    except Exception as e:
-        return {"status": "phone_order_failed", "error": str(e)[:120]}
-    import re as _re
-    m = _re.search(r"LITENSI NUMBER:\s*(\d+)", out.stdout) or _re.search(r"'number': '(\d+)'", out.stdout) \
-        or _re.search(r"\b(62\d{9,13})\b", out.stdout)
-    if not m:
-        return {"status": "phone_order_failed", "stdout": out.stdout[-300:]}
-    number = m.group(1)
-    print(f"  → number {number}; entering it")
+    """At Google's phone gate: order a Litensi number, enter it, then poll the
+    Litensi order page itself for the SMS code (no external webhook needed)."""
+    import otp_litensi_sms as LIT
+    print("  → checking for an existing 'waiting' order first …", flush=True)
+    existing = await LIT.active_order()
+    if existing:
+        number, lpage, lbrowser = existing
+        print(f"  → reusing active order {number} (no new purchase)", flush=True)
+    else:
+        try:
+            res = await LIT.order_number("Indonesia", "Google,youtube,Gmail")
+        except Exception as e:
+            return {"status": "phone_order_failed", "error": str(e)[:120]}
+        if res.get("status") != "ordered":
+            return {"status": "phone_order_failed", "body": str(res.get("body") or "")[:300]}
+        number, lpage, lbrowser = res["number"], res["page"], res["browser"]
+        print(f"  → number {number}; entering it", flush=True)
     tel = page.locator("input[type='tel'], input[name='phoneNumber'], input#phoneNumberId").first
     try:
         if await tel.count():
@@ -118,26 +114,28 @@ async def _solve_phone_gate(page, first: str, last: str, uname: str, password: s
     await asyncio.sleep(1)
     await _click_next(page)
     await asyncio.sleep(6)
-    # wait for the SMS code via the webhook
-    print("  → waiting for SMS via webhook …")
+    print("  → waiting for SMS on the Litensi order page …", flush=True)
+    import re as _re
     code = None
-    if latest.exists():
-        try:
-            latest.unlink()  # only accept a NEW code
-        except Exception:
-            pass
     end = time.time() + 240
     while time.time() < end and not code:
-        if latest.exists():
-            try:
-                code = _json.loads(latest.read_text()).get("code")
-            except Exception:
-                code = None
+        try:
+            body = await lpage.evaluate("() => (document.body&&document.body.innerText||'')")
+            # a REAL Litensi SMS row shows 'G-XXXXXX'; CODE_RE alone matches the
+            # price/timer digits scattered on the page (that fed Google a junk
+            # code and the run lied 'created' while the gate still stood).
+            m = _re.search(r"G-(\d{4,8})", body)
+            if m:
+                code = m.group(1)
+        except Exception:
+            pass
         if not code:
-            await asyncio.sleep(4)
+            await asyncio.sleep(5)
+    try: await lbrowser.__aexit__(None, None, None)
+    except Exception: pass
     if not code:
         return {"status": "no_sms", "number": number}
-    print(f"  → SMS code {code}; entering it")
+    print(f"  → SMS code {code}; entering it", flush=True)
     gc = page.locator("input[name='code'], input#code").first
     try:
         if await gc.count():
@@ -151,7 +149,7 @@ async def _solve_phone_gate(page, first: str, last: str, uname: str, password: s
     await _click_next(page)
     await asyncio.sleep(8)
     url = page.url
-    ok = "signup" not in url or "mophoneverification" not in url
+    ok = "crossflowverificati" not in url and "signup" not in url
     print(f"  → after SMS code: {url[:70]}  ok={ok}")
     return {"status": "created" if ok else "sms_rejected", "url": url,
             "email": f"{uname}@gmail.com", "password": password, "number": number}
@@ -199,6 +197,13 @@ async def run(ws: str, *, dry_run: bool, sms_webhook: bool = False) -> dict:
         await asyncio.sleep(0.6)
         await _click_next(page)
         await asyncio.sleep(5)
+        if "signup/name" in page.url:
+            # slow load: Next click raced the form; retry once
+            await page.locator("input[name='firstName']").fill(first)
+            await page.locator("input[name='lastName']").fill(last)
+            await asyncio.sleep(0.6)
+            await _click_next(page)
+            await asyncio.sleep(6)
 
         # STEP 2: birthday + gender
         if "birthdaygender" in page.url or await page.locator("input[name='day']").count():
@@ -215,10 +220,18 @@ async def run(ws: str, *, dry_run: bool, sms_webhook: bool = False) -> dict:
             await asyncio.sleep(5)
             print(f"  → after birthday: {page.url[:70]}")
 
-        # STEP 3: username
-        if "username" in page.url or await page.locator("input[name='Username']").count():
+        # STEP 3: username — the page shows suggestions plus a 'Create your own
+        # Gmail address' radio; its input only appears after that radio is chosen.
+        if "username" in page.url:
+            try:
+                own = page.get_by_text("Create your own Gmail address", exact=False).first
+                await own.click(timeout=8000)
+                await asyncio.sleep(1.5)
+            except Exception:
+                pass
             try:
                 u = page.locator("input[name='Username'], input#username").first
+                await u.wait_for(state="visible", timeout=15000)
                 await u.fill(uname)
                 await asyncio.sleep(0.6)
                 await _click_next(page)

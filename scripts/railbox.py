@@ -96,10 +96,16 @@ def pull(name, dst):
     dst = Path(dst); dst.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(dst.name + ".tgz")  # to a file first: a piped tar choked on the ssh stream
     try:
-        with open(tmp, "wb") as f:
-            r = subprocess.run(ssh_base(name) + ["tar czf - -C /app/work ."], stdout=f, stdin=subprocess.DEVNULL, timeout=300)
-        if r.returncode:
-            print("pull ssh rc", r.returncode); return r.returncode
+        for _ in range(3):  # flaky wifi: the stream can end early yet ssh still exits 0
+            with open(tmp, "wb") as f:
+                r = subprocess.run(ssh_base(name) + ["tar czf - -C /app/work ."], stdout=f, stdin=subprocess.DEVNULL, timeout=300)
+            if r.returncode:
+                print("pull ssh rc", r.returncode); return r.returncode
+            if subprocess.run(["gzip", "-t", str(tmp)], stderr=subprocess.DEVNULL).returncode == 0:
+                break
+            print("pull truncated; retry", flush=True)
+        else:
+            return 1
         t = subprocess.run(["tar", "xzf", str(tmp), "-C", str(dst)])
     except subprocess.TimeoutExpired:
         print("pull timeout"); return 1
