@@ -20,7 +20,7 @@ those are the only ones our farm can actually reach.
   but traffic stays 0 GB. (`residential_proxy_signup.py` reaches the dashboard.)
 - **Bright Data, Oxylabs, NetNut** — business/KYC or card-gated trials.
 - **Byteful** — 1 GB residential but **KYC (ID verification)** required.
-- **ZooProxy** — image-captcha signup + geetest slider on login (see `zooproxy_trial.py`).
+- **ZooProxy** — image-captcha signup + geetest slider on login.
 
 ## Ranked recommendation
 
