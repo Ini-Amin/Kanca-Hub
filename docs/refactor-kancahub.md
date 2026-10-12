@@ -26,7 +26,7 @@ import → patches stop working). Instead: **`import kancahub` inside the functi
 2. `commands_misc.py` — adb/mobile/warp/region/mail/gmail/yowes/otp/scrape/report/ip-reuse/9router/egress-node
 3. `commands_proxy.py`  4. `commands_stack.py`  5. `commands_grok.py`
 6. `commands_github.py` (careful: `AUTO_FREECF` patched)  7. `commands_thk.py`
-8. `commands_farm.py` (k12 + autofarm)  9. `doctor.py`  10. `menu.py` **last** (has the cycle)
+8. `commands_farm.py` (warp + yowes)  9. `doctor.py`  10. `menu.py` **last** (has the cycle)
 
 `kancahub.py` keeps: `build_parser`, `build_github_parser` re-export, `dispatch`,
 `main`, `beginner_entry`, `menu_entry`, `if __name__`.
@@ -61,7 +61,7 @@ python -m unittest tests.test_cli_surface            # 134-command surface
 - [x] commands_grok.py (STEP 5, dff6fcd)
 - [x] commands_github.py (STEP 6, 2894ac0) — careful: 4 test files patch kancahub attrs
 - [x] commands_thk.py (STEP 7, 47298a6) — thk constants moved w/ thk_chunks def-time default; test_thk_no_proxy now scans commands_thk.py
-- [x] commands_farm.py — k12/warp/yowes (STEP 8, 24f33cc, worker1)
+- [x] commands_farm.py — warp/yowes (STEP 8, 24f33cc, worker1)
 - [x] commands_otp.py — otp/scrape/autofarm (STEP 9, d626483, worker2)
 - [x] doctor.py (STEP 10, 08240ea)
 - [x] menu.py (STEP 11, a5fe104) LAST — build_parser/dispatch stay in kancahub.py (H3);

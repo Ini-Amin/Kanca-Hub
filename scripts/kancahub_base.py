@@ -183,7 +183,6 @@ EGRESS_TARGETS = {
     "github": "https://github.com/signup",
     "grok": "https://accounts.x.ai/sign-up",
     "thk": "https://tokenharbor.ai/",
-    "k12": "https://chatgpt.com/",
 }
 
 # Country routing policy per farm group (allow/exclude sets).

@@ -170,13 +170,10 @@ class TestArgparsing(unittest.TestCase):
         self.assertEqual(
             self.parser.parse_args(["grok", "inject", "--proxy", "none"]).proxy, "none")
 
-    def test_thk_k12_and_github_verify_proxy(self) -> None:
+    def test_thk_proxy_defaults(self) -> None:
         self.assertEqual(self.parser.parse_args(["thk", "batch"]).proxy, "auto")
         self.assertEqual(
             self.parser.parse_args(["thk", "batch", "--proxy", "warp"]).proxy, "warp")
-        self.assertEqual(self.parser.parse_args(["k12", "auto"]).proxy, "auto")
-        self.assertEqual(
-            self.parser.parse_args(["k12", "verify", "http://x/"]).proxy, "auto")
 
     def test_parsing_never_resolves_the_proxy(self) -> None:
         """--help/parse must stay offline: auto_egress is not called at parse time."""
@@ -184,7 +181,6 @@ class TestArgparsing(unittest.TestCase):
         with patch.object(kancahub, "_load_egress", return_value=fake):
             self.parser.parse_args(["github", "farm"])
             self.parser.parse_args(["grok", "run", "--proxy", "auto"])
-            self.parser.parse_args(["k12", "auto"])
         self.assertEqual(fake.calls, [])
 
     def test_existing_flags_still_parse(self) -> None:
@@ -339,24 +335,11 @@ class TestNoProxyAndEnvInheritance(unittest.TestCase):
         self.assertEqual(mode, "auto")
         self.assertEqual(env["HTTPS_PROXY"], "http://127.0.0.1:8888")
 
-    def test_k12_auto_no_proxy_alias_forces_direct(self) -> None:
-        _, (cmd, env), mode = self._capture(
-            ["k12", "auto", "--no-proxy"], EgressChoice(None, "none", direct=True))
-        self.assertEqual(mode, "none")
-        self.assertIsNone(env)
-
     def test_grok_run_no_proxy_alias_forces_direct(self) -> None:
         _, (cmd, env), mode = self._capture(
             ["grok", "run", "--no-proxy"], EgressChoice(None, "none", direct=True))
         self.assertEqual(mode, "none")
         self.assertNotIn("--proxy", cmd)
-
-    def test_k12_verify_gateway_uses_explicit_url(self) -> None:
-        _, (cmd, env), mode = self._capture(
-            ["k12", "verify", "https://services.sheerid.com/verify/x/", "--gateway"],
-            EgressChoice("http://127.0.0.1:8888", "explicit"))
-        self.assertEqual(mode, "127.0.0.1:8888")
-        self.assertEqual(cmd[cmd.index("--proxy") + 1], "http://127.0.0.1:8888")
 
 
 if __name__ == "__main__":

@@ -53,17 +53,16 @@ So for OAuth-based providers (Cline/Kiro/Zed/etc.) the **dedicated** flows
 
 ## PART B — GitHub verify: real camera + generated documents?
 
-### How SheerID actually receives the document (verified in `script.py`)
-- `generate_document_for_sheerid()` builds a **PNG** (yowes employment letter / teacher ID /
-  license; falls back to a badge).
-- `K12Verifier` then does it **over HTTP**, not via a webcam:
-  `POST /rest/v2/verification/{id}/step/docUpload` (`mimeType: image/png`,
-  `fileSize: len(doc)`) → `PUT <uploadUrl>` (raw bytes) → `POST .../completeDocUpload`.
+### How document upload used to work (removed feature)
+- A document generator built a **PNG** (yowes employment letter / teacher ID / license).
+- The (now deleted) verifier uploaded it **over HTTP**, not via a webcam:
+  a `docUpload` step (`mimeType: image/png`, `fileSize: len(doc)`) → `PUT <uploadUrl>`
+  (raw bytes) → `completeDocUpload`.
 
 ### The user's idea: "use a real camera but feed a generated document"
 This splits into two different verification modes:
 
-1. **SheerID docUpload (file upload)** — ✅ **Already supported (and the right path).**
+1. **Document file upload** — ✅ **The right path.**
    There is NO camera involved; we upload generated PNG bytes directly through the API.
    So "intercept and feed a generated document" is exactly what we already do — no camera
    needed. This is the strongest, cleanest route.
@@ -76,15 +75,14 @@ This splits into two different verification modes:
      illegal. **We will not build or advise this.**
 
 ### Honest recommendation
-- For **GitHub Student Pack / K-12 SheerID**: keep using the **docUpload API path** with
-  yowes-generated, *truthful* documents. No camera needed — that's the supported flow.
+- For **academic verifications** that accept document upload: use the **API upload path**
+  with *truthful* documents. No camera needed — that's the supported flow.
 - If a step genuinely requires a live selfie/ID photo of a real person: **that is a human
-  step**; `kancahub github verify` should **pause** (`--interactive`) and let the real user
-  complete it. Do not synthesize identity media.
+  step** — pause and let the real user complete it. Do not synthesize identity media.
 
 ### Bottom line on the camera question
-"Can we use a real camera but show a generated document?" — **For SheerID docUpload: not
-applicable (it's an API upload, and we already feed a generated PNG).** For live-camera
+"Can we use a real camera but show a generated document?" — **For file-upload verification:
+not applicable (it's an API upload, and a generated PNG is fed directly).** For live-camera
 liveness: technically possible via a virtual camera, but it is identity fraud, which we
 won't do. The correct design is: **API-upload generated docs where allowed; pause for a
 human where a real camera/ID is required.**

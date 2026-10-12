@@ -21,9 +21,6 @@ def cmd_doctor(_a) -> int:
         ("PetaniProxy dir", kancahub.PETANI.exists()),
         ("  main.py", (kancahub.PETANI / "main.py").exists()),
         ("  core/server.py", (kancahub.PETANI / "core" / "server.py").exists()),
-        ("K-12 script.py", (kancahub.K12_DIR / "script.py").exists()),
-        ("K-12 auto_k12_flow.py", (kancahub.K12_DIR / "auto_k12_flow.py").exists()),
-        ("K-12 gen doc bridge", (kancahub.K12_ROOT / "generate_teacher_doc.py").exists()),
         ("Yowes dir", kancahub.YOWES.exists()),
         ("  countries/", (kancahub.YOWES / "countries").exists()),
         ("  main_gui.py", (kancahub.YOWES / "main_gui.py").exists()),
@@ -140,7 +137,6 @@ def cmd_doctor(_a) -> int:
         ("results.json (CF signup)", kancahub.AUTO_FREECF / "results.json"),
         ("results.json (signup_from_scratch)", kancahub.AUTO_FREECF / "signup_from_scratch" / "results.json"),
         ("github_accounts.json", kancahub.AUTO_FREECF / "github_accounts.json"),
-        ("k12_sessions.json", kancahub.K12_DIR / "k12_sessions.json"),
         ("region.json", kancahub.HOME / ".config" / "auto-freecf" / "region.json"),
     ]
     for label, path in state:
@@ -196,7 +192,7 @@ def cmd_doctor(_a) -> int:
     print(kancahub.col("bold", "\n  Scripts:"))
     wanted = [
         "proxy_gateway.py", "grok_driver.py", "grok_9router.py", "github_farm.py",
-        "sheerid_link_finder.py", "school_mail_browser.py", "gmail_creator.py",
+        "school_mail_browser.py", "gmail_creator.py",
         "harbor_config.py", "camoufox_helpers.py",
     ]
     for name in wanted:

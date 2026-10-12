@@ -34,7 +34,7 @@ multi-step autofarm already covers the flow minus the (paid) captcha + phone.
 | Kimi | oauth/apikey | Chinese phone / WeChat | ❌ phone only |
 | MiniMax | apikey | phone/email | ⚠️ unknown |
 | Cline | oauth | Email+SSO / Google / Microsoft / **GitHub** | ⚠️ email allowed? (WorkOS) — GitHub route needs a GitHub acct |
-| Codex | oauth | email / Google / Microsoft / Apple | ⚠️ any email for standard (K-12 needs .edu) |
+| Codex | oauth | email / Google / Microsoft / Apple | ⚠️ any email for standard (teacher tier needs .edu) |
 | Kiro | oauth | **Google / GitHub** (code: ['google','github']) | ❌ no email form |
 | Cursor | oauth | GitHub / Google / email OTP | ⚠️ email OTP possible |
 | GitLab | oauth | GitHub/Google/Bitbucket/email/PAT | ⚠️ email allowed |
