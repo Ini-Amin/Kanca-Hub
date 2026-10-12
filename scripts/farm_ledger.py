@@ -2,7 +2,7 @@
 """
 farm_ledger.py — a tiny, append-only ledger of farm runs.
 
-Why: farming spans many commands (github/thk/grok/gmail/k12/autofarm) and the
+Why: farming spans many commands (github/thk/grok/gmail/autofarm) and the
 same questions keep coming up — "what actually worked?", "which egress?", "where
 did it stop?". This records one JSON line per attempt so you can audit across runs
 without digging through terminal scrollback.
@@ -10,7 +10,7 @@ without digging through terminal scrollback.
 Shape (one JSON object per line, JSONL) at ~/.config/auto-freecf/farm_ledger.jsonl:
 {
   "ts": "2026-10-06T12:00:00Z",
-  "farm": "thk",              # github | thk | grok | gmail | k12 | autofarm | proxy
+  "farm": "thk",              # github | thk | grok | gmail | autofarm | proxy
   "target": "tokenharbor.ai",
   "egress": "mobile",         # auto resolved source (mobile/pool_gateway/warp/.../direct/explicit)
   "exit_ip": "182.2.39.171",

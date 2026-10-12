@@ -2,7 +2,7 @@
 
 **One CLI for the whole account-farming toolkit.** Unifies Cloudflare Workers AI
 farming, proxy harvesting, WARP tunnelling, xAI/Grok registration, TokenHarbor
-key generation, ChatGPT K-12 teacher verification, and 13-country teacher
+key generation, and 13-country teacher
 document generation behind a single command surface — with 9Router as the
 central credential sink.
 
@@ -32,7 +32,6 @@ audited feature surfaces (not thin wrappers).
 | `thk` | harbor | TokenHarbor account + API-key generation → 9Router |
 | `grok` | grok-register | xAI/Grok account farm (SSO risk gate, 5 mail providers) |
 | `proxy` | PetaniProxy | Proxy harvest / gateway / Webshare residential / stats / API |
-| `k12` | ChatGPT-K-12 | SheerID teacher verification → ChatGPT accounts |
 | `yowes` | yowes | 13-country teacher document generator |
 | `doctor` | (built-in) | Dependency + service health check |
 
@@ -148,20 +147,12 @@ kancahub proxy api /api/all   # hit any gateway endpoint
 kancahub proxy export --to-pool
 ```
 
-### `k12` — ChatGPT teacher verification
-```bash
-kancahub k12 auto                    # full account + OTP + SheerID verify
-kancahub k12 verify <sheerid-url> --gateway
-kancahub k12 modes                   # the 12 connection modes
-```
-
 ### `yowes` — teacher documents
 ```bash
 kancahub yowes list
 kancahub yowes schools --country us
 kancahub yowes make --country us --first John --last Doe \
     --school "Norton Elementary" --position Teacher --dob 1985-03-15
-kancahub yowes k12 --first Jane --last Smith --school "Norton Elementary"
 kancahub yowes gui
 ```
 

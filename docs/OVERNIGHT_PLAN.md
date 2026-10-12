@@ -15,7 +15,7 @@ Owner: Supervisor (sole). Workers: worker2, worker3, worker5, worker7, worker8 (
 
 ## Key facts (verified)
 - Our controllable email domains: **kancalabs.biz.id / kancalabs.my.id**
-  (scripts/auto_k12_flow_relay.py, k12_camoufox.py, kancahub --domain).
+  (kancahub --domain).
   Tempik worker also serves kancalabs.my.id.
 - 9Router OAuth surface (app/api/oauth): codex, cursor, gitlab, grok-cli,
   iflow, kiro, xiaomi-mimo, zed, [provider] generic. Providers with a
@@ -31,7 +31,7 @@ Owner: Supervisor (sole). Workers: worker2, worker3, worker5, worker7, worker8 (
 ## Workstreams (branches: feature/<area>-<task>)
 - W7 (worker7): GitHub farm — add `--email-domain kancalabs.biz.id|my.id` option
   that generates a fresh address on OUR domain and reads the verification code
-  from the KancaHub relay (reuse auto_k12_flow_relay mail client) instead of the
+  from the KancaHub relay (reuse the relay mail client) instead of the
   BINUS Outlook mailbox. Keep binus as default. Add a `--count N` accumulation
   note (loop by index). Branch: feature/github-farm-domain-inbox
 - W3 (worker3): zt-harvester — install deps, run its test suite, document the

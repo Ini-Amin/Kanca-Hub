@@ -106,7 +106,7 @@ async def setup_camoufox_gateway(
     """If proxy_url points to a local gateway, attach X-Session-ID for sticky sessions."""
     if not proxy_url or not is_gateway(proxy_url):
         return False
-    sid = session_id or os.environ.get("GATEWAY_SESSION_ID") or os.environ.get("K12_GATEWAY_SESSION")
+    sid = session_id or os.environ.get("GATEWAY_SESSION_ID")
     if not sid:
         return False
     return await apply_gateway_session(context, sid)

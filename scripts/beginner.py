@@ -66,8 +66,6 @@ BROWSER_SCRIPTS = frozenset({
     "github_farm.py",
     "github_to_anything.py",
     "github_to_kiro.py",
-    "k12_camoufox.py",
-    "sheerid_link_finder.py",
     "webshare_camoufox.py",
 })
 

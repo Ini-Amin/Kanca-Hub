@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-School-mail inbox reader for the K-12 flow — reads OpenAI OTP from a real
+School-mail inbox reader for the signup flow — reads OpenAI OTP from a real
 education mailbox (e.g. you@binus.ac.id, hosted on Microsoft 365 / Outlook).
 
 Why: OpenAI now requires a school-issued email for teacher verification. A real

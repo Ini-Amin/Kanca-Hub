@@ -27,7 +27,7 @@ class TestKancahubGithubCLI(unittest.TestCase):
 
     def test_subcommands_exist_in_standalone_parser(self) -> None:
         parser = build_github_parser()
-        # Verify parser has subparser choices for farm, verify, check
+        # Verify parser has subparser choices for farm, check
         subparsers_action = next(
             (a for a in parser._actions if isinstance(a, argparse._SubParsersAction)),
             None,
@@ -35,7 +35,6 @@ class TestKancahubGithubCLI(unittest.TestCase):
         self.assertIsNotNone(subparsers_action, "Subparsers action should exist")
         choices = subparsers_action.choices
         self.assertIn("farm", choices)
-        self.assertIn("verify", choices)
         self.assertIn("check", choices)
 
     def test_subcommands_exist_in_full_kancahub_parser(self) -> None:
@@ -45,12 +44,6 @@ class TestKancahubGithubCLI(unittest.TestCase):
         self.assertEqual(args_farm.group, "github")
         self.assertEqual(args_farm.github_cmd, "farm")
         self.assertEqual(args_farm.domain, "bizid")
-
-        # Verify kancahub github verify parses
-        args_verify = kp.parse_args(["github", "verify", "--from-mail"])
-        self.assertEqual(args_verify.group, "github")
-        self.assertEqual(args_verify.github_cmd, "verify")
-        self.assertTrue(args_verify.from_mail)
 
         # Verify kancahub github check parses
         args_check = kp.parse_args(["github", "check", "--domain", "myid"])
@@ -102,49 +95,6 @@ class TestKancahubGithubCLI(unittest.TestCase):
         self.assertEqual(mapped_binus[mapped_binus.index("--index") + 1], "5")
         self.assertIn("--email-domain", mapped_binus)
         self.assertEqual(mapped_binus[mapped_binus.index("--email-domain") + 1], "binus")
-
-    def test_verify_url_and_from_mail_parsing(self) -> None:
-        parser = build_github_parser()
-
-        # Direct SheerID URL
-        url_input = "https://services.sheerid.com/verify/test-verification-id-12345/"
-        args_url = parser.parse_args(["verify", "--url", url_input])
-        self.assertEqual(args_url.github_cmd, "verify")
-        self.assertEqual(args_url.url, url_input)
-        self.assertFalse(args_url.from_mail)
-
-        # From mailbox extraction
-        args_mail = parser.parse_args([
-            "verify",
-            "--from-mail",
-            "--timeout", "120",
-            "--gateway",
-            "--headless",
-            "--debug",
-            "--email", "test@binus.ac.id",
-        ])
-        self.assertEqual(args_mail.github_cmd, "verify")
-        self.assertTrue(args_mail.from_mail)
-        self.assertIsNone(args_mail.url)
-        self.assertEqual(args_mail.timeout, 120)
-        self.assertTrue(args_mail.gateway)
-        self.assertTrue(args_mail.headless)
-        self.assertTrue(args_mail.debug)
-        self.assertEqual(args_mail.email, "test@binus.ac.id")
-
-    def test_defensive_error_on_missing_verify_target(self) -> None:
-        parser = build_github_parser()
-        args = parser.parse_args(["verify"])
-
-        f = io.StringIO()
-        with patch("sys.stdout", f), patch("sys.stderr", f):
-            code = cmd_github(args)
-
-        self.assertEqual(code, 1)
-        output = f.getvalue()
-        self.assertIn("SheerID verification URL required", output)
-        self.assertIn("--from-mail", output)
-        self.assertIn("--url", output)
 
     def test_defensive_error_on_missing_subcommand(self) -> None:
         args = argparse.Namespace(github_cmd=None)

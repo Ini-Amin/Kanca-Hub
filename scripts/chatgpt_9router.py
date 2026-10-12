@@ -2,7 +2,7 @@
 """
 ChatGPT session capture + 9Router (codex provider) injection for KancaHub.
 
-ChatGPT "K-12 teacher" accounts are authenticated *web* accounts. 9Router can
+ChatGPT "teacher tier" accounts are authenticated *web* accounts. 9Router can
 use them through its built-in `codex` provider (category "oauth"), which talks
 to https://chatgpt.com/backend-api/codex/responses using the ChatGPT OAuth
 session — NOT an OpenAI API key.
@@ -167,7 +167,7 @@ def backup_db(db: Path) -> Path | None:
 def upsert(con: sqlite3.Connection, s: dict, dry_run: bool) -> str:
     cur = con.cursor()
     ts = now_iso()
-    name = s["email"] or f"k12-{s['chatgptAccountId'][:8] or uuid.uuid4().hex[:8]}"
+    name = s["email"] or f"chatgpt-{s['chatgptAccountId'][:8] or uuid.uuid4().hex[:8]}"
     data = {
         "accessToken": s["accessToken"],
         "refreshToken": s["refreshToken"],
@@ -287,7 +287,7 @@ def cmd_sync(a) -> int:
 def cmd_from_page(a) -> int:
     """Capture a session from a live ChatGPT tab (advanced; needs a driver)."""
     print("This command requires a browser driver (nodriver/DrissionPage).")
-    print("Use it from a running auto_k12_flow session instead — see capture_session().")
+    print("Use it from a running browser session instead — see capture_session().")
     return 1
 
 

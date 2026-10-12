@@ -64,7 +64,6 @@ This is an **egress-plumbing flaw**, not a code bug in the farm logic.
 |---|---|---|
 | `kancahub proxy` (WARP/residential) | ⚠️ tool exists; **not started** | WARP down; Webshare needs account/Setup; needs capsolver for headless hunter |
 | `kancahub github farm` | ❌ stops at signup | **403 egress** (datacenter IP). Fix = residential/WARP proxy (see §2/§3) |
-| `kancahub github verify` (SheerID) | ⚠️ wired, unverified live | needs a real SheerID URL + the K-12 verifier (program may mismatch for students) |
 | `kancahub gmail farm` | ❌ | Google phone gate + reCAPTCHA Enterprise (device check) |
 | `kancahub gmail adb` | ❌ | GMS native dialog; MIUI blocks `input tap` (needs Xiaomi account) |
 | `kancahub thk` (TokenHarbor) | ✅ worked live earlier | none (produced a real `thk_live_` key) |

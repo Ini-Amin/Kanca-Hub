@@ -18,17 +18,14 @@ features (not just pass-throughs):
   thk     TokenHarbor (harbor): create keys + inject/sync with 9Router
   grok    Grok xAI farm (grok-register: SSO risk gate, 5 mail providers, pool)
             run · web · gui · retry · pool · inject (SSO tokens -> 9Router via grok2api)
-  github  GitHub account farm (our domain / BINUS) + SheerID verification
-            farm · verify · edu · check   (SheerID link extraction & verifier handoff)
+  github  GitHub account farm (our domain / BINUS)
+            farm · check
   mail    School mailbox (BINUS M365) via browser — read signup OTPs
             test (selftest) · otp (--timeout) · login
   gmail   Gmail account farm (gmail-account-creator, nodriver)
             farm (--count/--headless/--proxy/--out) · check
-  k12     ChatGPT K-12 teacher verification (SheerID)
-            auto (full account+verify) · verify (URL) · inject · sync ·
-            link-finder (find SheerID links) · modes
   yowes   13-country teacher document generator
-            list · schools · make · k12 (US teacher docs) · gui · mcp
+            list · schools · make · gui · mcp
   doctor  health/dependency check across everything
 
 Examples
@@ -47,8 +44,6 @@ Examples
   kancahub grok run                           # grok-register farm (CLI)
   kancahub grok inject --base-url http://127.0.0.1:8000 --dry-run
   kancahub github farm --domain bizid --dry-run # GitHub signup via mail relay
-  kancahub k12 auto                           # ChatGPT signup + SheerID verify
-  kancahub k12 link-finder                    # find SheerID verification links
   kancahub yowes make --country us --first John --last Doe \
       --school "Norton Elementary"
 
@@ -70,8 +65,6 @@ from pathlib import Path
 HOME = Path.home()
 AUTO_FREECF = HOME / "Auto-FreeCF"
 PETANI = HOME / "petani-proxy"
-K12_ROOT = PETANI / "Farm-Acc-ChatGPT-K-12-Teachers"
-K12_DIR = K12_ROOT / "PyRuntime_64"
 YOWES = PETANI / "yowes"
 HARBOR = AUTO_FREECF / "harbor"  # vendored in-repo (was ~/harbor, lost 2026-10-07)
 GROK_REG = HOME / "grok-register"
@@ -138,12 +131,10 @@ _REEXPORTS = {
                       "_proxy_native_harvest _proxy_native_health _proxy_native_gateway",
     "commands_stack": "cmd_stack _stack_signup _stack_login _stack_manage",
     "commands_grok": "cmd_grok",
-    "commands_github": "map_github_farm_args build_github_parser build_edu_steps edu_needs_human "
-                       "edu_doc_upload_attempted _github_accounts_count _sheerid_find_url "
-                       "_sheerid_run _print_edu_summary cmd_github",
+    "commands_github": "map_github_farm_args build_github_parser cmd_github",
     "commands_thk": "THK_PER_IP_DEFAULT THK_PER_IP_MAX thk_classify _thk_account_count _current_ip "
                     "_thk_fresh_ip thk_chunks cmd_thk _thk_sync cmd_mail cmd_gmail",
-    "commands_farm": "_k12_guided cmd_k12 cmd_warp cmd_yowes",
+    "commands_farm": "cmd_warp cmd_yowes",
     "commands_otp": "cmd_otp cmd_scrape cmd_autofarm",
     "doctor": "cmd_doctor",
     "menu": "MENU_BACKGROUND MENU_BACKGROUND_CMD UNIFIED_MENU MENU_STAGE_HEADERS MENU_FARM_KEYS "
@@ -186,7 +177,7 @@ def cmd_session(a) -> int:
         print()
         print("   [g] start/refresh gateway      [s] stop gateway        [i] gateway info")
         print("   [1] github farm      [2] thk batch    [3] grok run    [4] gmail farm")
-        print("   [5] k12 auto         [6] stack signup [7] autofarm    [d] doctor")
+        print("   [5] stack signup     [6] autofarm     [d] doctor")
         print("   [q] quit (stops the gateway)")
         try:
             ch = input(f"\n  {col('bold', 'session')}> ").strip().lower()
@@ -222,12 +213,11 @@ def cmd_session(a) -> int:
             "2": ["thk", "batch", "1", "--proxy", proxy_arg],
             "3": ["grok", "run", "-n", "1", "--proxy", proxy_arg],
             "4": ["gmail", "farm", "--proxy", proxy_arg],
-            "5": ["k12", "auto", "--proxy", proxy_arg],
-            "6": ["stack", "signup", "-n", "1"],
-            "7": [],  # autofarm prompts for a URL
+            "5": ["stack", "signup", "-n", "1"],
+            "6": [],  # autofarm prompts for a URL
             "d": ["doctor"],
         }
-        if ch == "7":
+        if ch == "6":
             try:
                 url = input("  target URL: ").strip()
             except (EOFError, KeyboardInterrupt):
@@ -260,7 +250,7 @@ def cmd_session(a) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = KancaHubParser(
         prog="kancahub",
-        description="KancaHub — unified CLI: Cloudflare farming, proxies, K-12 verification & docs",
+        description="KancaHub — unified CLI: Cloudflare farming, proxies, docs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -450,7 +440,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="egress mode for the bridge call: auto (default), none/direct, "
                           "warp, or an explicit proxy URL (inherited via the environment)")
 
-    # ---- github (account farm + SheerID verification) ----
+    # ---- github (account farm) ----
     build_github_parser(sub)
 
     # ---- mail (school mailbox / BINUS M365) ----
@@ -738,35 +728,6 @@ def build_parser() -> argparse.ArgumentParser:
     sci.add_argument("cookies", help="Cookie-Editor JSON export file")
     sci.add_argument("label", help="account label (e.g. azisjati92, akun-1)")
 
-    # ---- k12 ----
-    kp = sub.add_parser("k12", help="ChatGPT K-12: automate teacher verification & SheerID approval")
-    ks = kp.add_subparsers(dest="k12_cmd")
-    kv = ks.add_parser("verify", help="verify a SheerID URL")
-    kv.add_argument("url", nargs="?")
-    kv.add_argument("--proxy", default="auto", metavar="PROXY",
-                    help=PROXY_HELP + "\n  URL may be IP:port or user:pass@ip:port")
-    kv.add_argument("--gateway", action="store_true", help="use 127.0.0.1:8888")
-    kv.add_argument("--debug", action="store_true")
-    kv.add_argument("--email", default=None)
-    kv.add_argument("--no-temp-email", action="store_true")
-    kv.add_argument("--ask-email", action="store_true")
-    ks.add_parser("run", help="guided: paste URL + pick mode (mirrors the original [1]-[13] menu)")
-    ka = ks.add_parser("auto", help="full auto: ChatGPT signup + OTP + session capture + SheerID verify")
-    ka.add_argument("--proxy", default="auto", metavar="PROXY",
-                    help=PROXY_HELP + "\n  (inherited by the flow via the environment)")
-    ka.add_argument("--no-proxy", action="store_true", help="alias for --proxy none")
-    ki = ks.add_parser("inject", help="inject captured ChatGPT sessions into 9Router (codex)")
-    ki.add_argument("--session", default=None, help="session json (default: auto-detect k12_sessions.json)")
-    ki.add_argument("--dry-run", action="store_true")
-    ksy = ks.add_parser("sync", help="verify + prune ChatGPT (codex) connections")
-    ksy.add_argument("--prune", action="store_true")
-    ks.add_parser("modes", help="show the 12 connection modes")
-    klf = ks.add_parser("link-finder", help="find SheerID verification links (scripts/sheerid_link_finder.py)",
-                        description="Find SheerID verification links. Extra args after `--` are passed through "
-                                    "to scripts/sheerid_link_finder.py.")
-    klf.add_argument("extra", nargs=argparse.REMAINDER,
-                     help="arguments passed straight to sheerid_link_finder.py (e.g. -- --help)")
-
     # ---- yowes ----
     yp = sub.add_parser("yowes", help="teacher document generator: create ID cards & letters (13 countries)")
     ys = yp.add_subparsers(dest="yowes_cmd")
@@ -783,11 +744,6 @@ def build_parser() -> argparse.ArgumentParser:
     ym.add_argument("--gender", default="Random", choices=["Random", "Male", "Female"])
     ym.add_argument("--types", default=None, help="comma list e.g. teacher_id,employment_letter")
     ym.add_argument("--out", default="")
-    yk = ys.add_parser("k12", help="US teacher docs via the K-12 bridge")
-    yk.add_argument("--first", default=None)
-    yk.add_argument("--last", default=None)
-    yk.add_argument("--school", default=None)
-    yk.add_argument("--out", default=None)
     ys.add_parser("gui", help="launch the legacy desktop GUI")
     ys.add_parser("mcp", help="run the yowes MCP server (stdio)")
 
@@ -915,11 +871,6 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             p.parse_args(["stack", "--help"])
             return 1
         return cmd_stack(args)
-    if g == "k12":
-        if not getattr(args, "k12_cmd", None):
-            p.parse_args(["k12", "--help"])
-            return 1
-        return cmd_k12(args)
     if g == "yowes":
         if not getattr(args, "yowes_cmd", None):
             p.parse_args(["yowes", "--help"])

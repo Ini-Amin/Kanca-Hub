@@ -3,7 +3,7 @@
 GitHub signup + GitHub Education (Student Pack) application — **Camoufox**, Linux.
 
 Ported from the nodriver/CDP version to Camoufox (anti-detect Firefox via the
-Playwright API), matching scripts/k12_camoufox.py. Firefox/Juggler input is
+Playwright API). Firefox/Juggler input is
 trusted, so the old CDP click/insertText helpers are replaced with
 locator.click / fill / press_sequentially / expect_popup, and
 AsyncCamoufox(geoip=True, humanize=True, os="windows") makes timezone/locale/geo
@@ -21,7 +21,7 @@ WHAT THIS AUTOMATES (honestly)
        - unique username generation + availability retry
        - the "verify your email" **8-digit launch code** step, read live from the
          BINUS M365 school mailbox (Outlook Web) using the same browser-reader
-         approach as scripts/school_mail_browser.py / sheerid_link_finder.py
+         approach as scripts/school_mail_browser.py
        - account-created detection
   ✅ Opens the GitHub Education application form and FILLS the fields we can:
        - school = BINUS University / Universitas Bina Nusantara
@@ -199,20 +199,20 @@ def cfg(key: str, default: str = "") -> str:
 # ─────────────────────────────────────────────────────────── relay mail client & domain helpers
 
 def get_relay_config() -> dict:
-    """Resolve KancaHub mail relay settings (K12_MAIL_API, K12_MAIL_KEY, SUPABASE_URL, K12_DOMAINS)."""
+    """Resolve KancaHub mail relay settings (K12_MAIL_API, K12_MAIL_KEY, SUPABASE_URL)."""
     env = _load_env()
-    k12_mail_api = os.environ.get("K12_MAIL_API") or env.get("K12_MAIL_API", "")
-    k12_mail_key = os.environ.get("K12_MAIL_KEY") or env.get("K12_MAIL_KEY") or env.get("TMK_KEY", "")
+    mail_api = os.environ.get("K12_MAIL_API") or env.get("K12_MAIL_API", "")
+    mail_key = os.environ.get("K12_MAIL_KEY") or env.get("K12_MAIL_KEY") or env.get("TMK_KEY", "")
     supabase_url = os.environ.get("SUPABASE_URL") or env.get("SUPABASE_URL", "")
 
-    if not k12_mail_key or not (k12_mail_api or supabase_url):
+    if not mail_key or not (mail_api or supabase_url):
         try:
             cfg_path = Path.home() / "Auto-FreeCF" / "signup_from_scratch" / "config.json"
             if cfg_path.exists():
                 cfg_json = json.loads(cfg_path.read_text())
-                if not k12_mail_key:
-                    k12_mail_key = cfg_json.get("mail_api_key", "")
-                if not supabase_url and not k12_mail_api and cfg_json.get("mail_api"):
+                if not mail_key:
+                    mail_key = cfg_json.get("mail_api_key", "")
+                if not supabase_url and not mail_api and cfg_json.get("mail_api"):
                     m = re.match(r"(https://[^/]+)", cfg_json["mail_api"])
                     if m:
                         supabase_url = m.group(1)
@@ -220,8 +220,8 @@ def get_relay_config() -> dict:
             pass
 
     supabase_url = supabase_url.rstrip("/")
-    if k12_mail_api:
-        mail_base = k12_mail_api.rstrip("/")
+    if mail_api:
+        mail_base = mail_api.rstrip("/")
         if mail_base.endswith("/new_address"):
             mail_base = mail_base[:-len("/new_address")]
     elif supabase_url:
@@ -229,11 +229,11 @@ def get_relay_config() -> dict:
     else:
         mail_base = ""
 
-    domains = [d.strip() for d in (os.environ.get("K12_DOMAINS") or env.get("K12_DOMAINS", "kancalabs.biz.id,kancalabs.my.id")).split(",") if d.strip()]
+    domains = [d.strip() for d in "kancalabs.biz.id,kancalabs.my.id".split(",") if d.strip()]
 
     return {
         "mail_base": mail_base,
-        "mail_key": k12_mail_key,
+        "mail_key": mail_key,
         "domains": domains,
     }
 
@@ -626,7 +626,6 @@ def _read_launch_code_via_helper(email: str) -> str | None:
     Any of these entry points are tried, in order:
       school_mail_browser.read_launch_code
       school_mail_browser.wait_inbox / read_subjects
-      sheerid_link_finder (link finder — not a code, skipped)
     Returns the code, or None to fall back to the built-in Camoufox reader.
     """
     for modname in ("school_mail_browser",):
@@ -1062,7 +1061,7 @@ def run_check(email_domain: str = "binus", inbox: str = "binus") -> int:
     print(f"  {'✅' if CamoufoxProxy is not None else '➖'} camoufox.ip.Proxy   "
           f"({'available' if CamoufoxProxy is not None else 'fallback to dict'})")
 
-    for modname in ("school_mail_browser", "sheerid_link_finder", "gateway_session"):
+    for modname in ("school_mail_browser", "gateway_session"):
         found = (SCRIPTS / f"{modname}.py").exists()
         print(f"  {'✅' if found else '➖'} {modname:20s} ({SCRIPTS / (modname + '.py')})")
 

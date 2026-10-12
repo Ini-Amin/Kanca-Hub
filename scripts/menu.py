@@ -28,13 +28,12 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
     ("3", "Manage WARP tunnel", "warp", ["warp"]),
     ("4", "Harvest proxies (background)", "proxy harvest", ["proxy", "harvest"]),
 
-    # Group 3: Accounts (github/thk/gmail/k12/grok/stack)
+    # Group 3: Accounts (github/thk/gmail/grok/stack)
     ("5", "GitHub Education account farm", "github farm", ["github", "farm"]),
     ("6", "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"]),
     ("7", "Login to existing Cloudflare accounts", "stack login", ["stack", "login"]),
     ("8", "Create TokenHarbor keys", "thk batch", ["thk", "batch"]),
     ("9", "Grok farm", "grok run", ["grok", "run"]),
-    ("10", "K-12 teacher verification", "k12 auto", ["k12", "auto"]),
     ("11", "Gmail account farm", "gmail farm", ["gmail", "farm"]),
 
     # Group 4: 9Router (inject/sync)
@@ -45,7 +44,6 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
     # Group 5: Mail & Docs
     ("15", "School mailbox: test login", "mail test", ["mail", "test"]),
     ("16", "School mailbox: wait for OTP", "mail otp", ["mail", "otp"]),
-    ("17", "Find SheerID links", "k12 link-finder", ["k12", "link-finder"]),
     ("18", "List teacher-doc countries", "yowes list", ["yowes", "list"]),
 
     # Group 6: 9Router IDE interception
@@ -65,9 +63,9 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
 MENU_STAGE_HEADERS: dict[str, str] = {
     "0": "[0] Guided Pipeline Setup",
     "1": "[1-2] Egress & Diagnostics (proxy · WARP · doctor)",
-    "5": "[3] Account Farms (GitHub · Cloudflare · TokenHarbor · Grok · K-12 · Gmail)",
+    "5": "[3] Account Farms (GitHub · Cloudflare · TokenHarbor · Grok · Gmail)",
     "12": "[4] 9Router Integration (inject · sync · prune)",
-    "15": "[5] Mailbox & Verification Docs (mail · SheerID · docs)",
+    "15": "[5] Mailbox & Verification Docs (mail · docs)",
     "19": "[6] IDE Interception (MITM · Antigravity/Copilot/Kiro)",
     "20": "[7] Adapt Any Website (autofarm)",
     "21": "[8] OTP Mailboxes (Litensi)",
@@ -75,7 +73,7 @@ MENU_STAGE_HEADERS: dict[str, str] = {
 }
 
 # Menu keys that are account farms -> the menu asks for count/pace/egress in-CLI.
-MENU_FARM_KEYS = {"5", "8", "9", "10", "11", "7"}
+MENU_FARM_KEYS = {"5", "8", "9", "11", "7"}
 
 
 def render_menu() -> str:
@@ -118,10 +116,9 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
         ("2", "Cloudflare Workers AI", ["stack", "signup"], ["stack", "inject"], ["stack", "sync"]),
         ("3", "TokenHarbor AI", ["thk", "batch"], ["thk", "inject"], ["thk", "sync"]),
         ("4", "Grok / xAI", ["grok", "run"], ["grok", "inject"], ["stack", "sync"]),
-        ("5", "K-12 Teacher Verification", ["k12", "auto"], ["k12", "inject"], ["k12", "sync"]),
-        ("6", "Gmail Farm", ["gmail", "farm"], None, ["stack", "sync"]),
-        ("7", "Abliteration.ai accounts + API keys", ["abliteration", "run"], None, ["stack", "sync"]),
-        ("8", "ZCode: z.ai Start Plan -> glm pool", ["zcode", "claim", "--", "--connect"], None, ["stack", "sync"]),
+        ("5", "Gmail Farm", ["gmail", "farm"], None, ["stack", "sync"]),
+        ("6", "Abliteration.ai accounts + API keys", ["abliteration", "run"], None, ["stack", "sync"]),
+        ("7", "ZCode: z.ai Start Plan -> glm pool", ["zcode", "claim", "--", "--connect"], None, ["stack", "sync"]),
     ]
 
     if farm_choice is None:

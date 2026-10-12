@@ -1,6 +1,6 @@
-# Disposable Email Providers Evaluation for ChatGPT K-12 Verification
+# Disposable Email Providers Evaluation for School-Domain Verification
 
-**Goal**: Identify temp-email providers offering **school-eligible (.edu / school-like)** domains that **reliably receive mail via API** to satisfy OpenAI's K-12 teacher verification requirements.
+**Goal**: Identify temp-email providers offering **school-eligible (.edu / school-like)** domains that **reliably receive mail via API** to satisfy OpenAI's teacher-tier verification requirements.
 
 ---
 
@@ -15,7 +15,7 @@
   * Other `.edu.pl`/`.edu.gr` services (like `tempmailq.edu.pl`) use browser-only WebSocket/Socket.IO sessions protected by Cloudflare Turnstile without public REST APIs.
 * **#1 Recommendation**:
   * **Do NOT rely on third-party public temp-mail providers for school domains.**
-  * **Wire our own school-like domain into our existing Supabase + Cloudflare Email Routing relay** (`/functions/v1/temp-mail-api`). Registering a cheap academic-like domain (`.edu.pl` via OVH/NASK or a `*-k12.org` / `*-academy.org` domain) and adding it to `K12_DOMAINS` gives us 100% delivery reliability, zero third-party rate limits, and full control over the inbox API.
+  * **Wire our own school-like domain into our existing Supabase + Cloudflare Email Routing relay** (`/functions/v1/temp-mail-api`). Registering a cheap academic-like domain (`.edu.pl` via OVH/NASK or a `*-academy.org` domain) and adding it to the relay's domain list gives us 100% delivery reliability, zero third-party rate limits, and full control over the inbox API.
 
 ---
 
@@ -73,12 +73,12 @@ curl -s "https://api.mail.tm/domains" | jq -r '.["hydra:member"][0].domain'
 # 2. Create account
 curl -s -X POST "https://api.mail.tm/accounts" \
   -H "Content-Type: application/json" \
-  -d '{"address":"testk12_2026@maxxspace.com","password":"Password123!"}'
+  -d '{"address":"test_2026@maxxspace.com","password":"Password123!"}'
 
 # 3. Get JWT token
 TOKEN=$(curl -s -X POST "https://api.mail.tm/token" \
   -H "Content-Type: application/json" \
-  -d '{"address":"testk12_2026@maxxspace.com","password":"Password123!"}' | jq -r .token)
+  -d '{"address":"test_2026@maxxspace.com","password":"Password123!"}' | jq -r .token)
 
 # 4. Check inbox
 curl -s "https://api.mail.tm/messages" -H "Authorization: Bearer $TOKEN"
@@ -96,15 +96,15 @@ curl -s -I "https://api.mail.gw/domains"
 
 ---
 
-## 4. Implementation Strategy for K-12 Signup
+## 4. Implementation Strategy for School-Domain Signup
 
 Since public temp-mail APIs with `.edu` domains are either dead (`1secmail`), broken (`temp.tf`), or paid-only (`tempmail.id.vn`), the project should adopt one of two paths:
 
 1. **Path 1 (Recommended - Self-Owned Academic Domain)**:
-   * Purchase an inexpensive `.edu.pl` domain (or school-sounding domain like `*.k12.org`, `*academy.org`).
+   * Purchase an inexpensive `.edu.pl` domain (or school-sounding domain like `*academy.org`).
    * Route MX records to Cloudflare Email Routing and forward incoming mail to our Supabase Edge Function (`/functions/v1/temp-mail-api`).
-   * Add the domain to `K12_DOMAINS` in `/home/amen/.config/auto-freecf/.env`.
-   * **Result**: OpenAI and SheerID accept the school domain, while `k12_nodriver.py` continues using our proven `create_mailbox()` and `wait_for_otp()` relay helpers without modifying core logic.
+   * Add the domain to the relay's domain list in `/home/amen/.config/auto-freecf/.env`.
+   * **Result**: upstreams accept the school domain, while the signup flow continues using our proven `create_mailbox()` and `wait_for_otp()` relay helpers without modifying core logic.
 
 2. **Path 2 (Fallback - Standard Disposable API for Non-Gated Steps)**:
    * If testing parts of the pipeline that do not enforce the strict school domain filter, swap `temp.tf` for **`mail.tm`** or **`tempmail.lol`** (both verified alive).

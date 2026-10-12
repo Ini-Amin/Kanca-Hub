@@ -47,7 +47,6 @@ It unifies:
 | `github` | GitHub Education signup helper — uses the school mailbox to create GitHub accounts and start the Education application (CAPTCHA / student-ID upload stays manual). |
 | `mail` | School Outlook (M365) inbox reader — scrapes signup OTPs from the web UI (IMAP basic auth is blocked). |
 | `gmail` | Gmail account farm (nodriver + Chrome) — creates Gmail accounts; phone verification stays manual. |
-| `k12` | ChatGPT K-12 / SheerID teacher verification. *(Out of scope for this guide — see the K-12 docs.)* |
 | `yowes` | 13-country teacher document generator — make ID cards / letters **for your own use**. |
 | `doctor` | One-shot health check: files, Python modules, binaries, gateway, WARP. |
 
@@ -130,7 +129,6 @@ kancahub
   [3] Start the proxy gateway                 (proxy daemon)
   [4] Create TokenHarbor keys                 (thk batch)
   [5] Grok farm                               (grok run)
-  [6] K-12 teacher verification               (k12 auto)
   [7] Manage WARP tunnel                      (warp)
   [8] GitHub Education account farm           (github farm)
   [9] Inject Grok tokens into 9Router         (grok inject)
@@ -140,7 +138,7 @@ kancahub
 ```
 
 Page 2 adds: school-mailbox `test`/`otp`, `gmail farm`, `thk setup-env`,
-`stack login`, `stack sync --prune`, `proxy harvest`, `k12 link-finder`,
+`stack login`, `stack sync --prune`, `proxy harvest`,
 `yowes list`.
 
 Pick a number and KancaHub runs the matching command for you.
@@ -161,7 +159,7 @@ kancahub stack signup --help
 The health check is the first thing to run and the first thing to run when
 something breaks. It reports:
 
-- **Files** — required scripts/dirs across Auto-FreeCF, PetaniProxy, K-12,
+- **Files** — required scripts/dirs across Auto-FreeCF, PetaniProxy,
   Yowes, harbor, grok-register, 9Router DB, secrets, proxies, WARP, region.
 - **Python modules** — `nodriver`, `patchright`, `httpx`, `requests`,
   `curl_cffi`, `cloudscraper`, `DrissionPage`, `speech_recognition`, `pydub`,
@@ -268,7 +266,6 @@ verification steps stay manual.
 ```bash
 kancahub stack cookie-import cookies.json akun-1   # Cookie-Editor JSON -> token
 kancahub proxy res-gateway --pool res.txt --port 8899
-kancahub k12 link-finder -- --help                 # find SheerID links
 ```
 
 ### yowes — documents for your own use

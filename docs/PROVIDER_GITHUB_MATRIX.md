@@ -10,7 +10,7 @@
 |---|---|---|
 | **Path 1: Bulk GitHub Social OAuth** | **High Automation** (via `github_farm.py` + Camoufox/Playwright OAuth) | **Cline**, **Kiro AI**, **Zed**, **GitHub Copilot**, **Cursor IDE**, **GitLab Duo**, **Kimchi** |
 | **Path 2: Domain Email Relay** | **Full Automation** (via Supabase relay / Tempik on `kancalabs.biz.id` / `kancalabs.my.id`) | **Cloudflare Workers AI**, **Token Harbor**, **Grok / xAI**, **Claude Code** |
-| **Path 3: School Mailbox (.edu / Academic)** | **Semi-Automated** (via `binus.ac.id` plus-addressing & SheerID) | **OpenAI Codex / ChatGPT K-12**, **GitHub Student Pack** (unlocks free Copilot) |
+| **Path 3: School Mailbox (.edu / Academic)** | **Semi-Automated** (via `binus.ac.id` plus-addressing) | **OpenAI Codex**, **GitHub Student Pack** (unlocks free Copilot) |
 | **Path 4: Google Identity (Gmail)** | **Hardware/ADB Automated** (via `gmail_adb.py` on Android) | **Antigravity**, **Gemini CLI**, **Google Cloud Code** |
 | **Path 5: Phone / SMS (+86 Domestic)** | **Infeasible for Bulk Farming** (requires Chinese phone SMS) | **iFlow AI**, **CodeBuddy CN**, **Kimi**, **Zai GLM**, **Xiaomi MiMo** |
 
@@ -26,7 +26,7 @@
 | Provider | 9Router ID | Category in 9Router | Login Methods Seen | GitHub Login Available? | Email Signup Needs Special Domain? | Notes |
 |---|---|---|---|---|---|---|
 | **Cline** | `cline`, `clinepass` | `oauth` | GitHub, Google, Microsoft, Email+SSO | **YES** `[UI]` | **No** (Standard / Any) | `authkit.cline.bot` (WorkOS) offers prominent "Continue with GitHub". 9Router handles OAuth callback exchange. |
-| **OpenAI Codex** | `codex` | `oauth` | Email (password/OTP), Google, Microsoft, Apple | **NO** `[UI]` | **YES for K-12** (School .edu domain required) | `auth.openai.com` does NOT offer GitHub. Standard accounts take any email; K-12 teacher upgrade requires school domain + SheerID. |
+| **OpenAI Codex** | `codex` | `oauth` | Email (password/OTP), Google, Microsoft, Apple | **NO** `[UI]` | **YES for teacher tier** (School .edu domain required) | `auth.openai.com` does NOT offer GitHub. Standard accounts take any email; the teacher upgrade requires a school domain. |
 | **Kiro AI** | `kiro` | `free` / `oauth` | GitHub, Google, AWS Builder ID, AWS IAM IdC | **YES** `[CODE]` | **No** (Standard / Any) | 9Router's `/api/oauth/kiro/social-authorize` and `/social-exchange` explicitly implement `provider: "github"`. |
 | **GitHub Copilot** | `github` | `oauth` | GitHub Native (Device Code) | **NATIVE** `[CODE]` | **YES for Free Student Tier** | Uses `github.com/login/device/code`. Free unlimited access requires GitHub Student Developer Pack approval. |
 | **Zed** | `zed` | `oauth` | GitHub Native | **NATIVE** `[CODE]` | **No** (Uses GitHub account) | Zed's identity architecture is 100% GitHub (`zed.dev/native_app_signin`). Key stored in system keyring as `zed-github-account`. |
@@ -69,7 +69,7 @@
   - `[UI Evidence]`: `auth.openai.com` only renders buttons for Google, Microsoft, Apple, and native Email. **GitHub social login does not exist.**
 * **Domain Restrictions**:
   - Standard ChatGPT accounts accept any email.
-  - **ChatGPT for Teachers / K-12 Workspace** strictly validates the email domain. As proven in `K12_FINDINGS.md`, non-educational domains fail with:
+  - **ChatGPT for Teachers** strictly validates the email domain; non-educational domains fail with:
     > *"Your email domain isn't eligible for teacher verification. Please sign in and reverify with your school-issued email."*
 * **Farming Applicability**: **Must use Path 3 (Academic Mailbox: `binus.ac.id`)**. GitHub accounts cannot be used directly for Codex.
 
@@ -153,7 +153,7 @@
   github_farm.py     auto-freecf / tempik   binus.ac.id (.edu)   gmail_adb.py
          │                   │                    │                   │
          ├► Cline            ├► Cloudflare AI     ├► OpenAI Codex     ├► Antigravity
-         ├► Kiro AI          ├► Token Harbor      │  (ChatGPT K-12)   └► Gemini CLI
+         ├► Kiro AI          ├► Token Harbor      │  (teacher tier)   └► Gemini CLI
          ├► Zed              ├► Grok / xAI        └► GitHub Student
          ├► Cursor           └► Claude Code          (Free Copilot)
          ├► GitLab Duo
@@ -179,9 +179,9 @@
   4. **Claude Code**: Direct email signup.
 
 ### Path 3: Academic School Mailbox (`binus.ac.id`)
-* **Mechanism**: Outlook Web session automation (`school_mail_browser.py`, `sheerid_link_finder.py`) with plus-addressing (`raymondi+gh<N>@binus.ac.id`).
+* **Mechanism**: Outlook Web session automation (`school_mail_browser.py`) with plus-addressing (`raymondi+gh<N>@binus.ac.id`).
 * **Downstream Integration**:
-  1. **OpenAI Codex**: ChatGPT for Teachers K-12 workspace (strictly requires school domain).
+  1. **OpenAI Codex**: ChatGPT for Teachers workspace (strictly requires school domain).
   2. **GitHub Student Developer Pack**: Unlocks 100% free GitHub Copilot access for Path 1 accounts.
 
 ### Path 4: Google Accounts (Android ADB)
@@ -200,7 +200,7 @@
    - **Zed** (native GitHub authentication).
    - **GitHub Student Developer Pack** (converts GitHub account into active Copilot subscription).
 2. **Do NOT attempt GitHub Social Login for**:
-   - **Codex** (requires email / Google / Apple / Microsoft, and school domain for K-12).
+   - **Codex** (requires email / Google / Apple / Microsoft, and school domain for the teacher tier).
    - **Antigravity** (strictly Google Account).
    - **iFlow** (strictly Chinese phone SMS).
    - **Xiaomi MiMo** (strictly Xiaomi Mi Account).

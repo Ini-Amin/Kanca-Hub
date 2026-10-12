@@ -34,7 +34,7 @@ def is_gateway(proxy_url: str | None = None) -> bool:
 
 def get_current_session_id() -> str | None:
     """Retrieve session id from environment if present."""
-    return os.environ.get("GATEWAY_SESSION_ID") or os.environ.get("K12_GATEWAY_SESSION")
+    return os.environ.get("GATEWAY_SESSION_ID")
 
 
 def gateway_headers(session_id: str | None = None) -> dict[str, str]:

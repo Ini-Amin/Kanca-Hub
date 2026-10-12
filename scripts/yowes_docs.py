@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
-"""SheerID-ready teacher documents via the yowes engine.
+"""Teacher documents via the yowes engine.
 
-`script.py` (K-12 verifier) uploads a document to SheerID at the `docUpload`
-step. Its built-in `generate_teacher_badge()` draws a crude 500x350 Pillow
-badge, which SheerID rejects as "The document is insufficient". This module
-renders a real A4 employment letter / teacher ID card / teaching license with
-the yowes engine instead, and returns raw PNG bytes ready for the upload.
+Renders a real A4 employment letter / teacher ID card / teaching license
+with the yowes engine and returns raw PNG bytes.
 
-Contract with SheerID (see docs/YOWES_SHEERID_BRIDGE.md §1.2):
-    mimeType / PUT Content-Type : image/png
-    fileSize                    : exact byte length of the PNG
-    payload                     : the raw PNG bytes, PUT to a presigned S3 URL
-
-Everything downstream of `doc_data` therefore keeps working, because this
-module returns the same thing `generate_teacher_badge()` did: `bytes`.
+The return value is plain `bytes`, so every caller that previously consumed
+a rendered document keeps working unchanged.
 
 Usage:
     from yowes_docs import generate_doc_png
@@ -39,8 +31,8 @@ if str(YOWES_DIR) not in sys.path:
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 DOC_TYPES = ("employment_letter", "teacher_id", "teaching_license")
 
-# SheerID accepts the ~140-190 KB yowes PNGs, but bound them anyway so a huge
-# A4 render can never turn into an upload failure.
+# Bound the PNG size anyway so a huge A4 render can never turn into an
+# upload failure.
 MAX_DOC_BYTES = 4_000_000
 MAX_DIMENSION = 2400          # downscale target if we ever exceed MAX_DOC_BYTES
 
@@ -73,15 +65,15 @@ def enrich_school(school: dict) -> dict:
     `script.py`'s `select_school()` returns only id/idExtended/name/type, and
     yowes indexes `school['town']` DIRECTLY (countries/us/__init__.py:193,296),
     so passing it through unchanged raises KeyError. We derive town/state from
-    the K12 `city` field ("Chicago, IL") when present, else fall back to
-    harmless defaults. The SheerID identity (id/idExtended/name) is preserved.
+    the `city` field ("Chicago, IL") when present, else fall back to
+    harmless defaults. The identity (id/idExtended/name) is preserved.
     """
     city = str(school.get("city") or "").strip()
     town, _, state = city.partition(",")
     town, state = town.strip(), state.strip()
 
     return {
-        # --- identity used for the SheerID submission ---
+        # --- identity fields ---
         "name": school.get("name", "Jefferson High School"),
         "id": school.get("id"),
         "idExtended": school.get("idExtended"),
@@ -111,7 +103,7 @@ def generate_doc_png(doc_type: str, first: str, last: str, school: dict,
     """Render one document and return PNG bytes.
 
     doc_type: 'employment_letter' | 'teacher_id' | 'teaching_license'
-    school:   a K12 dict (enriched internally) or an already-full yowes dict
+    school:   a school dict (enriched internally) or an already-full yowes dict
     """
     USGenerator = _load_generator()
     gen = USGenerator()

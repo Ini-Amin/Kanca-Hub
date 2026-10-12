@@ -6,8 +6,8 @@ Author: Supervisor. 2026-10-06. User request + recon results.
 1. Wire a **GitHub→anything** signup: if a target offers GitHub/Google social login, use it
    (via a stored GitHub account); else fall back to **temp-mail signup on our domain**
    (`kancalabs.biz.id` / `kancalabs.my.id`).
-2. Confirm the **SheerID docUpload API works**, then wire it into **one end-to-end
-   GitHub-Edu flow** (signup → verify).
+2. ~~Confirm the docUpload API works, then wire it into one end-to-end GitHub-Edu
+   flow~~ — **dropped: the edu-verification feature was removed (needs a US .edu mailbox).**
 3. Test against: `https://www.codebuddy.ai/login`, `https://console.tiarina.cloud/login`.
 
 ## Recon results (live, 2026-10-06)
@@ -17,13 +17,9 @@ Author: Supervisor. 2026-10-06. User request + recon results.
   likely blocks the flagged host IP / needs a clean residential egress. Retest after egress
   fix. HTML hints: google/microsoft/apple/github/phone/sso.
 
-## docUpload API (verified in code; live unverified)
-`K12Verifier` implements it:
-`POST /rest/v2/verification/{id}/step/docUpload` {files:[{fileName,mimeType:image/png,fileSize}]}
-→ `PUT <uploadUrl>` raw bytes → `POST .../completeDocUpload`.
-Document bytes come from `generate_document_for_sheerid()` (yowes teacher-ID/letter).
-**Status:** code present; needs ONE live run with a REAL SheerID URL to confirm 200s.
-We currently have **no** SheerID URL and **no** GitHub account yet (github_accounts.json empty).
+## docUpload API — feature removed
+The verification-side code (verifier + document generator) lived in the
+teacher-verification tooling, deleted together with the edu-verification feature.
 
 ## Design: ONE end-to-end flow
 
@@ -45,22 +41,16 @@ Logic:
    stopped. No fake success. Rate-limited (20-45s, stop on challenge).
 - Optional `--inject-9router <baseUrl>` when the target exposes an OpenAI-compatible API.
 
-### C. GitHub-Edu one flow: `kancahub github edu` (NEW)
-Chains, end to end with human pause only for the physical step:
-1. `github farm` (create account) → `github_accounts.json`
-2. `github verify` (SheerID: find link from school mailbox → docUpload generated yowes doc)
-3. human pause ONLY if a real camera/ID is required (per docs/VERIFY_LIMITS_AND_K12.md)
-4. report + inject where applicable.
+### C. GitHub-Edu one flow — dropped
+`kancahub github edu` chained farm → verify → human pause. Removed together with the
+edu-verification feature; only `github farm` / `github check` remain.
 
 ## Immediate blockers (honest)
 - **No GitHub account yet** (all signups 403 — datacenter egress). The GitHub→anything flow
   can be BUILT and unit-tested now, but a LIVE test needs either a residential egress or a
   manually-supplied GitHub account.
-- **No SheerID URL** → docUpload live-confirm needs a real EDU flow to reach it.
 - CodeBuddy needs a clean egress to even load.
 
 ## Task queue
 - G1 (worker7): scripts/github_to_anything.py + tests (social-first, temp-mail fallback).
-- G2 (worker3): `kancahub github edu` chaining + tests.
-- G3 (me/worker5): wire docUpload live-verify attempt when a SheerID URL exists; add
-  `--interactive` human-pause hook.
+- G2/G3: dropped — `github edu` / docUpload verify were removed with the edu-verification feature.

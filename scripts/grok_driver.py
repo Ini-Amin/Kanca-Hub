@@ -102,7 +102,7 @@ def prepare_config(
     if not supabase_url and cf_cfg.get("mail_api"):
         m = re.match(r"(https://[^/]+)", cf_cfg["mail_api"])
         supabase_url = m.group(1) if m else ""
-    domains_list = (env.get("K12_DOMAINS") or ",".join(cf_cfg.get("mail_domains") or ["kancalabs.biz.id"])).split(",")
+    domains_list = ",".join(cf_cfg.get("mail_domains") or ["kancalabs.biz.id"]).split(",")
     target_domains = [d.strip() for d in domains_list if d.strip()]
 
     provider = (mail_provider or cfg.get("email_provider") or "cloudflare").strip().lower()

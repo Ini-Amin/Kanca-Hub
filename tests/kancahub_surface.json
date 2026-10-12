@@ -145,16 +145,6 @@
 "help",
 "inbox"
 ],
-"github edu": [
-"domain",
-"help",
-"inbox",
-"interactive",
-"max_accounts",
-"no_verify",
-"proxy",
-"url"
-],
 "github farm": [
 "delay_max",
 "delay_min",
@@ -171,18 +161,6 @@
 "pool",
 "proxy",
 "retries"
-],
-"github verify": [
-"debug",
-"email",
-"from_mail",
-"gateway",
-"headless",
-"help",
-"open",
-"proxy",
-"timeout",
-"url"
 ],
 "gmail": [
 "gmail_cmd",
@@ -292,44 +270,6 @@
 "ip-reuse": [
 "clear",
 "help"
-],
-"k12": [
-"help",
-"k12_cmd"
-],
-"k12 auto": [
-"help",
-"no_proxy",
-"proxy"
-],
-"k12 inject": [
-"dry_run",
-"help",
-"session"
-],
-"k12 link-finder": [
-"extra",
-"help"
-],
-"k12 modes": [
-"help"
-],
-"k12 run": [
-"help"
-],
-"k12 sync": [
-"help",
-"prune"
-],
-"k12 verify": [
-"ask_email",
-"debug",
-"email",
-"gateway",
-"help",
-"no_temp_email",
-"proxy",
-"url"
 ],
 "mail": [
 "help",
@@ -730,13 +670,6 @@
 ],
 "yowes gui": [
 "help"
-],
-"yowes k12": [
-"first",
-"help",
-"last",
-"out",
-"school"
 ],
 "yowes list": [
 "help"

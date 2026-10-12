@@ -1,6 +1,6 @@
-# Camoufox Evaluation: nodriver Replacement for K-12 Automation
+# Camoufox Evaluation: nodriver Replacement for Browser Automation
 
-Evaluation of **Camoufox** (Firefox-based anti-detect browser) to replace **nodriver** (CDP-based Chromium automation) in `/home/amen/Auto-FreeCF/scripts/k12_nodriver.py`.
+Evaluation of **Camoufox** (Firefox-based anti-detect browser) to replace **nodriver** (CDP-based Chromium automation) in the old nodriver signup prototype.
 
 ---
 
@@ -69,7 +69,7 @@ Camoufox provides native, C++-level anti-fingerprinting. The relevant kwargs for
 | `geoip_db` | `str` (optional) | Specifies the local MaxMind database source (defaults to "GeoIP AIO by daijro"). |
 | `locale` | `str \| list[str]` (`"en-US"`) | Configures `navigator.language`, `navigator.languages`, `Accept-Language` headers, and the JavaScript `Intl` API formatting. |
 | `timezone` | `str` (`"America/New_York"`) | Sets the browser's internal timezone (inferred automatically if `geoip=True`). Prevents timezone/IP mismatch leaks. |
-| `humanize` | `bool \| float` (`True` or `1.5`) | Patches mouse movement at the browser engine level using natural Bezier curve trajectories, acceleration/deceleration, and micro-jitter (max duration in seconds). Crucial for bypassing OpenAI / SheerID behavioral bot scoring. |
+| `humanize` | `bool \| float` (`True` or `1.5`) | Patches mouse movement at the browser engine level using natural Bezier curve trajectories, acceleration/deceleration, and micro-jitter (max duration in seconds). Crucial for bypassing behavioral bot scoring. |
 | `proxy` | `dict` (`{"server": "http://..."}`) | Routes traffic through an HTTP/SOCKS5 proxy. When paired with `geoip=True`, Camoufox queries the proxy's exit IP and auto-spoofs geolocation/timezone to match the proxy. |
 | `os` | `str` (`"windows"`, `"macos"`, `"linux"`) | Sets target OS fingerprint (User-Agent, `navigator.platform`, `oscpu`, system fonts, client hints, audio buffer characteristics). Default randomly samples desktop OSes. |
 | `fonts` | `list[str]` | Custom font list exposed to font enumeration detection. Defaults to an OS-coherent random font subset. |
@@ -88,7 +88,7 @@ Camoufox provides native, C++-level anti-fingerprinting. The relevant kwargs for
 
 Camoufox wraps the asynchronous Playwright API (`AsyncCamoufox` returns Playwright `Browser` / `BrowserContext`).
 
-| Action | nodriver (`k12_nodriver.py`) | Camoufox (Playwright Async) |
+| Action | nodriver (old prototype) | Camoufox (Playwright Async) |
 |---|---|---|
 | **Launch** | `browser = await uc.start(headless=headless, lang="en-US", browser_args=args)` | `async with AsyncCamoufox(headless=False, geoip=True, humanize=True, os="windows", proxy=p) as browser:` |
 | **New Page** | `tab = browser.main_tab` | `page = await browser.new_page()` |
@@ -113,7 +113,7 @@ Camoufox wraps the asynchronous Playwright API (`AsyncCamoufox` returns Playwrig
 * Calling `context.new_cdp_session(page)` on Camoufox raises an error: *"CDP sessions are only supported on Chromium-based browsers."*
 
 ### Why Playwright's `page.mouse` and `locator.click()` Work for React:
-1. **The Synthetic Event Problem**: In browser JavaScript, calling `element.click()` or `dispatchEvent(new MouseEvent(...))` produces an untrusted event where `event.isTrusted === false`. React 17+ event delegates and anti-bot systems (Cloudflare, SheerID, Arkose) check `event.isTrusted` and reject synthetic clicks.
+1. **The Synthetic Event Problem**: In browser JavaScript, calling `element.click()` or `dispatchEvent(new MouseEvent(...))` produces an untrusted event where `event.isTrusted === false`. React 17+ event delegates and anti-bot systems (Cloudflare, Arkose, …) check `event.isTrusted` and reject synthetic clicks.
 2. **Playwright Dispatches Real Protocol Events**: Playwright's `page.mouse.move()`, `page.mouse.down()`, `page.mouse.up()`, and `locator.click()` do **not** run JavaScript synthetic clicks. Instead, Juggler injects native widget events directly into Gecko's OS-level event pump (`nsIWidget`).
 3. **`event.isTrusted === true`**: The Firefox rendering engine processes these as genuine physical inputs, marking `event.isTrusted = true`. React captures and processes them identically to CDP mouse events.
 4. **Camoufox C++ Humanize**: In nodriver, `_cdp_click_xy` jumps instantaneously to coordinates. Camoufox implements `humanize=True` inside its Gecko C++ core, moving the cursor along randomized Bezier curves with natural acceleration, which is significantly more stealthy than nodriver's raw clicks.
@@ -123,10 +123,10 @@ Camoufox wraps the asynchronous Playwright API (`AsyncCamoufox` returns Playwrig
 ## 6. Effort Estimate & Risks
 
 ### Effort Estimate
-* **Scope**: Refactoring `/home/amen/Auto-FreeCF/scripts/k12_nodriver.py` (~913 lines) into `k12_camoufox.py`.
+* **Scope**: Refactoring the old nodriver signup prototype (~913 lines) to Camoufox.
 * **Development Time**: **1 – 2 engineering days**.
   * Simplifying code: ~200 lines of brittle nodriver boilerplate (`install_popup_hook`, `_query_all`, `_cdp_click_xy`, `RemoteObject` unwrappers) can be deleted in favor of native Playwright calls (`expect_popup()`, `locator.click()`, `page.evaluate()`).
-* **Testing & Tuning**: **1 day** (testing SheerID redirection, OpenAI OTP reception, and token capture).
+* **Testing & Tuning**: **1 day** (testing redirect flows, OTP reception, and token capture).
 
 ### Operational Risks & Considerations
 1. **Disk and Bandwidth Footprint**:
@@ -139,4 +139,4 @@ Camoufox wraps the asynchronous Playwright API (`AsyncCamoufox` returns Playwrig
    * Running pure headless (`headless=True`) on Firefox leaks headless canvas/CSS properties.
    * Camoufox requires `headless="virtual"` on Linux, which spins up `Xvfb` (X virtual framebuffer). `Xvfb` is verified installed on this system (`/usr/bin/Xvfb`), but headless container deployments must ensure `xorg-x11-server-Xvfb` is installed.
 4. **Site Behavioral Variances (Gecko vs Blink)**:
-   * ChatGPT/OpenAI and SheerID serve slightly different bundles or login paths depending on User-Agent. Testing is required to verify that SheerID's iframe/redirect flows complete smoothly on Gecko.
+   * Different sites serve slightly different bundles or login paths depending on User-Agent. Testing is required to verify that iframe/redirect flows complete smoothly on Gecko.
