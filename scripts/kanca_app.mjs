@@ -19,7 +19,9 @@ const CAMOU = `${homedir()}/.local/share/auto-freecf/camoufox-venv/bin/python`;
 // Each tool is an argv prefix; the model only supplies extra args (no shell).
 export const TOOLS = {
   kancahub: [VENV, "scripts/kancahub.py"],          // autofarm, thk, mail, 9router, warp, zcode, doctor...
-  railbox: ["python3", "scripts/railbox.py"],       // new/status/swarm/ssh/pull Railway boxes
+  // The ASUS owns the boxes and runs the rotate daemon; RAILBOX_HOST=local uses this machine's own.
+  railbox: process.env.RAILBOX_HOST === "local" ? ["python3", "scripts/railbox.py"]
+    : ["ssh", "-o", "ConnectTimeout=10", process.env.RAILBOX_HOST || "asus", "cd ~/Auto-FreeCF && python3 scripts/railbox.py"],
   tencent_claim: [CAMOU, "scripts/tencent_claim.py"],
   mailboxes: [VENV, "scripts/mailboxes.py"],
   warp_manager: [VENV, "scripts/warp_manager.py"],
@@ -50,7 +52,9 @@ function runTool({ tool, args = [] }, emit, live) {
   const argv = TOOLS[tool];
   if (!argv) return Promise.resolve(`unknown tool ${tool}`);
   return new Promise((ok) => {
-    const p = spawn(argv[0], [...argv.slice(1), ...args.map(String)], { cwd: REPO,
+    // ssh joins args into a remote shell line, so quote each one there.
+    const q = (s) => argv[0] === "ssh" ? `'${String(s).replace(/'/g, `'\\''`)}'` : String(s);
+    const p = spawn(argv[0], [...argv.slice(1), ...args.map(q)], { cwd: REPO,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
     live.add(p);
     let out = "";
