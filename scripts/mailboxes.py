@@ -290,7 +290,9 @@ def _mailtm(local_part: str = "", log=print, domain: str = "") -> Mailbox:
 
     doms = api("/domains")
     lst = doms if isinstance(doms, list) else doms.get("hydra:member", [])
-    dom = domain or next((x["domain"] for x in lst if x.get("isActive", True) and not x.get("isPrivate")), None) \
+    hosted = {x.get("domain") for x in lst}
+    dom = (domain if domain in hosted else None) \
+        or next((x["domain"] for x in lst if x.get("isActive", True) and not x.get("isPrivate")), None) \
         or (lst[0]["domain"] if lst else None)
     if not dom:
         raise RuntimeError("mail.tm: no active domain")
