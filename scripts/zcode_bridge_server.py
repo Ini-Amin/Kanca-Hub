@@ -100,16 +100,22 @@ def persona_text():
 
 
 def resolve_model(model):
-    """alias (combo) -> (real model, force_persona); 'zcode/GLM-5.3' and
-    claude/gpt names -> GLM-5.3."""
+    """alias (combo) -> (model chain, force_persona). The chain is walked in
+    order with account failover inside each step: e.g. GLM-5.3 on Acc1..N,
+    then the fallback GLM-5.3-Flash on Acc1..N. 'zcode/GLM-5.3' and
+    claude/gpt names -> single GLM-5.3 chain."""
     cfg = load_config()
     m = (model or "").strip()
     alias = (cfg.get("aliases") or {}).get(m)
     if isinstance(alias, dict):
-        return alias.get("model", DEFAULT_MODEL), bool(alias.get("persona"))
+        chain = alias.get("models")
+        if not isinstance(chain, list) or not chain:      # legacy single-model alias
+            chain = [alias.get("model", DEFAULT_MODEL)]
+        chain = [x.strip() for x in chain if isinstance(x, str) and x.strip()]
+        return (chain or [DEFAULT_MODEL]), bool(alias.get("persona"))
     if "/" in m:
         m = m.rsplit("/", 1)[-1]
-    return (m if m.upper().startswith("GLM") else DEFAULT_MODEL), False
+    return ([(m if m.upper().startswith("GLM") else DEFAULT_MODEL)]), False
 
 
 def persona_active(force, requested="", resolved=""):
@@ -395,19 +401,27 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-    def _select_account(self, model):
-        """account 1 hits its daily quota -> transparently serve from account 2
-        (etc.). 429 only when NO account has JWT + quota left (then 9router's
-        connection fallback applies)."""
-        chosen = pick_account(self.account, model)
-        if chosen is None:
-            self._send(429, {"code": 3010, "msg": "bridge: no account with quota for %s" % model})
-            return False
-        if self.account and chosen != self.account:
-            bridge_event("failover", "quota: %s spent for %s -> using %s"
-                         % (self.account, model, chosen))
-        self.account = chosen
-        return True
+    def _select_account(self, models):
+        """walk the model chain: GLM-5.3 Acc1 -> Acc2 -> ... -> then the
+        fallback model (e.g. GLM-5.3-Flash) across accounts. First model with
+        a usable account wins and becomes self.model. 429 code 3010 only when
+        the WHOLE chain is spent (then 9router's connection fallback applies).
+        """
+        for m in models:
+            chosen = pick_account(self.account, m)
+            if chosen:
+                if m != models[0]:
+                    bridge_event("failover", "chain: %s exhausted everywhere -> using %s"
+                                 % (models[0], m))
+                if self.account and chosen != self.account:
+                    bridge_event("failover", "quota: %s spent for %s -> using %s"
+                                 % (self.account, m, chosen))
+                self.account = chosen
+                self.model = m
+                return True
+        self._send(429, {"code": 3010,
+                         "msg": "bridge: no account with quota for %s" % " -> ".join(models)})
+        return False
 
     def _call_failover(self, payload, model):
         """send upstream; if the JWT is dead (401) rotate to the next usable
@@ -428,16 +442,33 @@ class Handler(BaseHTTPRequestHandler):
                 break
         return None, err
 
+    def _call_chain(self, payload, chain, model):
+        """upstream shed the model with 405/3012 (anti-abuse; e.g. a brand-new
+        account hitting the flagship GLM-5.3 while its Flash bucket is fine)
+        -> continue down the chain instead of relaying the error."""
+        resp, err = self._call_failover(payload, model)
+        while (err is not None and getattr(err, "code", None) == 405
+               and chain.index(model) + 1 < len(chain)):
+            model = chain[chain.index(model) + 1]
+            if not self._select_account([model]):
+                return resp, err
+            bridge_event("failover", "upstream 3012 shed -> chain to %s (%s)"
+                         % (model, self.account))
+            payload["model"] = model
+            resp, err = self._call_failover(payload, model)
+        return resp, err
+
     # ---------- Anthropic ----------
     def _anthropic_messages(self):
         body = self._read_body()
         req_model = body.get("model")
-        model, force_p = resolve_model(req_model)
-        if not self._select_account(model):
+        chain, force_p = resolve_model(req_model)
+        if not self._select_account(chain):
             return
+        model = self.model
         body["model"] = model
         body["system"] = merge_system(body.get("system"), force_p, req_model, model)
-        resp, err = self._call_failover(body, model)
+        resp, err = self._call_chain(body, chain, model)
         if err is not None:
             return self._relay_error(err, raw=err if hasattr(err, "read") else None)
         if body.get("stream"):
@@ -501,13 +532,14 @@ class Handler(BaseHTTPRequestHandler):
     def _openai_chat(self):
         req = self._read_body()
         payload = self._oa_to_anthropic(req)
-        model, force_p = resolve_model(req.get("model"))
-        payload["model"] = model
-        if not self._select_account(model):
+        chain, force_p = resolve_model(req.get("model"))
+        if not self._select_account(chain):
             return
+        model = self.model
+        payload["model"] = model
         payload["system"] = merge_system(payload.get("system"), force_p,
                                          req.get("model"), model)
-        resp, err = self._call_failover(payload, model)
+        resp, err = self._call_chain(payload, chain, model)
         if err is not None:
             return self._relay_error(err, raw=err if hasattr(err, "read") else None)
         if payload.get("stream"):

@@ -199,13 +199,15 @@ def cmd_models(a):
     cfg = load_json(p("config.json"), {})
     aliases = cfg.get("aliases") or {}
     if a.action == "add":
-        aliases[a.alias] = {"model": a.model, "persona": bool(a.persona)}
-        event("models", "alias %s -> %s persona=%s" % (a.alias, a.model, bool(a.persona)))
+        chain = [x.strip() for x in a.model.split(",") if x.strip()]
+        aliases[a.alias] = {"models": chain, "persona": bool(a.persona)}
+        event("models", "alias %s -> %s persona=%s" % (a.alias, "->".join(chain), bool(a.persona)))
     elif a.action == "rm":
         aliases.pop(a.alias, None)
     else:
         for k, v in aliases.items():
-            print("%-24s -> %-14s persona=%s" % (k, v.get("model"), v.get("persona")))
+            chain = v.get("models") or ([v.get("model")] if v.get("model") else [])
+            print("%-24s -> %-30s persona=%s" % (k, "->".join(chain), v.get("persona")))
         return
     _cfg_toggle(lambda c: {**c, "aliases": aliases})
 

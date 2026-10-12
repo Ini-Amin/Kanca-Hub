@@ -25,6 +25,7 @@ class TempikClient:
 
     def __init__(self):
         self.session = requests.Session()
+        self.session.trust_env = False  # mail API is not IP-gated; never route it via the signup proxy
         self.session.headers.update({"Content-Type": "application/json"})
         self._session_id: Optional[str] = None
         self._domains: Optional[list[str]] = None

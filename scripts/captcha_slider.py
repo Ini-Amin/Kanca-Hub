@@ -26,7 +26,10 @@ import json
 import math
 import os
 import random
+import re
+import shlex
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.request
@@ -37,9 +40,15 @@ from pathlib import Path
 # (rms 0.17px): the old blind guess (b=0.077) was ~18% off, which is why one-shot
 # drags never landed. Closed-loop probing corrects live, so this is only the
 # first-move prior now.
-COEF = (0.0036, 0.0632, 0.59)
+COEF = (0.0036, 0.0631, 0.6007)  # refit from 148 probes (rms 0.18px), 2026-10-11
+# Confidence gate: when gap_by_diff and flat_dark_guess disagree by more than
+# this many px, skip the (benchmark ~50%) drag and go straight to vision.
+DISAGREE_GATE = 4
 NINE_ROUTER_HOME = Path(os.environ.get("NINE_ROUTER_HOME", Path.home() / ".9router"))
-VISION_MODEL = os.environ.get("CAPTCHA_VISION_MODEL", "ag/gemini-3.8-flash-high")
+# cbai/glm-5v-turbo: the ag/gemini routes HANG on image content (60s+ no reply,
+# burned the mint); cbai answers in ~1s. Accuracy on labeled puzzles is only
+# ~1/6, but that still beats the blind sweep prior -- and costs nothing.
+VISION_MODEL = os.environ.get("CAPTCHA_VISION_MODEL", "cbai/glm-5v-turbo")
 
 IDS = {
     "bg": "aliyunCaptcha-img",
@@ -206,6 +215,49 @@ def gap_by_diff(bg_b64: str, piece_b64: str) -> int | None:
 
     return lo
 
+def flat_dark_guess(bg_b64: str, piece_b64: str) -> int | None:
+    """Second-opinion scorer for the confidence gate in solve_aliyun().
+
+    The gap is a dark textureless overlay, so rank full-width candidates by
+    (std + 0.5*mean) inside the piece's alpha band. Deliberately diverse from
+    gap_by_diff (no geometry windows; uses darkness). On the 35-label
+    benchmark: 11/35 alone, union with gap_by_diff covers 25/35 (71%), and
+    when the two AGREE (<=4px) precision is 8/10 (80%).
+    """
+    try:
+        from PIL import Image
+        import numpy as np
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        bg = Image.open(io.BytesIO(_png_bytes(bg_b64))).convert("L")
+        pc = Image.open(io.BytesIO(_png_bytes(piece_b64)))
+    except Exception:  # noqa: BLE001
+        return None
+    b = np.asarray(bg, dtype=np.float32)
+    H, W = b.shape
+    a = np.asarray(pc)
+    pw = int(a.shape[1])
+    if pw < 4 or W < pw + 12:
+        return None
+    if a.ndim == 3 and a.shape[2] == 4:
+        alpha = a[:, :, 3]
+        rows = np.where(alpha > 40)[0]
+        y0, y1 = (int(rows.min()), int(rows.max())) if rows.size else (0, H - 1)
+        mask = alpha[y0:y1 + 1] > 40
+    else:
+        y0, y1 = 0, H - 1
+        mask = np.ones((H, pw), dtype=bool)
+    if not mask.any():
+        return None
+    best_x, best_s = None, None
+    for x in range(8, W - pw - 4):
+        patch = b[y0:y1 + 1, x:x + pw][mask]
+        s = float(patch.std()) + 0.5 * float(patch.mean())
+        if best_s is None or s < best_s:
+            best_s, best_x = s, x
+    return best_x
+
 def _r9_key(base: str = "http://localhost:20128") -> str:
     env = os.environ.get("NINE_ROUTER_KEY")
     if env:
@@ -236,7 +288,7 @@ def _r9_key(base: str = "http://localhost:20128") -> str:
 
 
 def gap_by_vision(bg_b64: str, piece_b64: str, *, model: str = VISION_MODEL,
-                  base: str = "http://localhost:20128", timeout: float = 60) -> int | None:
+                  base: str = "http://localhost:20128", timeout: float = 15) -> int | None:
     """Ask a vision model where the piece belongs. Returns the x pixel, or None."""
     key = _r9_key(base)
     if not key:
@@ -295,6 +347,25 @@ def gap_by_vision(bg_b64: str, piece_b64: str, *, model: str = VISION_MODEL,
     import re
     m = re.search(r"\d+", s or "")
     return int(m.group(0)) if m else None
+
+
+def gap_by_cmd(bg_path, piece_path, *, timeout: float = 45.0) -> int | None:
+    """Generic vision seam: run $SLIDER_VISION_CMD -- a command template with
+    {bg} / {piece} placeholders -- and parse the integer it prints on stdout.
+    Anything can back it (local model, team helper, HTTP shim); the repo stays
+    agnostic. Unset or failing -> None, callers fall back to the model route."""
+    tpl = os.environ.get("SLIDER_VISION_CMD", "").strip()
+    if not tpl:
+        return None
+    try:
+        argv = [a.format(bg=str(bg_path), piece=str(piece_path))
+                for a in shlex.split(tpl)]
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        m = re.search(r"\d+", out.stdout or "")
+        v = int(m.group(0)) if m else None
+    except Exception:  # noqa: BLE001
+        return None
+    return v if v is not None and 10 <= v <= 290 else None
 
 
 # ─────────────────────────────────────────────────────────── browser driving
@@ -553,19 +624,31 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
                 seen_widget = False
                 continue
         seen_widget = True
-        # detector first; after one miss, spend a vision call -- the diff
-        # detector alone lands ~30% (dataset-measured), vision is the real
-        # lever now that the drag itself is closed-loop.
+        # detector first; after one miss, ask for help: the generic
+        # $SLIDER_VISION_CMD seam (anything can back it -- e.g. a local team
+        # helper), then the built-in model route. The diff detector alone lands
+        # ~30% (dataset-measured) and the drag is already closed-loop, so
+        # detection is the only error left.
         imgs = await _read_images(page)
         pid = await _puzzle_id(page)
+        images = _save_puzzle_images(pid, imgs[0], imgs[1]) if imgs else {}
         guess = None
         if imgs:
             guess = gap_by_diff(imgs[0], imgs[1])
-            if (missed or guess is None) and model:
-                try:
-                    v = gap_by_vision(imgs[0], imgs[1], model=model)
-                except Exception:  # noqa: BLE001
-                    v = None
+            # Confidence gate: two diverse scorers agreeing => ~80% precision
+            # (benchmark); disagreeing => ~50%, so skip the doomed drag and
+            # spend the vision call before touching the slider.
+            g2 = flat_dark_guess(imgs[0], imgs[1]) if guess is not None else None
+            if (missed or guess is None
+                    or (g2 is not None and abs(guess - g2) > DISAGREE_GATE)):
+                v = None
+                if images:
+                    v = gap_by_cmd(DATA_DIR / images["bg"], DATA_DIR / images["piece"])
+                if not v and model:
+                    try:
+                        v = gap_by_vision(imgs[0], imgs[1], model=model)
+                    except Exception:  # noqa: BLE001
+                        v = None
                 if v and 100 <= v <= 300:
                     guess = v
         targets = ([guess] if guess and 100 <= guess <= 300 else []) + \
@@ -578,8 +661,9 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         # correct, release. invert()/COEF only matter as a rough prior now --
         # the probes measure the true per-puzzle movement curve live.
         released, probes = await _drag_exact(page, box, float(t), log)
-        imgs = imgs or await _read_images(page)
-        images = _save_puzzle_images(pid, imgs[0], imgs[1]) if imgs else {}
+        if not images:                     # late-arriving widget images
+            imgs = imgs or await _read_images(page)
+            images = _save_puzzle_images(pid, imgs[0], imgs[1]) if imgs else {}
         await page.wait_for_timeout(1200)
         ok = seen_widget and await _passed(page)
         log_attempt(page.url.split("?")[0], pid, target=t, guess=guess,
@@ -695,6 +779,41 @@ def analyze() -> None:
     if hits:
         tg = sorted(r["target"] for r in hits if r.get("target"))
         print("passing targets (sweep prior):", tg)
+    # ground truth check: re-run the diff detector over every labeled pair
+    # (batch labels from the vision team + the passed-record targets)
+    labels = {}
+    lab_path = DATA_DIR.parent / "slider_labels.jsonl"
+    if lab_path.exists():
+        for line in open(lab_path, encoding="utf-8"):
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("label") and rec.get("bg"):
+                labels[rec["bg"]] = rec["label"]
+    for r in recs:
+        if r.get("passed") and r.get("images", {}).get("bg"):
+            labels[r["images"]["bg"]] = r["target"]
+    if labels:
+        ok = tot = 0
+        misses = []
+        for bgname, truth in sorted(labels.items()):
+            fp = DATA_DIR / bgname
+            pc = DATA_DIR / bgname.replace("_bg.png", "_piece.png")
+            if not (fp.exists() and pc.exists()):
+                continue
+            bg_b64 = base64.b64encode(fp.read_bytes()).decode()
+            pc_b64 = base64.b64encode(pc.read_bytes()).decode()
+            g = gap_by_diff(bg_b64, pc_b64)
+            tot += 1
+            hit = g is not None and abs(g - truth) <= 3
+            ok += int(hit)
+            if not hit:
+                misses.append("%s truth=%s guess=%s" % (bgname.split("_")[0], truth, g))
+        print("diff detector vs %d ground-truth labels: %d correct (%.0f%%)"
+              % (tot, ok, 100.0 * ok / max(1, tot)))
+        if misses:
+            print("  detector misses:", "; ".join(misses[:10]))
 
 
 def _main(argv=None):
