@@ -20,7 +20,7 @@ button{cursor:pointer}
 </style></head><body>
 <header>
   <strong>Kanca Agent</strong>
-  <label>Model <input id="model" list="models" size="32" value="kilo/kilo-auto/free"></label>
+  <label>Model <input id="model" list="models" size="32" placeholder="pick a model" required></label>
   <datalist id="models"></datalist>
   <button id="new" type="button">New chat</button>
   <a href="/dashboard">9Router dashboard</a>
@@ -33,22 +33,22 @@ button{cursor:pointer}
 </form>
 <script>
 const $ = (s) => document.querySelector(s), log = $("#log");
-let history = JSON.parse(localStorage.kancaChat || "[]"), ctl = null;
-$("#model").value = localStorage.kancaModel || $("#model").value;
+let history = JSON.parse(sessionStorage.kancaChat || "[]"), ctl = null;
+$("#model").value = sessionStorage.kancaModel || localStorage.kancaModel || "";
 fetch("/agent/api/models").then(r => r.json()).then(ids => $("#models").replaceChildren(...ids.map(id => Object.assign(document.createElement("option"), { value: id }))));
 
 function add(cls, text, tag = "div") { const e = document.createElement(tag); e.className = cls; e.textContent = text; log.append(e); log.scrollTop = log.scrollHeight; return e; }
 function render() { log.replaceChildren(); for (const m of history) if (m.role === "user") add("me", m.content); else if (m.role === "assistant" && m.content) add("ai", m.content); }
 render();
 
-$("#new").onclick = () => { ctl?.abort(); history = []; localStorage.kancaChat = "[]"; render(); };
+$("#new").onclick = () => { ctl?.abort(); history = []; sessionStorage.kancaChat = "[]"; render(); };
 $("#q").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#f").requestSubmit(); } };
 $("#f").onsubmit = async (e) => {
   e.preventDefault();
   if (ctl) { ctl.abort(); return; }
   const q = $("#q").value.trim(); if (!q) return;
   $("#q").value = ""; add("me", q); history.push({ role: "user", content: q });
-  localStorage.kancaModel = $("#model").value;
+  sessionStorage.kancaModel = localStorage.kancaModel = $("#model").value;
   ctl = new AbortController(); $("#go").textContent = "Stop";
   let pre = null;
   try {
@@ -67,7 +67,7 @@ $("#f").onsubmit = async (e) => {
           pre = d.appendChild(document.createElement("pre")); }
         else if (ev.type === "out" && pre) { pre.textContent += ev.text; pre.scrollTop = pre.scrollHeight; log.scrollTop = log.scrollHeight; }
         else if (ev.type === "error") add("ai err", ev.text);
-        else if (ev.type === "done") { history = ev.messages; localStorage.kancaChat = JSON.stringify(history); }
+        else if (ev.type === "done") { history = ev.messages; sessionStorage.kancaChat = JSON.stringify(history); }
       }
     }
   } catch (err) { if (err.name !== "AbortError") add("ai err", String(err.message || err)); else add("ai err", "stopped"); }
