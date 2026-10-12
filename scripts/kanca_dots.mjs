@@ -12,12 +12,23 @@ const DEFAULT = +(process.env.NINEROUTER_PORT || 20129);
 
 export const target = (host = "") => ROUTES[host.split(".")[0]] || DEFAULT;
 
+// Buffer the body so a request can be retried while 9Router restarts (~5-15 s).
 const server = http.createServer((req, res) => {
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", () => send(req, res, Buffer.concat(chunks), Date.now() + 20000));
+});
+
+function send(req, res, body, deadline) {
   const up = http.request({ host: "127.0.0.1", port: target(req.headers.host), path: req.url,
     method: req.method, headers: req.headers }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });
-  up.on("error", (e) => { res.writeHead(502); res.end(`kanca-dots: upstream down (${e.code})`); });
-  req.pipe(up);
-});
+  up.on("error", (e) => {
+    if (e.code === "ECONNREFUSED" && Date.now() < deadline) return setTimeout(send, 500, req, res, body, deadline);
+    if (!res.headersSent) res.writeHead(502);
+    res.end(`kanca-dots: upstream down (${e.code})`);
+  });
+  up.end(body);
+}
 
 server.on("upgrade", (req, sock, head) => {
   const up = net.connect(target(req.headers.host), "127.0.0.1", () => {
