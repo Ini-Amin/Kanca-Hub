@@ -463,11 +463,16 @@ async def _drive_page(
         return result
 
     await page.wait_for_timeout(3000)
-    result["final_url"] = page.url
 
     # ── PHASE 1: INSPECT (always, before any filling) ──────────────────
     print("  [inspect] Detecting available auth methods…")
     classification = await inspect_auth_methods(page, url)
+    for _ in range(3):  # SPA redirects (invite -> /login) render buttons late
+        if classification.get("methods"):
+            break
+        await page.wait_for_timeout(3000)
+        classification = await inspect_auth_methods(page, url)
+    result["final_url"] = page.url
     methods = classification.get("methods", [])
     result["auth_methods"] = methods
     result["auth_preferred"] = classification.get("preferred")
