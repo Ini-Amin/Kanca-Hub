@@ -97,19 +97,27 @@ CAMOUFOX_VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "camoufox-venv" /
 def pick_python(camoufox: bool = False) -> str:
     """Interpreter for child scripts.
 
-    camoufox=True returns the isolated python3.11 venv that has camoufox +
-    playwright (scripts converted to Camoufox MUST run there; the main venv is
-    python3.13 and has neither). Falls back to the main venv if absent.
+    camoufox=True returns the isolated venv that has camoufox + playwright
+    (scripts converted to Camoufox MUST run there; the main venv has neither).
+    Falls back to the main venv if absent.
+
+    Remote boxes keep the venv elsewhere (LightVela uses ~/venv), so honour a
+    KANCAHUB_PY / KANCAHUB_CAMOUFOX_PY override and probe ~/venv too instead of
+    silently degrading to a browser-less /usr/bin/python3.
     """
+    def _usable(p) -> bool:
+        return p is not None and os.path.exists(str(p)) and os.access(str(p), os.X_OK)
+
     if camoufox:
-        cv = str(CAMOUFOX_VENV_PY)
-        if CAMOUFOX_VENV_PY.exists() and os.access(cv, os.X_OK):
-            return cv
+        for cand in (os.environ.get("KANCAHUB_CAMOUFOX_PY"), CAMOUFOX_VENV_PY,
+                     HOME / "venv" / "bin" / "python"):
+            if _usable(cand):
+                return str(cand)
         print(col("yellow", "⚠️ camoufox venv not found; falling back to the main venv "
                             "(camoufox/playwright may be missing)"))
-    v = str(VENV_PY)
-    if VENV_PY.exists() and os.access(v, os.X_OK):
-        return v
+    for cand in (os.environ.get("KANCAHUB_PY"), VENV_PY, HOME / "venv" / "bin" / "python"):
+        if _usable(cand):
+            return str(cand)
     return shutil.which("python3") or sys.executable
 
 
