@@ -67,18 +67,22 @@ def main() -> int:
     truth: dict[str, int] = {}
     source: dict[str, str] = {}
 
-    # trusted truth: team labels (strongest) > verified (human) > mined (pass)
+    # trusted truth: team labels (strongest) > human labels > mined (pass)
+    # Human labels come in two files: verified.json (early batch) and
+    # slider_verified.json (the review page's export). Union them -- they may
+    # not overlap, and the newer export must never be dropped.
     for row in _jsonl(src / "labels.jsonl"):
         bg = row.get("bg")
         if bg and row.get("label") is not None:
             i = bg.replace("_bg.png", "")
             truth[i] = int(row["label"])
             source[i] = row.get("source") or "team"
-    for i, v in _json(src / "verified.json").items():
-        x = _x_of(v)
-        if x is not None:
-            truth[i] = int(x)
-            source[i] = "verified"
+    for name in ("verified.json", "slider_verified.json"):
+        for i, v in _json(src / name).items():
+            x = _x_of(v)
+            if x is not None:
+                truth[i] = int(x)
+                source[i] = "verified"
     for i, v in _json(src / "mined.json").items():
         x = _x_of(v)
         if x is not None and i not in truth:

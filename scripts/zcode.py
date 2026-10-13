@@ -358,6 +358,45 @@ def _mint_guard(email, cooldown=1800):
     return True
 
 
+def _plan_claim_tick(email, pw, plan_id):
+    """Try to claim an inactive plan -- but ONLY when the server actually offers
+    a claimable coupon/plan for this account, and at most once per cooldown.
+
+    Why the gate: the Aliyun claim captcha (scene 11xygtvd) is signed AND
+    behavioural -- the vendor README documents that scripted SDK drags are
+    silently rejected ("3007") no matter how accurate, so a claim can only
+    succeed via a real interactive solve. Retrying every 60s tick produced an
+    endless 3007/rc=1 loop and warmed up the WAF. `billing/preview` tells us
+    whether a coupon exists at all; when it is empty there is nothing to claim,
+    so we skip the browser helper entirely.
+    """
+    st = load_json(p("promos.json"), {}).get(email) or {}
+    if time.time() - float(st.get(plan_id) or 0) < PROMO_COOLDOWN:
+        return
+    try:
+        claimable = promo_preview(email)
+    except Exception as e:  # noqa: BLE001
+        event("promo_err", "%s preview: %s" % (email, str(e)[:80]))
+        return
+    if not claimable:
+        # no coupon/voucher right now -> nothing the claim endpoint can grant
+        return
+    st[plan_id] = time.time()      # record BEFORE claiming: dedupes watcher retries
+    write(p("promos.json"), json.dumps({**load_json(p("promos.json"), {}), email: st}))
+    event("plan_inactive", "%s: coupon present -> claiming %s" % (email, plan_id))
+    r = _claim_direct(email, plan_id)
+    event("claim_direct", "%s -> %s" % (email, str(r)[:120]))
+    if (r or {}).get("code") in (0, None):
+        return
+    # direct claim needs a signed interactive param; only the headed CDP Chrome
+    # can even attempt it (headless SDK init F001s). One attempt per cooldown.
+    if not _ensure_cdp_chrome():
+        event("claim_err", "%s: no CDP Chrome, skipping browser claim" % email)
+        return
+    rc = subprocess.call([PY_BROWSER, CLAIM_HELPER, email, pw, plan_id])
+    event("claim_browser", "%s helper rc=%s" % (email, rc))
+
+
 def _watch_tick():
     cache = load_json(p("balance.json"), {})
     for email, pw in accounts():
@@ -395,15 +434,7 @@ def _watch_tick():
                 event("plan", "%s %s -> %s" % (email, x["plan_id"], x["status"]))
         if not plans:
             pid = (prev.get("plans") or [{}])[0].get("plan_id") or "zcode-v3-start-plan"
-            event("plan_inactive", "%s: attempting claim of %s" % (email, pid))
-            r = _claim_direct(email, pid)
-            event("claim_direct", "%s -> %s" % (email, str(r)[:120]))
-            if (r or {}).get("code") not in (0, None):
-                if not _ensure_cdp_chrome():
-                    event("claim_err", "%s: no CDP Chrome, skipping browser claim" % email)
-                else:
-                    rc = subprocess.call([PY_BROWSER, CLAIM_HELPER, email, pw, pid])
-                    event("claim_browser", "%s helper rc=%s" % (email, rc))
+            _plan_claim_tick(email, pw, pid)
 
         for b in d.get("balances", []):
             tot, used = b.get("total_units", 0), b.get("used_units", 0)
