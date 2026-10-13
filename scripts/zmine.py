@@ -104,20 +104,28 @@ GATE_FILE = STATE_DIR / "zmine_reg_gate.json"
 
 def _register_gate():
     """Block until at least REG_GAP seconds since the last registration anywhere.
+    Also honours a shared 'until' backoff set by _rate_gate (a 429 from the site).
     The lock is held only to read+reserve the slot; the sleep happens OUTSIDE it
     so parallel workers can keep answering tasks while they wait their turn."""
     while True:
         with _lock():
             now = time.time()
             try:
-                last = float(json.loads(GATE_FILE.read_text()).get("ts") or 0)
+                st = json.loads(GATE_FILE.read_text())
             except Exception:  # noqa: BLE001
-                last = 0.0
-            wait = REG_GAP - (now - last)
+                st = {}
+            last = float(st.get("ts") or 0)
+            until = float(st.get("until") or 0)
+            if now < until:
+                wait = until - now
+                why = "rate-limit backoff"
+            else:
+                wait = REG_GAP - (now - last)
+                why = "spacing"
             if wait <= 0:
-                GATE_FILE.write_text(json.dumps({"ts": now}))
+                GATE_FILE.write_text(json.dumps({"ts": now, "until": until}))
                 return
-        log(f"    [gate] waiting {wait:.0f}s for the next registration slot")
+        log(f"    [gate] waiting {wait:.0f}s ({why})")
         time.sleep(min(wait, 5.0) + random.uniform(0, 1.0))
 
 
@@ -142,15 +150,52 @@ def _req(op, path, *, method="GET", body=None, cookie=None, timeout=30):
     except urllib.error.HTTPError as e:
         raw = e.read().decode()
         try:
-            return e.code, json.loads(raw)
+            j = json.loads(raw)
         except Exception:  # noqa: BLE001
-            return e.code, {"raw": raw[:300]}
+            j = {"raw": raw[:300]}
+        # A 429 must NEVER be retried blindly -- zmine.si answers
+        # {"code":"rate_limited","retryAfterSeconds":3600}. Surface it so callers
+        # back off (the user's explicit rule: no hammering).
+        if e.code == 429:
+            j = dict(j) if isinstance(j, dict) else {"raw": raw[:300]}
+            j["_retry_after"] = (j.get("error") or {}).get("details", {}).get("retryAfterSeconds") \
+                if isinstance(j.get("error"), dict) else None
+        return e.code, j
     except Exception as e:  # noqa: BLE001
         return 0, {"error": f"{type(e).__name__}: {e}"}
     try:
         return 200, json.loads(raw)
     except Exception:  # noqa: BLE001
         return 200, {"raw": raw[:300]}
+
+
+def _retry_after_seconds(j) -> float | None:
+    """Extract retryAfterSeconds from a 429 body, else None."""
+    if not isinstance(j, dict):
+        return None
+    ra = j.get("_retry_after")
+    if ra is None:
+        err = j.get("error")
+        if isinstance(err, dict):
+            ra = (err.get("details") or {}).get("retryAfterSeconds")
+    try:
+        return float(ra) if ra is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _rate_gate(seconds: float, why: str = "rate limit") -> None:
+    """Park registrations until the site's own retryAfter window elapses. Written
+    to a shared file so EVERY process/subagent respects the same backoff."""
+    with _lock():
+        try:
+            st = json.loads(GATE_FILE.read_text())
+        except Exception:  # noqa: BLE001
+            st = {}
+        until = max(time.time() + max(0.0, seconds), float(st.get("until") or 0))
+        GATE_FILE.write_text(json.dumps({"ts": st.get("ts", 0), "until": until}))
+    log(f"    [{why}] backing off {seconds / 60:.0f} min until "
+        f"{time.strftime('%H:%M', time.localtime(until))}")
 
 
 # ─────────────────────────────────────────────────────────────── account ops
@@ -394,27 +439,32 @@ def _rand_name() -> str:
 def farm(count: int, ref: str | None, *, pace: float = 45.0, model: str = TASK_MODEL,
          want: int = 12, log_fn=log) -> list:
     """Register `count` miners (one at a time, under the global lock), start each
-    session and answer its tasks. Never hammers: `pace` seconds between accounts."""
+    session and answer its tasks. Never hammers: `pace` seconds between accounts,
+    and a 429 from the site STOPS the run (the gate parks everyone for the
+    retryAfter window) instead of retrying into the rate limiter."""
     made = []
     for i in range(count):
         name = _rand_name()
         with _lock():
             code, j = register(name, ref)  # register() waits on the global gate
-            if code not in (200, 201) or not j.get("loginKey"):
-                log_fn(f"[{i + 1}/{count}] register {name} -> {code} {str(j)[:160]}")
-                if "already" in str(j).lower() or "unique" in str(j).lower() \
-                        or "validation_error" in str(j):
-                    time.sleep(20)
-                    continue
-                time.sleep(30)
-                continue
-            log_fn(f"[{i + 1}/{count}] registered {name} handle={(j.get('user') or {}).get('handle')}")
-            rec = {"displayName": name, "handle": (j.get("user") or {}).get("handle"),
-                   "loginKey": j.get("loginKey"), "recoveryPhrase": j.get("recoveryPhrase"),
-                   "ts": time.time()}
-            _save_account(rec)
-            made.append(rec)
-            do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn)
+        if code == 429:
+            ra = _retry_after_seconds(j) or 3600.0
+            _rate_gate(ra, "429")
+            log_fn(f"[{i + 1}/{count}] rate-limited -> stopping this run")
+            break
+        if code not in (200, 201) or not j.get("loginKey"):
+            log_fn(f"[{i + 1}/{count}] register {name} -> {code} {str(j)[:160]}")
+            time.sleep(20)
+            continue
+        log_fn(f"[{i + 1}/{count}] registered {name} handle={(j.get('user') or {}).get('handle')}")
+        rec = {"displayName": name, "handle": (j.get("user") or {}).get("handle"),
+               "loginKey": j.get("loginKey"), "recoveryPhrase": j.get("recoveryPhrase"),
+               "ref": ref, "ts": time.time()}
+        _save_account(rec)
+        made.append(rec)
+        do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn)
+        if i + 1 < count:
+            time.sleep(pace)
     return made
 
 
@@ -422,10 +472,15 @@ def worker(ref: str | None = None, *, model: str = TASK_MODEL, want: int = 12,
            log_fn=log) -> dict:
     """One unit of delegated work: register a single miner, start its session and
     answer its tasks. Safe to run from many subagents at once — registrations are
-    serialised by the global gate, so the site is never hammered."""
+    serialised by the global gate, so the site is never hammered. A 429 parks all
+    workers for the site's retryAfter window and this call exits without retrying."""
     name = _rand_name()
     with _lock():
         code, j = register(name, ref)   # register() itself waits on the global gate
+    if code == 429:
+        ra = _retry_after_seconds(j) or 3600.0
+        _rate_gate(ra, "429")
+        return {"ok": False, "code": 429, "retry_after": ra}
     if code not in (200, 201) or not j.get("loginKey"):
         log_fn(f"register {name} -> {code} {str(j)[:160]}")
         return {"ok": False, "code": code}
@@ -436,6 +491,35 @@ def worker(ref: str | None = None, *, model: str = TASK_MODEL, want: int = 12,
         _save_account(rec)
     log_fn(f"registered {name} handle={rec['handle']}")
     return do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn)
+
+
+def autopilot(target: int = 25, ref: str | None = "RCFZ9GA7", *,
+              model: str = TASK_MODEL, want: int = 12, log_fn=log) -> dict:
+    """One gentle autopilot pass, meant to be run by a timer (see
+    scripts/systemd/zmine-tick.timer). It:
+      1. registers new miners one at a time until `target` referred accounts
+         exist — but STOPS immediately (and parks the shared gate) if the site
+         answers 429, so it never hammers;
+      2. renews the session + tops up tasks for EVERY stored account.
+    Everything is idempotent, so running it on a schedule just converges on
+    `target` accounts while keeping all of them mining."""
+    accts = _load_accounts()
+    referred = [a for a in accts if a.get("ref") == ref] if ref else accts
+    log_fn(f"autopilot: {len(accts)} stored, {len(referred)} referred (target {target})")
+    added = 0
+    while len(referred) + added < target:
+        r = worker(ref, model=model, want=want, log_fn=log_fn)
+        if r.get("code") == 429:
+            log_fn("autopilot: rate-limited -> stopping registration this pass")
+            break
+        if not r.get("ok"):
+            log_fn("autopilot: register failed -> stopping this pass")
+            break
+        added += 1
+        time.sleep(REG_GAP + random.uniform(2, 8))
+    log_fn(f"autopilot: +{added} new account(s)")
+    tick(model=model, want=want, pace=15.0, log_fn=log_fn)
+    return {"added": added, "total": len(_load_accounts())}
 
 
 def tick(*, model: str = TASK_MODEL, want: int = 12, pace: float = 20.0, log_fn=log) -> None:
@@ -471,6 +555,11 @@ def main(argv=None) -> int:
     s.add_argument("--ref", default="RCFZ9GA7")
     s.add_argument("--model", default=TASK_MODEL)
     s.add_argument("--want", type=int, default=12)
+    s = sub.add_parser("autopilot")
+    s.add_argument("--target", type=int, default=25)
+    s.add_argument("--ref", default="RCFZ9GA7")
+    s.add_argument("--model", default=TASK_MODEL)
+    s.add_argument("--want", type=int, default=12)
     s = sub.add_parser("status")
 
     a = ap.parse_args(argv)
@@ -498,6 +587,9 @@ def main(argv=None) -> int:
                 do_account(k)
     elif a.cmd == "worker":
         worker(a.ref, model=a.model, want=a.want)
+    elif a.cmd == "autopilot":
+        r = autopilot(a.target, a.ref, model=a.model, want=a.want)
+        log(f"autopilot done: +{r['added']} new, {r['total']} total")
     elif a.cmd == "status":
         accts = _load_accounts()
         log(f"{len(accts)} account(s) in {ACCOUNTS}")
