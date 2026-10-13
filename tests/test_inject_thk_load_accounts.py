@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.inject_thk_9router import load_harbor, load_zcode, SOURCES
+from scripts.inject_thk_9router import load_harbor, load_zcode, SOURCES, ensure_round_robin
 
 
 def _write_tmp_json(data) -> str:
@@ -129,11 +129,71 @@ class TestSourceTable(unittest.TestCase):
         self.assertEqual(z["prefix"], "Zcode")
         self.assertEqual(z["base"], "http://127.0.0.1:8787/v1")
 
+    def test_zcode_source_wants_round_robin(self):
+        # one connection row per account -> rotate, else 3009s under concurrency
+        self.assertTrue(SOURCES["zcode"]["round_robin"])
+        self.assertNotIn("round_robin", SOURCES["thk"])   # THK stays fallback
+
     def test_thk_source_is_per_key_and_verified(self):
         t = SOURCES["thk"]
         self.assertFalse(t["one_per_email"])
         self.assertTrue(t["verify"])
         self.assertEqual(t["prefix"], "THK")
+
+
+class TestEnsureRoundRobin(unittest.TestCase):
+    """settings.data.providerStrategies[node] is what the 9Router dashboard
+    PATCHes. One row per account means 'fallback' pins the first row."""
+
+    def _con(self):
+        import sqlite3
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK (id = 1),"
+                    " data TEXT NOT NULL)")
+        con.execute("INSERT INTO settings (id, data) VALUES (1, '{}')")
+        return con
+
+    def test_turns_round_robin_on(self):
+        con = self._con()
+        src = dict(SOURCES["zcode"])
+        self.assertTrue(ensure_round_robin(con, src, False))
+        data = json.loads(con.execute("SELECT data FROM settings WHERE id=1").fetchone()[0])
+        got = data["providerStrategies"][src["node_id"]]
+        self.assertEqual(got["fallbackStrategy"], "round-robin")
+        self.assertEqual(got["stickyRoundRobinLimit"], 1)
+        con.close()
+
+    def test_idempotent(self):
+        con = self._con()
+        src = dict(SOURCES["zcode"])
+        ensure_round_robin(con, src, False)
+        self.assertFalse(ensure_round_robin(con, src, False))   # already on
+        con.close()
+
+    def test_dry_run_writes_nothing(self):
+        con = self._con()
+        src = dict(SOURCES["zcode"])
+        self.assertTrue(ensure_round_robin(con, src, True))
+        data = json.loads(con.execute("SELECT data FROM settings WHERE id=1").fetchone()[0])
+        self.assertEqual(data, {})                              # untouched
+        con.close()
+
+    def test_preserves_other_strategies(self):
+        con = self._con()
+        con.execute("UPDATE settings SET data=? WHERE id=1",
+                    (json.dumps({"providerStrategies": {"codex":
+                     {"fallbackStrategy": "round-robin", "stickyRoundRobinLimit": 1}}}),))
+        ensure_round_robin(con, dict(SOURCES["zcode"]), False)
+        data = json.loads(con.execute("SELECT data FROM settings WHERE id=1").fetchone()[0])
+        self.assertIn("codex", data["providerStrategies"])
+        con.close()
+
+    def test_non_round_robin_source_is_a_noop(self):
+        con = self._con()
+        self.assertFalse(ensure_round_robin(con, dict(SOURCES["thk"]), False))
+        data = json.loads(con.execute("SELECT data FROM settings WHERE id=1").fetchone()[0])
+        self.assertEqual(data, {})
+        con.close()
 
 
 if __name__ == "__main__":
