@@ -1,0 +1,15 @@
+[Unit]
+Description=Slider self-improvement tick (the RLHF-style learner)
+# Folds every attempt into the label store, refits the pixel<->drag curve,
+# scores the oracles vs the labels, and rebuilds the review page. Set
+# SLIDER_HARVEST=15 to also solve fresh puzzles each tick (needs CDP Chrome).
+# This is the "keeps improving on its own" half of the loop; the human half is
+# just opening reports/slider_review/index.html and dragging the hard ones.
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/env python3 scripts/slider_attempts.py tick
+TimeoutStartSec=1200
+Nice=15

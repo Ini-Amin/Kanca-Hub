@@ -1,0 +1,13 @@
+[Unit]
+Description=Slider self-improvement tick (mine passes -> labels -> report -> page)
+
+[Timer]
+# Every 6h: mine the new passes into the label store, refit the drag curve,
+# score the oracles, and rebuild the review page. No human needed; the label
+# store only grows, so known puzzles become free exact answers.
+OnCalendar=*-*-* 02,08,14,20:15
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
