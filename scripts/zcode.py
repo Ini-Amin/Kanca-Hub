@@ -464,6 +464,7 @@ def _watch_tick():
 # ---------------- autofarm ----------------
 def _farm_cfg():
     return {"enabled": False, "max_accounts": 4, "cooldown_hours": 20,
+            "min_active": 3,
             **(load_json(p("config.json"), {}).get("autofarm") or {})}
 
 
@@ -570,13 +571,32 @@ def _autofarm_tick(cache):
         return
 
     def spent(email):
+        """True if this account has an active plan but no GLM-5.3 quota left."""
         bs = (cache.get(email) or {}).get("buckets", [])
         glm = [b for b in bs if "model:glm-5.3" in (b.get("capabilities") or [])]
         return bool(glm) and all(b.get("remaining_units", 0) <= 0 for b in glm)
 
-    if all(spent(e) for e in accts):
-        event("autofarm", "all %d accounts exhausted on GLM-5.3" % len(accts))
-        cmd_farm(cfg=cfg)
+    def usable(email):
+        """True if the account has a live plan with quota left (cache-based)."""
+        bs = (cache.get(email) or {}).get("buckets", [])
+        if not bs:
+            return False
+        glm = [b for b in bs if "model:glm-5.3" in (b.get("capabilities") or [])]
+        return bool(glm) and any(b.get("remaining_units", 0) > 0 for b in glm)
+
+    # min_active: keep at least this many usable accounts in the pool. Farm when
+    # the usable count drops to/below it. Default 3 (see _farm_cfg); set 0 to
+    # only ever farm when EVERYTHING is exhausted (the old behaviour).
+    min_active = int(cfg.get("min_active", 3))
+    usable_n = sum(1 for e in accts if usable(e))
+    if usable_n > min_active:
+        return
+    if usable_n == 0 and not any(spent(e) for e in accts):
+        # nothing usable but nothing is spent either -> billing data is stale
+        # (no tick has filled the cache yet); don't farm blind.
+        return
+    event("autofarm", "usable=%d <= min_active=%d -> farming" % (usable_n, min_active))
+    cmd_farm(cfg=cfg)
 
 
 def cmd_autofarm(a):
@@ -637,7 +657,7 @@ def main():
 
     s = sub.add_parser("autofarm")
     s.add_argument("action", choices=["on", "off", "show"],
-                   help="watcher auto-creates an account when ALL accounts hit 0% GLM-5.3")
+                   help="watcher auto-creates an account when ALL accounts hit 0%% GLM-5.3")
 
     s = sub.add_parser("serve"); s.add_argument("--host", default="127.0.0.1"); s.add_argument("--port", type=int, default=8787)
 
