@@ -135,6 +135,15 @@ def cmd_account_add(a):
     if not a.no_mint:
         cmd_mint(argparse.Namespace(email=a.email))
     os.makedirs(p("jwt"), exist_ok=True)
+    # Minting only makes the bridge serve the account; 9Router also needs a
+    # providerConnection row (name Zcode<N>, apiKey = the bridge key). Without it
+    # the account is invisible in the dashboard and never used.
+    inj = os.path.join(SCRIPTS, "zcode_inject_9router.py")
+    if os.path.exists(inj):
+        try:
+            subprocess.call([sys.executable, inj])
+        except Exception as e:  # noqa: BLE001
+            print("9router inject skipped:", str(e)[:80])
 
 
 def cmd_account_list(a):
@@ -351,7 +360,12 @@ def _watch_tick():
             if _mint_guard(email):
                 event("jwt_missing", "%s -> minting" % email)
                 cmd_mint(argparse.Namespace(email=email, all=False, password=pw))
-                event("jwt_mint", "%s -> %s" % (email, "ok" if jwt_for(email) else "failed"))
+                ok = bool(jwt_for(email))
+                event("jwt_mint", "%s -> %s" % (email, "ok" if ok else "failed"))
+                if ok:
+                    inj = os.path.join(SCRIPTS, "zcode_inject_9router.py")
+                    if os.path.exists(inj):
+                        subprocess.call([sys.executable, inj])
             continue
         try:
             d = billing(email)
@@ -490,6 +504,10 @@ def cmd_farm(a=None, cfg=None, dry=False):
     # from here an account exists -> full cooldown applies even if mint/plan flake
     write(p("farm_state.json"), json.dumps({"ts": time.time(), "status": "done"}))
     cmd_mint(argparse.Namespace(email=email, all=False, password=pw))
+    # 9Router needs a connection row per account, not just a minted JWT.
+    inj = os.path.join(SCRIPTS, "zcode_inject_9router.py")
+    if os.path.exists(inj):
+        subprocess.call([sys.executable, inj])
     # Start Plan auto-grants at sign-in; poll until it shows as active
     for _ in range(6):
         try:
