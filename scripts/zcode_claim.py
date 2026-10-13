@@ -62,6 +62,18 @@ async def main():
                                     "/home/amen/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome")
     ctx = b.contexts[0] if b.contexts else await b.new_context()
     page = await ctx.new_page()
+    try:
+        rc = await _claim_page(page, jwt, plan_id)
+    finally:
+        # the watcher runs this on every tick; never leak the zcode.z.ai tab
+        try:
+            await page.close()
+        except Exception:
+            pass
+    return rc
+
+
+async def _claim_page(page, jwt, plan_id):
     await page.goto("https://zcode.z.ai/", wait_until="domcontentloaded", timeout=60000)
     await page.wait_for_timeout(1200)
 

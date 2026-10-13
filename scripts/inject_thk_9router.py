@@ -113,6 +113,9 @@ SOURCES = {
         "load": load_zcode,
         "verify": False,          # the bridge 401s for an unminted account; no cheap probe
         "one_per_email": True,    # an account may hold >1 bridge key; keep one row
+        # every account is a separate connection row: rotate across them so one
+        # client cannot pile onto a single account (which 3009s on concurrency)
+        "round_robin": True,
     },
 }
 
@@ -199,6 +202,37 @@ def next_name(con: sqlite3.Connection, node_id: str, src: dict, pending: set) ->
     return "%s%d" % (src["prefix"], n)
 
 
+def ensure_round_robin(con: sqlite3.Connection, src: dict, dry_run: bool) -> bool:
+    """Turn on round-robin for this provider's connections in 9Router settings.
+
+    9Router keeps the per-provider strategy in settings.data.providerStrategies
+    (the dashboard's PATCH /api/settings). With one connection row per account,
+    'fallback' pins the first row and 3009s under concurrency; round-robin
+    spreads load across accounts. Idempotent."""
+    if not src.get("round_robin"):
+        return False
+    node = src["node_id"]
+    cur = con.cursor()
+    row = cur.execute("SELECT data FROM settings WHERE id = 1").fetchone()
+    try:
+        data = json.loads(row[0]) if row and row[0] else {}
+    except Exception:  # noqa: BLE001
+        data = {}
+    want = {"fallbackStrategy": "round-robin", "stickyRoundRobinLimit": 1}
+    have = (data.get("providerStrategies") or {}).get(node)
+    if have == want:
+        print(f"  = round-robin already on for {src['node_name']}")
+        return False
+    data.setdefault("providerStrategies", {})[node] = want
+    if not dry_run:
+        if row:
+            cur.execute("UPDATE settings SET data=? WHERE id=1", (json.dumps(data),))
+        else:
+            cur.execute("INSERT INTO settings (id, data) VALUES (1, ?)", (json.dumps(data),))
+    print(f"  + round-robin on for {src['node_name']}")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Inject free-provider keys into 9Router")
     ap.add_argument("--kind", choices=sorted(SOURCES), default="thk",
@@ -251,6 +285,7 @@ def main() -> int:
     try:
         con.execute("PRAGMA journal_mode=WAL")
         node_id = ensure_node(con, src, args.dry_run)
+        ensure_round_robin(con, src, args.dry_run)
 
         # one_per_email: a key whose account already has a row is not a new row
         covered = set()

@@ -23,6 +23,26 @@ EMAIL=(sys.argv[1] if len(sys.argv)>1 else '') or _zacct()[0]
 PW=(sys.argv[2] if len(sys.argv)>2 else '') or _zacct()[1]
 OUT=os.environ.get("ZB_OUT") or "/tmp/opencode/zc_jwt.txt"
 JS="(t)=>{const e=[...document.querySelectorAll('button,a,div,span')].filter(x=>(x.innerText||'').trim()===t&&x.children.length===0);if(e.length){e[e.length-1].click();return true}return false}"
+# The final OAuth hop lands on zcode.z.ai/app/oauth/login?code=... — a page whose
+# only job is to bounce to the zcode:// desktop app ("Open ZCode"). We never need
+# to render it: intercept the navigation, read `code` off the URL and answer with
+# a stub so the "Open ZCode" prompt never appears and no deep-link tab lingers.
+LANDING="https://zcode.z.ai/app/oauth/login"
+def _code_in(url):
+    q=urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    return (q.get("code") or [""])[0]
+async def _grab_code(page, store):
+    """Route handler: swallow the desktop-app landing, keep the auth code."""
+    async def handler(route):
+        c=_code_in(route.request.url)
+        if c and not store.get("code"):
+            store["code"]=c
+        await route.fulfill(status=200, content_type="text/html",
+                            body="<html><body>ok</body></html>")
+    try:
+        await page.route("**/app/oauth/login*", handler)
+    except Exception:
+        pass
 def exchange(code,state):
     req=urllib.request.Request("https://zcode.z.ai/api/v1/oauth/token",
       data=json.dumps({"provider":"zai","code":code,"redirect_uri":REDIRECT_URI,"state":state}).encode(),
@@ -37,43 +57,55 @@ async def main():
         b=await p.chromium.connect_over_cdp(CDP)
         ctx=b.contexts[0] if b.contexts else await b.new_context()
         page=await ctx.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=60000); await page.wait_for_timeout(4000)
-        cap = False
+        store={}
+        await _grab_code(page, store)
         try:
-            await page.get_by_text("Continue with Email").first.click(timeout=6000); await page.wait_for_timeout(2000)
-            await page.fill('input[type="email"]', EMAIL); await page.fill('input[type="password"]', PW)
-            cap = await CS.solve_aliyun(page, puzzles=25)
-            print("captcha:", cap, flush=True)
-            # Only submit once the captcha passed: with a failed captcha "Sign in"
-            # does not log in, and the page drifts onto the GitHub login chooser
-            # (the old github detour). A REAL mouse click is required anyway -- a
-            # DOM .click() does not submit this React form.
-            if cap:
-                try:
-                    await page.get_by_text("Sign in", exact=True).last.click(timeout=6000)
-                except Exception:
-                    await page.evaluate(JS, "Sign in")
-                await page.wait_for_timeout(6000)
-        except Exception as e: print("signin skip:", str(e)[:40], flush=True)
-        if not cap:
-            print("captcha failed -> not submitting (no code)", flush=True)
-        # consent_hard clicks any "Continue" leaf -- on the login chooser that is
-        # "Continue with Github". Only run it on the real OAuth authorize page.
-        ok = False
-        if cap and "/auth/oauth/authorize" in page.url and "code=" not in page.url:
-            ok = await accept_consent(page)
-        print("consent:", ok, "url:", page.url[:100], flush=True)
-        q=urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
-        code=(q.get('code') or [''])[0]
-        if not code and "code=" in page.url: code=page.url.split("code=")[1].split("&")[0]
-        print("code:", code, flush=True)
-        if code:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000); await page.wait_for_timeout(4000)
+            cap = False
             try:
-                r=exchange(code,state); print("EXCHANGE:", json.dumps(r)[:400], flush=True)
-                tok=(r.get("data") or {}).get("token")
-                if tok: open(OUT,"w").write(tok); print("JWT SAVED", tok[:24], "->", OUT, flush=True)
-            except Exception as e:
-                print("exchange ERR", str(e)[:150], flush=True)
-                try: print("body", e.read().decode()[:200])
-                except Exception: pass
+                await page.get_by_text("Continue with Email").first.click(timeout=6000); await page.wait_for_timeout(2000)
+                await page.fill('input[type="email"]', EMAIL); await page.fill('input[type="password"]', PW)
+                cap = await CS.solve_aliyun(page, puzzles=25)
+                print("captcha:", cap, flush=True)
+                # Only submit once the captcha passed: with a failed captcha "Sign in"
+                # does not log in, and the page drifts onto the GitHub login chooser
+                # (the old github detour). A REAL mouse click is required anyway -- a
+                # DOM .click() does not submit this React form.
+                if cap:
+                    try:
+                        await page.get_by_text("Sign in", exact=True).last.click(timeout=6000)
+                    except Exception:
+                        await page.evaluate(JS, "Sign in")
+                    await page.wait_for_timeout(6000)
+            except Exception as e: print("signin skip:", str(e)[:40], flush=True)
+            if not cap:
+                print("captcha failed -> not submitting (no code)", flush=True)
+            # consent_hard clicks any "Continue" leaf -- on the login chooser that is
+            # "Continue with Github". Only run it on the real OAuth authorize page.
+            ok = False
+            if cap and "/auth/oauth/authorize" in page.url and "code=" not in page.url:
+                ok = await accept_consent(page)
+            print("consent:", ok, "url:", page.url[:100], flush=True)
+            # wait a beat for the redirect to the landing page the route swallows
+            for _ in range(8):
+                if store.get("code"):
+                    break
+                await page.wait_for_timeout(1000)
+            q=urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
+            code=store.get("code") or (q.get('code') or [''])[0]
+            if not code and "code=" in page.url: code=page.url.split("code=")[1].split("&")[0]
+            print("code:", code, flush=True)
+            if code:
+                try:
+                    r=exchange(code,state); print("EXCHANGE:", json.dumps(r)[:400], flush=True)
+                    tok=(r.get("data") or {}).get("token")
+                    if tok: open(OUT,"w").write(tok); print("JWT SAVED", tok[:24], "->", OUT, flush=True)
+                except Exception as e:
+                    print("exchange ERR", str(e)[:150], flush=True)
+                    try: print("body", e.read().decode()[:200])
+                    except Exception: pass
+        finally:
+            # never leave the OAuth tab behind on the shared CDP Chrome
+            try: await page.close()
+            except Exception: pass
 asyncio.run(main())
