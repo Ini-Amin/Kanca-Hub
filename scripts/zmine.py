@@ -102,6 +102,20 @@ REG_GAP = float(os.environ.get("ZMINE_REG_GAP", "35"))
 GATE_FILE = STATE_DIR / "zmine_reg_gate.json"
 
 
+def _gate_wait_seconds() -> float:
+    """Seconds the registration gate is currently parked (0 = open). Read-only."""
+    with _lock():
+        try:
+            st = json.loads(GATE_FILE.read_text())
+        except Exception:  # noqa: BLE001
+            st = {}
+        now = time.time()
+        until = float(st.get("until") or 0)
+        if now < until:
+            return until - now
+        return max(0.0, REG_GAP - (now - float(st.get("ts") or 0)))
+
+
 def _register_gate():
     """Block until at least REG_GAP seconds since the last registration anywhere.
     Also honours a shared 'until' backoff set by _rate_gate (a 429 from the site).
@@ -507,16 +521,21 @@ def autopilot(target: int = 25, ref: str | None = "RCFZ9GA7", *,
     referred = [a for a in accts if a.get("ref") == ref] if ref else accts
     log_fn(f"autopilot: {len(accts)} stored, {len(referred)} referred (target {target})")
     added = 0
-    while len(referred) + added < target:
-        r = worker(ref, model=model, want=want, log_fn=log_fn)
-        if r.get("code") == 429:
-            log_fn("autopilot: rate-limited -> stopping registration this pass")
-            break
-        if not r.get("ok"):
-            log_fn("autopilot: register failed -> stopping this pass")
-            break
-        added += 1
-        time.sleep(REG_GAP + random.uniform(2, 8))
+    parked = _gate_wait_seconds()
+    if parked > 60:
+        log_fn(f"autopilot: registration parked for {parked / 60:.0f} min "
+               f"-> skipping new signups this pass, still renewing sessions/tasks")
+    else:
+        while len(referred) + added < target:
+            r = worker(ref, model=model, want=want, log_fn=log_fn)
+            if r.get("code") == 429:
+                log_fn("autopilot: rate-limited -> stopping registration this pass")
+                break
+            if not r.get("ok"):
+                log_fn("autopilot: register failed -> stopping this pass")
+                break
+            added += 1
+            time.sleep(REG_GAP + random.uniform(2, 8))
     log_fn(f"autopilot: +{added} new account(s)")
     tick(model=model, want=want, pace=15.0, log_fn=log_fn)
     return {"added": added, "total": len(_load_accounts())}
