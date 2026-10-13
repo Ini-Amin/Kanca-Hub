@@ -425,10 +425,16 @@ def _try_another_account(err):
 
 
 def _try_next_model(err):
-    """Should the model chain advance to the next model?"""
+    """Should the model chain advance to the next model?
+
+    NOTE: _peek_app_error builds the error with the DEFAULT http_code=429, so a
+    real anti-abuse body arrives as app_code=3012 / code=429 -- matching on the
+    HTTP status alone silently relayed 3012 to the client instead of chaining to
+    GLM-5.3-Flash (the bug the docstring on _call_chain already described). Key on
+    app_code, and keep 405 (the WAF HTML page) as the HTTP-status signal."""
     if getattr(err, "code", None) == 405:
         return True
-    return getattr(err, "app_code", None) == 1005
+    return getattr(err, "app_code", None) in (1005, 3012)
 
 
 def call_upstream(payload, email="", timeout=600):

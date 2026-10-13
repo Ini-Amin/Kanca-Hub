@@ -98,6 +98,19 @@ class TestAppErrorDetection(unittest.TestCase):
         self.assertTrue(self.m._try_next_model(err))
         self.assertFalse(self.m._try_another_account(err))
 
+    def test_abuse_3012_from_peek_still_advances_chain(self):
+        """Regression: _peek_app_error builds the error with the DEFAULT
+        http_code=429, so a real anti-abuse body is app_code=3012 / code=429.
+        Matching only on HTTP 405 relayed 3012 to the client instead of chaining
+        to GLM-5.3-Flash (observed live 2026-10-14)."""
+        err, _ = self.m._peek_app_error(
+            FakeResponse(b'{"code":3012,"msg":"request has been blocked due to unusual activity."}'))
+        self.assertIsInstance(err, self.m.UpstreamAppError)
+        self.assertEqual(err.app_code, 3012)
+        self.assertEqual(err.code, 429)
+        self.assertTrue(self.m._try_next_model(err))
+        self.assertFalse(self.m._try_another_account(err))
+
     def test_401_rotates_account_not_model(self):
         err = self.m.UpstreamAppError(0, "unauthorized", b"{}", 401)
         self.assertTrue(self.m._try_another_account(err))
