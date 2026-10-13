@@ -504,8 +504,11 @@ def cmd_farm(a=None, cfg=None, dry=False):
     add it to the bridge (accounts.txt + key) and mint its ZCode JWT."""
     cfg = cfg or _farm_cfg()
     accts = accounts()
-    if len(accts) >= int(cfg.get("max_accounts", 4)):
-        event("farm", "skipped: max_accounts=%d reached" % len(accts))
+    # max_accounts <= 0 means UNLIMITED: keep farming as long as we are not
+    # blocked. The real limiter is the per-account quota, not a hard cap.
+    cap = int(cfg.get("max_accounts", 4))
+    if cap > 0 and len(accts) >= cap:
+        event("farm", "skipped: max_accounts=%d reached" % cap)
         return None
     st = load_json(p("farm_state.json"), {})
     # cooldown applies in full after a SUCCESSFUL farm; a failed run only
