@@ -25,6 +25,12 @@ from playwright.async_api import async_playwright
 CDP = "http://127.0.0.1:9222"
 SDK = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"
 APP_KEY, SCENE, REGION = "no8xfe", "11xygtvd", "sgp"
+# The real flow's origin is chat.z.ai/auth (create z.ai account -> zcode signup ->
+# mint). zcode.z.ai/ 307-redirects to a marketing /cn|/en page, and the Aliyun
+# verify param is bound to the page origin, so mounting the widget there was the
+# likely cause of the 3007 (captcha verify failed) on claim. Override with
+# ZC_CLAIM_ORIGIN if a future build moves the login back to zcode.z.ai.
+CLAIM_ORIGIN = os.environ.get("ZC_CLAIM_ORIGIN", "https://chat.z.ai/auth")
 
 
 def claim(jwt, plan_id, captcha_param, region="sgp"):
@@ -74,7 +80,10 @@ async def main():
 
 
 async def _claim_page(page, jwt, plan_id):
-    await page.goto("https://zcode.z.ai/", wait_until="domcontentloaded", timeout=60000)
+    # origin matters: the Aliyun verify param is bound to it. Use the real flow's
+    # origin (chat.z.ai/auth) rather than zcode.z.ai/ (which 307s to a marketing
+    # page and made the claim fail with code 3007).
+    await page.goto(CLAIM_ORIGIN, wait_until="domcontentloaded", timeout=60000)
     await page.wait_for_timeout(1200)
 
     # mount the widget host exactly like the app does (renderer styles-*.js)
