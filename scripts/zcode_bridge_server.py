@@ -288,13 +288,123 @@ def upstream_headers(email=""):
     return h
 
 
+class UpstreamAppError(Exception):
+    """Upstream replied HTTP 200 with an application-level error body, e.g.
+    {"code":1005,"msg":"exceed quota limit"}. `code` is a real HTTP status so
+    the error can be relayed; `app_code` keeps the plan's own code for logic."""
+    def __init__(self, app_code, msg, body=b"", http_code=429):
+        super().__init__("upstream %s: %s" % (app_code, msg))
+        self.code = http_code
+        self.app_code = app_code
+        self.msg = msg
+        self._body = body if isinstance(body, bytes) else str(body).encode()
+        self.headers = {"content-type": "application/json"}
+
+    def read(self, *args):
+        out, self._body = self._body, b""
+        return out
+
+
+class _PrefixedResponse:
+    """Wrap a response whose head we already consumed, so `read()` still yields
+    every byte (prefix first, then the live stream). Keeps SSE streaming intact."""
+
+    def __init__(self, resp, prefix):
+        self._resp = resp
+        self._prefix = prefix or b""
+        self._off = 0
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            out = self._prefix[self._off:] + (self._resp.read() or b"")
+            self._off = len(self._prefix)
+            return out
+        out = b""
+        if self._off < len(self._prefix):
+            out = self._prefix[self._off:self._off + n]
+            self._off += len(out)
+        if len(out) < n:
+            more = self._resp.read(n - len(out))
+            if more:
+                out += more
+        return out
+
+    def close(self):
+        try:
+            self._resp.close()
+        except Exception:
+            pass
+
+    @property
+    def headers(self):
+        return self._resp.headers
+
+    @property
+    def status(self):
+        return getattr(self._resp, "status", 200)
+
+    @property
+    def code(self):
+        return getattr(self._resp, "code", 200)
+
+
+def _peek_app_error(resp):
+    """Read just enough of a 200 response to spot an application-level error
+    body. Returns (UpstreamAppError|None, response). With no error the returned
+    response still yields every byte, so callers are unaffected."""
+    try:
+        head = resp.read(4096)
+    except Exception:
+        return None, resp
+    if not head:
+        return None, _PrefixedResponse(resp, head)
+    # Normal bodies start with {"id":"msg_...","type":"message"... and never
+    # lead with "code"; only the error shape does.
+    stripped = head.lstrip()
+    if not stripped.startswith(b'{"code"') and not stripped.startswith(b'{"msg"'):
+        return None, _PrefixedResponse(resp, head)
+    buf = head
+    while len(buf) <= 65536:
+        try:
+            obj = json.loads(buf)
+        except Exception:
+            try:
+                more = resp.read(4096)
+            except Exception:
+                more = b""
+            if not more:
+                break
+            buf += more
+            continue
+        if isinstance(obj, dict) and "code" in obj and "content" not in obj:
+            return UpstreamAppError(obj.get("code"),
+                                    obj.get("msg") or obj.get("message") or "upstream error",
+                                    buf), None
+        break
+    return None, _PrefixedResponse(resp, buf)
+
+
+def _try_another_account(err):
+    """Should failover retry this model on a different account?"""
+    if getattr(err, "code", None) == 401:
+        return True
+    return getattr(err, "app_code", None) in (1005, 3009, 3010)
+
+
+def _try_next_model(err):
+    """Should the model chain advance to the next model?"""
+    if getattr(err, "code", None) == 405:
+        return True
+    return getattr(err, "app_code", None) == 1005
+
+
 def call_upstream(payload, email="", timeout=600):
     import urllib.request, urllib.error
     for attempt in range(2):
         req = urllib.request.Request(UPSTREAM, data=json.dumps(payload).encode(),
                                      headers=upstream_headers(email), method="POST")
         try:
-            return urllib.request.urlopen(req, timeout=timeout), None
+            resp = urllib.request.urlopen(req, timeout=timeout)
         except urllib.error.HTTPError as e:
             body = e.read()
             # 429 code 3009 = transient per-account concurrency blip: one retry
@@ -305,6 +415,19 @@ def call_upstream(payload, email="", timeout=600):
             return None, e
         except Exception as e:
             return None, e
+        # HTTP 200 is NOT success: the plan reports quota/abuse problems with
+        # {"code":1005,"msg":"exceed quota limit"} inside a 200 body. Relaying
+        # that produced an empty assistant message (content=null,
+        # completion_tokens=0, finish_reason=stop), which clients report as
+        # "Assistant returned empty stop". Surface it as an error instead so
+        # failover can pick another account/model.
+        # Skipped for SSE: peeking would block the live stream (read(n) waits
+        # for n bytes), and a streamed error arrives as an `error` event anyway.
+        if not payload.get("stream"):
+            app_err, resp = _peek_app_error(resp)
+            if app_err is not None:
+                return None, app_err
+        return resp, None
     return None, Exception("upstream retries exhausted")
 
 
@@ -424,8 +547,9 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def _call_failover(self, payload, model):
-        """send upstream; if the JWT is dead (401) rotate to the next usable
-        account instead of failing the client."""
+        """send upstream; rotate to the next usable account on a dead JWT (401)
+        or an application-level quota error (code 1005 / 3009 / 3010) instead of
+        failing the client."""
         tried, err = [], None
         while len(tried) < 4:
             email = self.account if not tried else pick_account(None, model, exclude=tried)
@@ -438,22 +562,24 @@ class Handler(BaseHTTPRequestHandler):
                     bridge_event("failover", "dead JWT on %s -> using %s" % (self.account, email))
                 self.account = email
                 return resp, None
-            if getattr(err, "code", None) != 401:
+            if not _try_another_account(err):
                 break
+            bridge_event("failover", "%s on %s -> trying next account"
+                         % (getattr(err, "msg", err), email))
         return None, err
 
     def _call_chain(self, payload, chain, model):
-        """upstream shed the model with 405/3012 (anti-abuse; e.g. a brand-new
-        account hitting the flagship GLM-5.3 while its Flash bucket is fine)
-        -> continue down the chain instead of relaying the error."""
+        """upstream shed the model with 405/3012 (anti-abuse) or spent its quota
+        bucket (code 1005) -> continue down the chain instead of relaying the
+        error, so a dead flagship GLM-5.3 falls through to GLM-5.3-Flash."""
         resp, err = self._call_failover(payload, model)
-        while (err is not None and getattr(err, "code", None) == 405
+        while (err is not None and _try_next_model(err)
                and chain.index(model) + 1 < len(chain)):
             model = chain[chain.index(model) + 1]
             if not self._select_account([model]):
                 return resp, err
-            bridge_event("failover", "upstream 3012 shed -> chain to %s (%s)"
-                         % (model, self.account))
+            bridge_event("failover", "upstream shed/quota on %s -> chain to %s (%s)"
+                         % (chain[chain.index(model) - 1], model, self.account))
             payload["model"] = model
             resp, err = self._call_failover(payload, model)
         return resp, err
