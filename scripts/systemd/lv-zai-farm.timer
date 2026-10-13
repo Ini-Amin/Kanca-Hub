@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the LightVela z.ai farm (01/07/13/19)
+
+[Timer]
+OnCalendar=*-*-* 01,07,13,19:30
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target
