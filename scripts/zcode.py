@@ -537,7 +537,14 @@ def cmd_farm(a=None, cfg=None, dry=False):
                           "--attempts", "3", "--out-json", out])
     rec = load_json(out, {})
     email, pw = rec.get("email"), rec.get("password")
-    if rc != 0 or rec.get("status") != "ok" or not email:
+    # Trust the RECORD over the exit code: zai_signup writes its JSON before
+    # returning, and a headed browser teardown can still kill the process with
+    # rc=120 ("failed to flush stdout") AFTER a successful signup. Gating on
+    # rc!=0 discarded valid accounts (e.g. rw5gutz7gn@ at 01:06, status=ok).
+    if rec.get("status") == "ok" and email:
+        if rc != 0:
+            event("farm", "signup ok despite rc=%s (%s)" % (rc, email))
+    else:
         event("farm_err", "signup rc=%s status=%s error=%s" % (rc, rec.get("status"), str(rec.get("error"))[:60]))
         write(p("farm_state.json"), json.dumps({"ts": time.time(), "status": "failed"}))
         return None
