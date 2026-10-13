@@ -63,6 +63,32 @@ def jwt_email(tok):
         return None
 
 
+async def _submit(page, labels, log, timeout_ms=8000) -> bool:
+    """Click a submit button for REAL.
+
+    A DOM `.click()` silently no-ops on this React form (the button has child
+    nodes, so the old leaf-only _JS_CLICK missed it, and even when it matched
+    the synthetic click did not submit). A real mouse click does. Falls back to
+    the DOM click only if the real one is unavailable.
+    """
+    for lbl in labels:
+        try:
+            loc = page.get_by_text(lbl, exact=True)
+            if await loc.count():
+                await loc.last.click(timeout=timeout_ms)
+                log(f"  clicked {lbl!r} (real)")
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if await page.evaluate(_JS_CLICK, lbl):
+                log(f"  clicked {lbl!r} (dom)")
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
 async def _once(*, headless=True, log=print, puzzles=20) -> dict:
     import mailboxes as M
     import captcha_slider as CS
@@ -101,10 +127,15 @@ async def _once(*, headless=True, log=print, puzzles=20) -> dict:
         if not await CS.solve_aliyun(page, log=log, puzzles=puzzles):
             rec["status"] = "captcha_failed"
             return rec
-        for lbl in ("Create Account", "Sign up"):
-            if await page.evaluate(_JS_CLICK, lbl):
+        # z.ai enables "Create Account" a beat AFTER the captcha callback fires;
+        # clicking too early is a silent no-op (posts stays []). Give it a moment
+        # and submit with a real mouse click.
+        await page.wait_for_timeout(1500)
+        await _submit(page, ("Create Account", "Sign up"), log)
+        for _ in range(10):                       # wait for the signup POST
+            await page.wait_for_timeout(700)
+            if posts:
                 break
-        await page.wait_for_timeout(5000)
         rec["posts"] = [{"url": u, "status": s} for u, s, _ in posts]
 
         # 3. verify link -> Complete Registration -> real token
