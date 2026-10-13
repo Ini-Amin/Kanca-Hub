@@ -1,0 +1,12 @@
+[Unit]
+Description=THK farm on LightVela -> inject into 9Router (masked egress)
+# The farm runs on LightVela (always-on, masked egress); this laptop owns the
+# 9Router DB, so it drives the remote farm and does the inject/sync locally.
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=%h/Auto-FreeCF/scripts/r9_farm_remote.sh
+TimeoutStartSec=3600
+Nice=10

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the THK farm loop on LightVela (00/06/12/18)
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:15
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
