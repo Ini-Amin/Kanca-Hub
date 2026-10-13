@@ -152,11 +152,13 @@ def mine_labels(dataset=LIVE_LOG, out=MINE_PATH, store=STORE_PATH,
         if tgt is None or not bg:
             continue
         _record(bg.replace("_bg.png", ""), int(tgt), "mined")
-    # 2. human-verified labels win (they were judged by eye, not by a pass)
-    for iid, v in _load_json(VERIFIED_PATH).items():
-        x = v.get("x") if isinstance(v, dict) else v
-        if x is not None:
-            _record(iid, int(x), "verified")
+    # 2. human labels win (they were judged by eye, not by a pass). Two files:
+    #    verified.json (early batch) + slider_verified.json (review page export).
+    for name in ("slider_verified.json", "verified.json"):
+        for iid, v in _load_json(VERIFIED_PATH.parent / name).items():
+            x = v.get("x") if isinstance(v, dict) else v
+            if x is not None:
+                _record(iid, int(x), "verified")
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(truth, indent=1))

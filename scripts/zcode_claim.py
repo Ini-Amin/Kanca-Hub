@@ -145,7 +145,17 @@ async def _claim_page(page, jwt, plan_id):
         # popup mode: nothing happens until the SDK's trigger button is clicked;
         # the puzzle dialog then appears for solve_aliyun.
         print("[claim] traceless gave no param -> interactive slider", flush=True)
-        await page.click("#captcha-btn", timeout=5000)
+        # The SDK (dynamicJS 3.29.0) only renders the widget inside z.ai's OWN
+        # page context; a hand-mounted widget on a static page renders 0 nodes
+        # and the trigger button never exists -> a hard crash here. Guard it.
+        if not await page.evaluate("() => !!document.querySelector('#captcha-btn')"):
+            print("[claim] widget did not mount (no trigger button)", flush=True)
+            return 2
+        try:
+            await page.click("#captcha-btn", timeout=5000)
+        except Exception as e:  # noqa: BLE001
+            print("[claim] trigger click failed: %s" % str(e)[:80], flush=True)
+            return 2
         await page.wait_for_timeout(2500)
         solved = await CS.solve_aliyun(page, puzzles=25)
         print("[claim] slider solved:", solved, flush=True)
