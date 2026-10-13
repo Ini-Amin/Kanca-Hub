@@ -24,7 +24,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 import captcha_slider as CS  # noqa: E402
 
-MODELS = ["cbai/glm-5v-turbo", "THK/gemini-3.8-flash", "ag/gemini-3.8-flash-low"]
+MODELS = ["ag/gemini-3.8-flash-high"]
 
 ASK = (
     "Image 1 is a picture that has ONE object removed (a region is missing/smeared). "
