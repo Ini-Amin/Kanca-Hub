@@ -101,3 +101,22 @@ class TestLabelStoreMining(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestClaimOrigin(unittest.TestCase):
+    """The claim flow must mount the Aliyun widget on the REAL origin
+    (chat.z.ai/auth), not zcode.z.ai/ (which 307s to a marketing page and made
+    the claim fail with 3007 captcha-verify-failed).
+
+    zcode_claim imports playwright at module scope (only present in the browser
+    venv), so assert on the source text rather than importing it."""
+
+    def _src(self):
+        return (SCRIPTS / "zcode_claim.py").read_text()
+
+    def test_claim_origin_is_chat_z_ai_auth(self):
+        src = self._src()
+        self.assertIn('os.environ.get("ZC_CLAIM_ORIGIN", "https://chat.z.ai/auth")', src)
+        # the old marketing origin must not be the goto target anymore
+        self.assertNotIn('page.goto("https://zcode.z.ai/"', src)
+        self.assertIn("await page.goto(CLAIM_ORIGIN", src)

@@ -875,21 +875,23 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         pid = await _puzzle_id(page)
         images = _save_puzzle_images(pid, imgs[0], imgs[1]) if imgs else {}
         guess = None
+        from_label = False
         if imgs:
             # 0. Label store first: a puzzle we've already solved/labeled is a
             #    free, exact answer (the RLHF reuse payoff). Content-hash keyed.
             guess = gap_by_label(imgs[0], imgs[1])
+            from_label = guess is not None
             if guess is None:
                 guess = gap_by_diff(imgs[0], imgs[1])
             # Confidence gate: two diverse scorers agreeing => ~80% precision
             # (benchmark); disagreeing => ~50%, so skip the doomed drag and
-            # spend the vision call before touching the slider. NOTE: vision is
-            # OFF by default (free pool models answer a round constant); only a
-            # verified CAPTCHA_VISION_MODEL is trusted, and it never overrides a
-            # confident label-store hit.
+            # spend the vision call before touching the slider. NOTE: the HTTP
+            # model route is OFF by default (free pool models answer a round
+            # constant); the $SLIDER_VISION_CMD seam still works if set, and
+            # neither ever overrides a label-store hit (already exact).
             g2 = flat_dark_guess(imgs[0], imgs[1]) if guess is not None else None
-            if (model and (missed or guess is None
-                    or (g2 is not None and abs(guess - g2) > DISAGREE_GATE))):
+            if not from_label and (missed or guess is None
+                    or (g2 is not None and abs(guess - g2) > DISAGREE_GATE)):
                 v = None
                 if images:
                     v = gap_by_cmd(DATA_DIR / images["bg"], DATA_DIR / images["piece"])
