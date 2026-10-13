@@ -1,4 +1,9 @@
-"""Regression tests for load_accounts in scripts/inject_thk_9router.py."""
+"""Regression tests for the key loaders in scripts/inject_thk_9router.py.
+
+The script now serves two key sources behind one upsert path:
+  load_harbor(path) -> [{"key","name","email"}]   (TokenHarbor account.json)
+  load_zcode(path)  -> [{"key","name","email"}]   (bridge keys.txt `key=email`)
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.inject_thk_9router import load_accounts
+from scripts.inject_thk_9router import load_harbor, load_zcode, SOURCES
 
 
 def _write_tmp_json(data) -> str:
@@ -22,7 +27,7 @@ def _write_tmp_json(data) -> str:
         return f.name
 
 
-class TestInjectThkLoadAccounts(unittest.TestCase):
+class TestLoadHarbor(unittest.TestCase):
     def test_bare_single_account(self):
         # (a) bare single-account dict with api_key parsed to 1-element list
         sample = {
@@ -32,10 +37,11 @@ class TestInjectThkLoadAccounts(unittest.TestCase):
         }
         path = _write_tmp_json(sample)
         try:
-            res = load_accounts(path)
+            res = load_harbor(path)
             self.assertEqual(len(res), 1)
-            self.assertEqual(res[0]["api_key"], "thk_samplekey123")
+            self.assertEqual(res[0]["key"], "thk_samplekey123")
             self.assertEqual(res[0]["email"], "th_test@kancalabs.my.id")
+            self.assertEqual(res[0]["name"], "th_test@kancalabs.my.id")
         finally:
             Path(path).unlink(missing_ok=True)
 
@@ -49,10 +55,8 @@ class TestInjectThkLoadAccounts(unittest.TestCase):
         }
         path = _write_tmp_json(sample)
         try:
-            res = load_accounts(path)
-            self.assertEqual(len(res), 2)
-            self.assertEqual(res[0]["api_key"], "thk_key1")
-            self.assertEqual(res[1]["api_key"], "thk_key2")
+            res = load_harbor(path)
+            self.assertEqual([r["key"] for r in res], ["thk_key1", "thk_key2"])
         finally:
             Path(path).unlink(missing_ok=True)
 
@@ -64,10 +68,8 @@ class TestInjectThkLoadAccounts(unittest.TestCase):
         ]
         path = _write_tmp_json(sample)
         try:
-            res = load_accounts(path)
-            self.assertEqual(len(res), 2)
-            self.assertEqual(res[0]["api_key"], "thk_key1")
-            self.assertEqual(res[1]["api_key"], "thk_key2")
+            res = load_harbor(path)
+            self.assertEqual([r["key"] for r in res], ["thk_key1", "thk_key2"])
         finally:
             Path(path).unlink(missing_ok=True)
 
@@ -76,10 +78,62 @@ class TestInjectThkLoadAccounts(unittest.TestCase):
         for sample in ({}, {"irrelevant": "field"}, {"status": "ok", "value": 42}):
             path = _write_tmp_json(sample)
             try:
-                res = load_accounts(path)
-                self.assertEqual(res, [])
+                self.assertEqual(load_harbor(path), [])
             finally:
                 Path(path).unlink(missing_ok=True)
+
+    def test_non_thk_keys_are_dropped(self):
+        sample = [{"email": "a@test.com", "api_key": "sk-other"},
+                  {"email": "b@test.com", "api_key": "thk_keep"}]
+        path = _write_tmp_json(sample)
+        try:
+            res = load_harbor(path)
+            self.assertEqual([r["key"] for r in res], ["thk_keep"])
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+
+class TestLoadZcode(unittest.TestCase):
+    def _write(self, text: str) -> str:
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(text)
+            return f.name
+
+    def test_parses_key_equals_email(self):
+        p = self._write("sk-zc-01-aaa=one@x.id\nsk-zc-02-bbb=two@x.id\n")
+        try:
+            res = load_zcode(p)
+            self.assertEqual([r["key"] for r in res], ["sk-zc-01-aaa", "sk-zc-02-bbb"])
+            self.assertEqual([r["email"] for r in res], ["one@x.id", "two@x.id"])
+        finally:
+            Path(p).unlink(missing_ok=True)
+
+    def test_skips_blanks_and_comments(self):
+        p = self._write("\n# a comment\nsk-zc-01-aaa=one@x.id\n   \n")
+        try:
+            res = load_zcode(p)
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["key"], "sk-zc-01-aaa")
+        finally:
+            Path(p).unlink(missing_ok=True)
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual(load_zcode("/nonexistent/keys.txt"), [])
+
+
+class TestSourceTable(unittest.TestCase):
+    def test_zcode_source_is_one_per_email_and_not_verified(self):
+        z = SOURCES["zcode"]
+        self.assertTrue(z["one_per_email"])
+        self.assertFalse(z["verify"])          # the bridge has no cheap probe
+        self.assertEqual(z["prefix"], "Zcode")
+        self.assertEqual(z["base"], "http://127.0.0.1:8787/v1")
+
+    def test_thk_source_is_per_key_and_verified(self):
+        t = SOURCES["thk"]
+        self.assertFalse(t["one_per_email"])
+        self.assertTrue(t["verify"])
+        self.assertEqual(t["prefix"], "THK")
 
 
 if __name__ == "__main__":
