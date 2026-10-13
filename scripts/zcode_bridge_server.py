@@ -21,7 +21,7 @@ State dir ~/.zcode-bridge/ (managed by scripts/zcode.py):
 
 Usage:  python3 scripts/zcode.py serve [--port 8787]
 """
-import json, os, sys, threading, time, uuid
+import json, os, sys, threading, time, urllib.error, urllib.request, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -288,6 +288,39 @@ def upstream_headers(email=""):
     return h
 
 
+def upstream_proxy():
+    """Configured upstream egress proxy (http://host:port). Empty = direct.
+
+    z.ai's WAF blocks this host's home IP with an HTML 405 page, so the bridge
+    points its upstream at a clean egress (LightVela's WARP wireproxy, reached
+    over an SSH tunnel — see scripts/systemd/zcode-egress-tunnel.service).
+    Order: $ZCODE_UPSTREAM_PROXY, then config.json {"egress": {"proxy": ...}}.
+    Read live so the value can change without a restart."""
+    p = os.environ.get("ZCODE_UPSTREAM_PROXY", "").strip()
+    if not p:
+        p = str((load_config().get("egress") or {}).get("proxy") or "").strip()
+    return p
+
+
+def egress_opener():
+    """urllib opener for the upstream call. Uses the configured proxy when its
+    port is live; falls back to a direct opener so a down tunnel degrades to
+    'blocked' (visible 405) instead of 'unreachable' (connection refused)."""
+    import socket, urllib.request
+    from urllib.parse import urlparse
+    proxy = upstream_proxy()
+    if proxy:
+        u = urlparse(proxy if "://" in proxy else "http://" + proxy)
+        try:
+            s = socket.create_connection((u.hostname, u.port or 80), timeout=1.5)
+            s.close()
+            return urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+        except OSError:
+            bridge_event("egress", "proxy %s down -> direct (expect WAF 405)" % proxy)
+    return urllib.request.build_opener()
+
+
 class UpstreamAppError(Exception):
     """Upstream replied HTTP 200 with an application-level error body, e.g.
     {"code":1005,"msg":"exceed quota limit"}. `code` is a real HTTP status so
@@ -399,12 +432,13 @@ def _try_next_model(err):
 
 
 def call_upstream(payload, email="", timeout=600):
-    import urllib.request, urllib.error
+    import urllib.error
+    opener = egress_opener()
     for attempt in range(2):
         req = urllib.request.Request(UPSTREAM, data=json.dumps(payload).encode(),
                                      headers=upstream_headers(email), method="POST")
         try:
-            resp = urllib.request.urlopen(req, timeout=timeout)
+            resp = opener.open(req, timeout=timeout)
         except urllib.error.HTTPError as e:
             body = e.read()
             # 429 code 3009 = transient per-account concurrency blip: one retry
@@ -496,7 +530,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/") or "/"
         if path in ("/", "/health"):
             return self._send(200, {"ok": True, "upstream": "zcode-start-plan",
-                                    "model": DEFAULT_MODEL, "keys": len(load_key_map()) or len(API_KEYS)})
+                                    "model": DEFAULT_MODEL, "egress": upstream_proxy() or "direct",
+                                    "keys": len(load_key_map()) or len(API_KEYS)})
         if path == "/quota":
             # open on localhost; a valid bridge key narrows to that key's account
             return self._send(200, quota_payload(self._auth_account()))

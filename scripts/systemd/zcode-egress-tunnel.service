@@ -1,0 +1,16 @@
+[Unit]
+Description=ZCode egress tunnel: laptop:25344 -> LightVela WARP wireproxy
+# z.ai's WAF blocks this host's home IP with an HTML 405 page. LightVela is
+# always-on and runs a userland Cloudflare WARP wireproxy on 127.0.0.1:25344;
+# this forwards that port here so the bridge (scripts/zcode_bridge_server.py,
+# config.json egress.proxy) can send its upstream through a clean IP.
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -N -L 127.0.0.1:25344:127.0.0.1:25344 lightvela
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=default.target

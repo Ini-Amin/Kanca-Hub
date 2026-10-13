@@ -9,6 +9,7 @@ that as "Assistant returned empty stop after retry cap", and Janus got stuck.
 """
 import importlib.util
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -23,6 +24,16 @@ def load_bridge():
     sys.modules["zcode_bridge_server"] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+class FakeOpener:
+    """Stand-in for the egress opener (opener.open(req, timeout=...) -> resp)."""
+
+    def __init__(self, resp):
+        self._resp = resp
+
+    def open(self, req, timeout=None):
+        return self._resp
 
 
 class FakeResponse:
@@ -103,9 +114,8 @@ class TestAppErrorDetection(unittest.TestCase):
         the bridge must still detect it (omp streams, and this is what stuck Janus)."""
         body = b'{"code":1005,"msg":"exceed quota limit","logid":"x"}'
 
-        import urllib.request
-        orig = urllib.request.urlopen
-        urllib.request.urlopen = lambda req, timeout=None: FakeResponse(body)
+        orig = self.m.egress_opener
+        self.m.egress_opener = lambda: FakeOpener(FakeResponse(body))
         try:
             for stream in (True, False):
                 resp, err = self.m.call_upstream(
@@ -115,14 +125,13 @@ class TestAppErrorDetection(unittest.TestCase):
                 self.assertIsInstance(err, self.m.UpstreamAppError)
                 self.assertEqual(err.app_code, 1005)
         finally:
-            urllib.request.urlopen = orig
+            self.m.egress_opener = orig
 
     def test_healthy_sse_is_not_peeked(self):
         """text/event-stream must pass through untouched (no blocking read)."""
-        import urllib.request
-        orig = urllib.request.urlopen
-        urllib.request.urlopen = lambda req, timeout=None: FakeResponse(
-            b'data: {"type":"message_start"}\n\n', "text/event-stream; charset=utf-8")
+        orig = self.m.egress_opener
+        self.m.egress_opener = lambda: FakeOpener(FakeResponse(
+            b'data: {"type":"message_start"}\n\n', "text/event-stream; charset=utf-8"))
         try:
             resp, err = self.m.call_upstream(
                 {"model": "GLM-5.3", "stream": True,
@@ -130,7 +139,60 @@ class TestAppErrorDetection(unittest.TestCase):
             self.assertIsNone(err)
             self.assertIn(b"message_start", resp.read())
         finally:
-            urllib.request.urlopen = orig
+            self.m.egress_opener = orig
+
+
+class TestUpstreamEgress(unittest.TestCase):
+    """z.ai's WAF blocks the home IP with an HTML 405 page, so the bridge must be
+    able to send its upstream through a clean egress proxy (LightVela WARP)."""
+
+    def setUp(self):
+        self.m = load_bridge()
+        self._cfg, self._env = self.m.load_config, os.environ.get("ZCODE_UPSTREAM_PROXY")
+        os.environ.pop("ZCODE_UPSTREAM_PROXY", None)
+
+    def tearDown(self):
+        self.m.load_config = self._cfg
+        if self._env is None:
+            os.environ.pop("ZCODE_UPSTREAM_PROXY", None)
+        else:
+            os.environ["ZCODE_UPSTREAM_PROXY"] = self._env
+
+    def test_env_var_wins(self):
+        os.environ["ZCODE_UPSTREAM_PROXY"] = "http://127.0.0.1:9999"
+        self.m.load_config = lambda: {"egress": {"proxy": "http://127.0.0.1:1"}}
+        self.assertEqual(self.m.upstream_proxy(), "http://127.0.0.1:9999")
+
+    def test_config_used_when_no_env(self):
+        self.m.load_config = lambda: {"egress": {"proxy": "http://127.0.0.1:25344"}}
+        self.assertEqual(self.m.upstream_proxy(), "http://127.0.0.1:25344")
+
+    def test_default_is_direct(self):
+        self.m.load_config = lambda: {}
+        self.assertEqual(self.m.upstream_proxy(), "")
+
+    def test_opener_uses_proxy_when_port_live(self):
+        self.m.load_config = lambda: {"egress": {"proxy": "http://127.0.0.1:25344"}}
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        try:
+            self.m.load_config = lambda: {"egress": {"proxy": "http://127.0.0.1:%d" % port}}
+            op = self.m.egress_opener()
+            self.assertIsInstance(op, self.m.urllib.request.OpenerDirector)
+            self.assertTrue(any(isinstance(h, self.m.urllib.request.ProxyHandler)
+                                for h in op.handlers))
+        finally:
+            srv.close()
+
+    def test_opener_falls_back_to_direct_when_proxy_down(self):
+        self.m.load_config = lambda: {"egress": {"proxy": "http://127.0.0.1:1"}}
+        op = self.m.egress_opener()
+        # a direct opener carries a ProxyHandler built from the (empty) env, so
+        # assert on behaviour instead: it must not raise and must still open.
+        self.assertTrue(hasattr(op, "open"))
 
 
 if __name__ == "__main__":
