@@ -42,7 +42,15 @@ async def main():
             await page.get_by_text("Continue with Email").first.click(timeout=6000); await page.wait_for_timeout(2000)
             await page.fill('input[type="email"]', EMAIL); await page.fill('input[type="password"]', PW)
             print("captcha:", await CS.solve_aliyun(page, puzzles=25), flush=True)
-            await page.evaluate(JS,"Sign in"); await page.wait_for_timeout(6000)
+            # A DOM .click() on "Sign in" does NOT submit the React form -- the
+            # page just sits on /auth. A REAL mouse click (get_by_text().click())
+            # does submit: POST /auths/signin -> /auth/oauth/authorize (consent).
+            # (This is why minting a fresh account silently failed before.)
+            try:
+                await page.get_by_text("Sign in", exact=True).last.click(timeout=6000)
+            except Exception:
+                await page.evaluate(JS, "Sign in")
+            await page.wait_for_timeout(6000)
         except Exception as e: print("signin skip:", str(e)[:40], flush=True)
         # consent_hard clicks any "Continue" leaf — on the login chooser that is
         # "Continue with Github" (github detour). Only run it off the login page.
