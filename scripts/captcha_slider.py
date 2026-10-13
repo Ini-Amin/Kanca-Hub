@@ -40,7 +40,7 @@ from pathlib import Path
 # (rms 0.17px): the old blind guess (b=0.077) was ~18% off, which is why one-shot
 # drags never landed. Closed-loop probing corrects live, so this is only the
 # first-move prior now.
-COEF = (0.0036, 0.0631, 0.6007)  # refit from 148 probes (rms 0.18px), 2026-10-11
+COEF = (0.0036, 0.06365, 0.5728)  # refit from 1294 probes (rms 0.17px)
 # Confidence gate: when gap_by_diff and flat_dark_guess disagree by more than
 # this many px, skip the (benchmark ~50%) drag and go straight to vision.
 DISAGREE_GATE = 4
@@ -183,7 +183,7 @@ def gap_by_diff(bg_b64: str, piece_b64: str) -> int | None:
         g_out = bg_arr[outside_mask, :, :].mean(axis=2)
         dx_out = np.abs(np.diff(g_out, axis=1)).sum(axis=0)
         out_sums = np.array([dx_out[x : x + pw].sum() for x in range(len(dx_out) - pw)])
-        lo = max(180, 0)
+        lo = max(145, 0)
         hi = min(265, len(out_sums))
         if hi > lo:
             return lo + int(np.argmax(out_sums[lo:hi]))
@@ -200,14 +200,15 @@ def gap_by_diff(bg_b64: str, piece_b64: str) -> int | None:
             return lo + int(np.argmin(band_sums[lo:hi]))
 
     # 3. Standard objects (wheels, hubcaps, bow-ties, etc.):
-    # Find minimum texture variance inside the object's alpha mask in typical puzzle range [130, 240]
+    # Score texture variance + darkness + center prior inside the object's alpha mask in [130, 240].
+    # ponytail: fixed linear weights (std + 0.15*mean + 3.0*prior); upgrade path: logistic column classifier if >1k labels.
     lo = max(130, 0)
     hi = min(240, W - pw)
     if hi > lo and np.any(mask):
         stds = {}
         for x in range(lo, hi):
             patch = bg_arr[y_min : y_max + 1, x : x + pw]
-            stds[x] = patch[mask].std()
+            stds[x] = patch[mask].std() + 0.15 * patch[mask].mean() + 3.0 * ((x - 175.0) / 50.0) ** 2
         if stds:
             return min(stds, key=stds.get)
 
@@ -258,9 +259,9 @@ def flat_dark_guess(bg_b64: str, piece_b64: str) -> int | None:
     if not mask.any():
         return None
     best_x, best_s = None, None
-    for x in range(8, W - pw - 4):
+    for x in range(40, min(260, W - pw - 4)):
         patch = b[y0:y1 + 1, x:x + pw][mask]
-        s = float(patch.std()) + 0.5 * float(patch.mean())
+        s = float(patch.std()) + 0.25 * float(patch.mean())
         if best_s is None or s < best_s:
             best_s, best_x = s, x
     return best_x

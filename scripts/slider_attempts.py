@@ -243,6 +243,68 @@ def report(dataset=LIVE_LOG, tol: int = 5) -> str:
     return "\n".join(lines)
 
 
+def cv(dataset=LIVE_LOG, folds: int = 5, tol: int = 5) -> str:
+    """Supervised cross-validation by content hash: train/test split so
+    detector accuracy is measured strictly on UNSEEN puzzles."""
+    import base64
+    import hashlib
+    try:
+        import captcha_slider as CS
+    except Exception:  # noqa: BLE001
+        return "cv: captcha_slider not importable"
+    truth = mine_labels(dataset)
+    data_dir = Path(os.environ.get(
+        "SLIDER_DATA_DIR", Path.home() / ".zcode-bridge" / "slider_data"))
+    items = []
+    for iid, x in sorted(truth.items()):
+        bg, pc = data_dir / f"{iid}_bg.png", data_dir / f"{iid}_piece.png"
+        if not (bg.exists() and pc.exists()):
+            continue
+        try:
+            h = hashlib.sha256(bg.read_bytes()).hexdigest()[:16]
+        except OSError:
+            continue
+        items.append({"id": iid, "hash": h, "bg": bg, "pc": pc, "x": x})
+    if not items:
+        return "cv: no labeled images on disk"
+    hashes = sorted({it["hash"] for it in items})
+    k = max(2, min(folds, len(hashes)))
+    hash_to_fold = {h: i % k for i, h in enumerate(hashes)}
+    lines = [f"cross-validation ({k} folds by content hash, n={len(items)} items, {len(hashes)} unique puzzles, tol={tol}px):"]
+    all_errs: dict[str, list[int]] = {"detector": [], "flat_dark": []}
+    for fold_idx in range(k):
+        test_items = [it for it in items if hash_to_fold[it["hash"]] == fold_idx]
+        fold_errs: dict[str, list[int]] = {"detector": [], "flat_dark": []}
+        for it in test_items:
+            b = base64.b64encode(it["bg"].read_bytes()).decode()
+            p = base64.b64encode(it["pc"].read_bytes()).decode()
+            d = CS.gap_by_diff(b, p)
+            fd = CS.flat_dark_guess(b, p)
+            if d is not None:
+                fold_errs["detector"].append(abs(d - it["x"]))
+            if fd is not None:
+                fold_errs["flat_dark"].append(abs(fd - it["x"]))
+        for name in ("detector", "flat_dark"):
+            errs = fold_errs[name]
+            all_errs[name].extend(errs)
+            hit = sum(1 for e in errs if e <= tol)
+            n = len(errs)
+            pct = 100.0 * hit / max(1, n)
+            mean_e = sum(errs) / max(1, n)
+            lines.append("  fold %d %-10s n=%d hit@%dpx=%d (%.0f%%) mean_err=%.1f"
+                         % (fold_idx, name, n, tol, hit, pct, mean_e))
+    lines.append("  -- aggregate held-out evaluation --")
+    for name in ("detector", "flat_dark"):
+        errs = all_errs[name]
+        hit = sum(1 for e in errs if e <= tol)
+        n = len(errs)
+        pct = 100.0 * hit / max(1, n)
+        mean_e = sum(errs) / max(1, n)
+        lines.append("  %-10s n=%d hit@%dpx=%d (%.0f%%) mean_err=%.1f"
+                         % (name, n, tol, hit, pct, mean_e))
+    return "\n".join(lines)
+
+
 def harvest_cmd(count: int = 15, headless: bool = False) -> int:
     """Keep growing the dataset on its own: solve N fresh puzzles via the
     collector, which appends to the dataset (each pass = a new free label).
@@ -319,6 +381,9 @@ if __name__ == "__main__":
         print(f"mined {len(t)} labels -> {MINE_PATH}")
     elif sub == "report":
         print(report())
+    elif sub == "cv":
+        k = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 5
+        print(cv(folds=k))
     elif sub == "tick":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 0
         print(tick(harvest=n))
