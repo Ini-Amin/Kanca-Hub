@@ -325,9 +325,34 @@ def cmd_promo(a):
                 _promo_try_claim(email, pw, pid)
 
 
+def _mint_guard(email, cooldown=1800):
+    """True at most once per `cooldown` seconds per account (mint_state.json).
+
+    Minting spawns a browser OAuth flow (~minutes); without this the 60s watcher
+    would relaunch it on every tick for an account that can't be minted.
+    """
+    st = load_json(p("mint_state.json"), {})
+    last = float((st.get(email) or {}).get("ts") or 0)
+    if time.time() - last < cooldown:
+        return False
+    st[email] = {"ts": time.time()}
+    write(p("mint_state.json"), json.dumps(st))
+    return True
+
+
 def _watch_tick():
     cache = load_json(p("balance.json"), {})
     for email, pw in accounts():
+        # An account with no JWT can't be billed at all -- and never self-heals
+        # (the generic handler below would just log billing_err every tick).
+        # Mint it here, rate-limited, so a freshly farmed account becomes usable
+        # without a human running `zcode.py mint` by hand.
+        if not jwt_for(email):
+            if _mint_guard(email):
+                event("jwt_missing", "%s -> minting" % email)
+                cmd_mint(argparse.Namespace(email=email, all=False, password=pw))
+                event("jwt_mint", "%s -> %s" % (email, "ok" if jwt_for(email) else "failed"))
+            continue
         try:
             d = billing(email)
         except urllib.error.HTTPError as e:

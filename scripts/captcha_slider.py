@@ -494,15 +494,176 @@ async def _sleep(sec: float) -> None:
     await _a.sleep(sec)
 
 
+_PASS_TEXT = ("slide successful", "滑动成功", "verification passed",
+              "验证通过", "验证成功")
+
+
 async def _passed(page) -> bool:
     """Success = the page says so (English or Chinese), or the puzzle window is gone."""
     t = (await page.evaluate("()=>document.body.innerText") or "").lower()
-    if any(k in t for k in ("verification passed", "验证通过", "验证成功")):
+    if any(k in t for k in _PASS_TEXT):
         return True
     return await page.evaluate(
         """(id) => { const w=document.getElementById(id);
              return !w || /hidden/.test(w.className) || getComputedStyle(w).display === 'none' || w.getBoundingClientRect().width === 0; }""",
         IDS["window"])
+
+
+# ─────────────────────────────────────────── real pass/fail oracle (z.ai)
+# _passed() alone is NOT trustworthy on z.ai: the SDK's success toast is
+# "Slide successful!" and z.ai's success callback immediately refreshes the
+# widget, so the window stays VISIBLE and _passed() returns False on a REAL
+# pass -- which makes solve_aliyun abandon a passed captcha and abort signups.
+# Two signals ARE trustworthy and are used here:
+#   1. the Aliyun verify API response body: Result.VerifyResult (bool) /
+#      Result.VerifyCode ("T001" = pass, "F015" = fail). Works retroactively --
+#      no init-script timing needed.
+#   2. the SDK's own success/fail callbacks, wrapped page-side (best effort;
+#      only catches callbacks registered after the wrap is installed).
+_ORACLE_HOOK = r"""() => {
+  if (window.__capOracle) return 'already';
+  const st = {npass: 0, nfail: 0, nerr: 0, last: null, at: 0};
+  window.__capOracle = st;
+  const wrapCfg = (cfg) => {
+    try {
+      if (cfg && typeof cfg === 'object') {
+        const s = cfg.success, f = cfg.fail, e = cfg.onError;
+        if (typeof s === 'function' && !s.__capW) {
+          const w = function () { st.npass++; st.last = 'success'; st.at = Date.now();
+            return s.apply(this, arguments); };
+          w.__capW = true; cfg.success = w;
+        }
+        if (typeof f === 'function' && !f.__capW) {
+          const w = function () { st.nfail++; st.last = 'fail'; st.at = Date.now();
+            return f.apply(this, arguments); };
+          w.__capW = true; cfg.fail = w;
+        }
+        if (typeof e === 'function' && !e.__capW) {
+          const w = function () { st.nerr++; st.last = 'error'; st.at = Date.now();
+            return e.apply(this, arguments); };
+          w.__capW = true; cfg.onError = w;
+        }
+      }
+    } catch (err) {}
+    return cfg;
+  };
+  let _raw = null;
+  try {
+    Object.defineProperty(window, 'initAliyunCaptcha', {
+      configurable: true,
+      get() { return _raw; },
+      set(fn) {
+        if (typeof fn === 'function' && !fn.__capW) {
+          const w = function (cfg) { return fn.call(this, wrapCfg(cfg)); };
+          w.__capW = true; _raw = w;
+        } else { _raw = fn; }
+      },
+    });
+  } catch (err) {}
+  return 'hooked';
+}"""
+
+_ORACLE_READ = ("() => { const s = window.__capOracle || {}; "
+                "return {npass: s.npass|0, nfail: s.nfail|0, nerr: s.nerr|0, last: s.last||null}; }")
+
+
+class _SliderOracle:
+    """Pass/fail from (a) the SDK success/fail callbacks and (b) the verify API.
+
+    Construct once per page, await install(), then snapshot() before a drag and
+    poll after it. The verify-API listener works even when the page-side hook
+    missed the SDK's one-time initAliyunCaptcha call.
+    """
+
+    def __init__(self, page):
+        self.page = page
+        self.events: list[dict] = []
+        try:
+            page.on("response", lambda r: asyncio.ensure_future(self._on_response(r)))
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def install(self) -> None:
+        try:
+            await self.page.add_init_script(_ORACLE_HOOK)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await self.page.evaluate(_ORACLE_HOOK)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _on_response(self, resp) -> None:
+        try:
+            url = resp.url
+            if "captcha-open" not in url or "verify" not in url:
+                return
+            if resp.request.method != "POST":
+                return
+            try:
+                body = await resp.text()
+            except Exception:  # noqa: BLE001
+                return
+            j = {}
+            try:
+                j = json.loads(body)
+            except Exception:  # noqa: BLE001
+                pass
+            # The verdict is NESTED: top-level Success/Code only mean "the API
+            # call worked"; a wrong drag still returns Success=true and only
+            # Result.VerifyResult=false (VerifyCode F015 = fail, T001 = pass).
+            res = j.get("Result") if isinstance(j.get("Result"), dict) else {}
+            vr = res.get("VerifyResult")
+            if vr is None:
+                vr = j.get("VerifyResult")
+            vcode = str(res.get("VerifyCode") or j.get("VerifyCode") or "")
+            if not isinstance(vr, bool):
+                m = re.search(r'"VerifyResult"\s*:\s*(true|false)', body, re.I)
+                if m:
+                    vr = m.group(1).lower() == "true"
+                elif vcode:
+                    vr = vcode[:1].upper() == "T"
+                else:
+                    return  # not a verdict-bearing response (e.g. InitCaptchaV3)
+            self.events.append({"t": time.time(), "ok": bool(vr), "code": vcode})
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def snapshot(self) -> dict:
+        try:
+            o = await self.page.evaluate(_ORACLE_READ)
+        except Exception:  # noqa: BLE001
+            o = {}
+        return {"pass": int(o.get("npass") or 0), "fail": int(o.get("nfail") or 0),
+                "err": int(o.get("nerr") or 0), "last": o.get("last"),
+                "net": len(self.events)}
+
+
+async def _verdict(page, oracle, before: dict, timeout: float = 3.0) -> bool:
+    """True once ANY trustworthy signal says the drag PASSED.
+
+    Order: SDK success callback > verify API > success toast > legacy _passed()
+    (window gone). Returns False on an explicit fail, or after `timeout`.
+    """
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        now = await oracle.snapshot()
+        if now["pass"] > before["pass"]:
+            return True
+        if now["fail"] > before["fail"]:
+            return False
+        if now["net"] > before["net"]:
+            return bool(oracle.events[-1]["ok"])
+        try:
+            txt = (await page.evaluate("()=>document.body.innerText") or "").lower()
+        except Exception:  # noqa: BLE001
+            txt = ""
+        if any(k in txt for k in _PASS_TEXT):
+            return True
+        if await _passed(page):
+            return True
+        await page.wait_for_timeout(250)
+    return False
 
 async def _ensure_open(page) -> None:
     """Open the puzzle window if it is closed (click the 'start verification' bar)."""
@@ -593,6 +754,19 @@ async def _drag_exact(page, box: dict, target_piece_left: float, log=print) -> t
     return False, probes
 
 
+async def _get_oracle(page):
+    """One _SliderOracle per page (installs the hook + response listener once)."""
+    orc = getattr(page, "_cap_oracle", None)
+    if orc is None:
+        orc = _SliderOracle(page)
+        await orc.install()
+        try:
+            page._cap_oracle = orc
+        except Exception:  # noqa: BLE001
+            pass
+    return orc
+
+
 async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
                        puzzles: int = 20, jitter: int = 16) -> bool:
     """Solve via MEASURE-AND-CORRECT: the piece moves at a small random fraction
@@ -609,10 +783,12 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         log("  [slider] widget would not open")
         return False
 
+    oracle = await _get_oracle(page)
     seen_widget = True   # only trust _passed() once we know the widget existed
     missed = False       # after one miss, spend a vision call on later puzzles
     for i in range(1, puzzles + 1):
-        if seen_widget and await _passed(page):
+        if seen_widget and await _verdict(page, oracle, await oracle.snapshot(),
+                                          timeout=0.4):
             log("  [slider] already passed!")
             return True
         # NOTE: on a MISS the Aliyun widget REFRESHES ITSELF to a new puzzle.
@@ -660,12 +836,14 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         # CLOSED-LOOP landing: press, probe the piece's real position mid-drag,
         # correct, release. invert()/COEF only matter as a rough prior now --
         # the probes measure the true per-puzzle movement curve live.
+        before = await oracle.snapshot()
         released, probes = await _drag_exact(page, box, float(t), log)
         if not images:                     # late-arriving widget images
             imgs = imgs or await _read_images(page)
             images = _save_puzzle_images(pid, imgs[0], imgs[1]) if imgs else {}
-        await page.wait_for_timeout(1200)
-        ok = seen_widget and await _passed(page)
+        # Trustworthy verdict: SDK callback / verify API / toast / window gone.
+        # _passed() alone returns False on a real z.ai pass, so never rely on it.
+        ok = seen_widget and await _verdict(page, oracle, before)
         log_attempt(page.url.split("?")[0], pid, target=t, guess=guess,
                     probes=probes, passed=ok, released=released, images=images)
         if ok:
