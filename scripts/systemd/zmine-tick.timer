@@ -1,13 +1,13 @@
 [Unit]
-Description=Run the ZMINE daily tick (session renew + tasks), 6x a day
+Description=Run the ZMINE autopilot pass (farm + session renew + tasks)
 
 [Timer]
-# The 12-task cap resets every 24 h and credits last 24 h, so running a few
-# times a day both renews the session inside its last 30 min (keeps the streak
-# multiplier) and picks up any tasks missed on a prior run.
-OnCalendar=*-*-* 00,04,08,12,16,20:15
+# zmine.si rate-limits registration to a handful per hour, so a pass every 2 h
+# (with jitter) grows the farm gently and still renews every session well inside
+# its 24 h life. Persistent=true so a missed pass runs once after a resume.
+OnCalendar=*-*-* 00/2:17
 Persistent=true
-RandomizedDelaySec=900
+RandomizedDelaySec=1200
 
 [Install]
 WantedBy=timers.target

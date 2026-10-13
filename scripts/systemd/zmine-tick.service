@@ -1,14 +1,14 @@
 [Unit]
-Description=ZMINE daily tick: activate the mining session + answer the 12 SI tasks
-# The user wants zero human-in-the-loop: this keeps every stored zmine.si miner
-# alive (24 h session renew + up to 12 tasks/day = +60 H hashpower) without a
-# browser. Gentle by design: the script takes a global file lock and paces
-# accounts, so it never hammers the API.
+Description=ZMINE autopilot: gently grow the referral farm + renew sessions + daily tasks
+# Zero human-in-the-loop. Each pass tops the referred-account count up toward the
+# 25 target AND renews the 24 h mining session + answers up to 12 tasks/day for
+# every stored account. It never hammers: registrations are spaced by a shared
+# gate and a 429 parks the whole thing for the site's retryAfter window.
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Auto-FreeCF
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/usr/bin/python3 %h/Auto-FreeCF/scripts/zmine.py tick --pace 25
-TimeoutStartSec=3600
+ExecStart=/usr/bin/python3 %h/Auto-FreeCF/scripts/zmine.py autopilot --target 25 --ref RCFZ9GA7
+TimeoutStartSec=5400
 Nice=10
