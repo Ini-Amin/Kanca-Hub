@@ -70,6 +70,34 @@ class TestSliderReviewDrag(unittest.TestCase):
         html = self._generate()
         self.assertIn("slider_verified.json", html)
 
+    def test_failed_section_present(self):
+        """The user asked for the FAILED puzzles to be visible on the page."""
+        import json as _j
+        import shutil
+        import tempfile
+        m = load_gen()
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "img").mkdir()
+        png = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000a49444154789c6360000002000100ffff03000006000557bfabd4000000"
+            "0049454e44ae426082")
+        for f in ("bg.png", "pc.png"):
+            (tmp / "img" / f).write_bytes(png)
+        (tmp / "merged.json").write_text(_j.dumps([{
+            "id": "f1", "bg": "bg.png", "piece": "pc.png",
+            "detector": 150, "vision": None, "status": "failed",
+            "attempts": 3, "fails": 3}]))
+        m.SRC = tmp
+        m.IMG_SRC = tmp / "img"
+        m.OUT = tmp / "out"
+        m.main()
+        html = (tmp / "out" / "index.html").read_text()
+        shutil.rmtree(tmp, ignore_errors=True)
+        self.assertIn('id="failed"', html)
+        self.assertIn("Failed", html)
+        self.assertIn('"status": "failed"', html)
+
     def test_embedded_js_parses(self):
         """Strip the browser globals and hand the script to node if available."""
         import os, shutil, subprocess, tempfile

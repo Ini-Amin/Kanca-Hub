@@ -3,14 +3,20 @@
 Aliyun slider puzzles so a human can confirm the exact gap X of every puzzle the
 detector and the vision model disagree on.
 
-Input  : /tmp/slider_review/merged.json   (see slider_review_merge.py)
-         /tmp/slider_review/img/*.png     (bg + piece, 300x300 / ~300 tall)
+Input  : reports/slider_review/merged.json   (see slider_review_merge.py)
+         reports/slider_review/img/*.png     (bg + piece, 300x300 / ~300 tall)
 Output : reports/slider_review/index.html + reports/slider_review/img/
 
-Two sections:
+Everything slider-related lives in ONE folder: reports/slider_review/
+(override with SLIDER_DIR). The legacy ~/.zcode-bridge paths are symlinks into it.
+
+Three sections:
   * "Needs verification" — puzzles with no trusted label where the diff detector
     and the vision model disagree. Each card shows the background, both candidate
     X's as guide lines, and a live preview of the piece snapped to the X you type.
+  * "Failed" — puzzles the solver never landed (aim off > 5px). These are the raw
+    material for the RLHF loop: labeling them is the human-feedback step that
+    feeds the label store so the same puzzle is answered for free next time.
   * "Labeled" — puzzles that already have a trusted X (team labels / real passes)
     or where detector and vision agree. Read-only, for spot-checking.
 
@@ -20,12 +26,14 @@ so it is a light, flat, high-density tool. No gradients, no glass, no glow.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
-SRC = Path("/tmp/slider_review")
+REPO = Path(__file__).resolve().parent.parent
+SRC = Path(os.environ.get("SLIDER_DIR", REPO / "reports" / "slider_review"))
 IMG_SRC = SRC / "img"
-OUT = Path(__file__).resolve().parent.parent / "reports" / "slider_review"
+OUT = SRC
 
 # palette: neutral base + two state colors. no third accent, no gradient.
 CSS = """
@@ -62,14 +70,17 @@ h2 .count{font-family:var(--mono);color:var(--ink-2);font-weight:500}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(238px,1fr));gap:12px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:7px;overflow:hidden}
 .card.verify{border-color:var(--verify-line);background:var(--verify-bg)}
+.card.fail{border-color:#e0b4b4;background:#fdf3f3}
 .card.lab{border-color:var(--ok-line);background:var(--ok-bg)}
 .card .cap{display:flex;justify-content:space-between;align-items:center;gap:8px;
   padding:6px 9px;border-bottom:1px solid var(--line);font-size:11.5px}
 .card.verify .cap{border-color:var(--verify-line)}
+.card.fail .cap{border-color:#e0b4b4}
 .card.lab .cap{border-color:var(--ok-line)}
 .id{font-family:var(--mono);color:var(--ink-2);font-size:11px}
 .state{font-weight:650;font-size:10.5px;letter-spacing:.02em;text-transform:uppercase}
 .verify .state{color:var(--verify)}
+.fail .state{color:#b91c1c}
 .lab .state{color:var(--ok)}
 .pair{display:flex;gap:8px;padding:9px;align-items:flex-start}
 canvas{display:block;border:1px solid var(--line);border-radius:4px;background:#222;
@@ -177,12 +188,14 @@ function attachDrag(el){
 
 function card(p){
   const el = document.createElement("div");
-  el.className = "card " + (p.status==="verify"?"verify":"lab");
-  const start = p.status==="verify" ? (p.detector ?? p.vision ?? 0)
-                                    : (p.truth ?? p.detector ?? p.vision ?? 0);
+  const kind = p.status==="verify" ? "verify" : p.status==="failed" ? "fail" : "lab";
+  el.className = "card " + kind;
+  const start = p.status==="labeled" ? (p.truth ?? p.detector ?? p.vision ?? 0)
+                                    : (p.detector ?? p.vision ?? p.truth ?? 0);
+  const label = p.status==="verify" ? "verify" : p.status==="failed" ? "failed" : "labeled";
   el.innerHTML =
     '<div class="cap"><span class="id">'+p.id.slice(0,10)+'</span>'+
-    '<span class="state">'+(p.status==="verify"?"verify":"labeled")+'</span></div>'+
+    '<span class="state">'+label+'</span></div>'+
     '<div class="pair"><canvas width="300" height="300" title="drag the piece to the slot"></canvas>'+
       '<div class="fields">'+
         '<label class="row"><span class="k">gap&nbsp;X</span>'+
@@ -195,6 +208,8 @@ function card(p){
         (p.truth!=null?'<div class="row"><span class="val">'+
           '<span class="swatch" style="background:#15803d"></span>'+p.truth+
           '</span> <span class="mini">truth'+(p.source?" · "+p.source:"")+'</span></div>':'')+
+        (p.attempts?'<div class="mini">'+p.attempts+' attempt'+(p.attempts>1?'s':'')+
+          (p.fails?' · '+p.fails+' miss':'')+'</div>':'')+
         '<div class="err"></div>'+
       '</div></div>';
   el._p = p;
@@ -223,8 +238,9 @@ function exportLabels(){
   const out = {};
   document.querySelectorAll(".card").forEach(c=>{
     const p=c._p, v=c.querySelector("input").value;
-    if(p.status==="verify") out[p.id] = {x: clamp(parseInt(v,10)), detector:p.detector,
-      vision:p.vision, truth:p.truth??null, conf:p.conf??null};
+    if(p.status==="verify" || p.status==="failed")
+      out[p.id] = {x: clamp(parseInt(v,10)), detector:p.detector,
+        vision:p.vision, truth:p.truth??null, conf:p.conf??null};
   });
   const blob = new Blob([JSON.stringify(out,null,1)],{type:"application/json"});
   const a=document.createElement("a");
@@ -234,7 +250,8 @@ function exportLabels(){
 
 async function main(){
   render({host:"verify", items:DATA.filter(p=>p.status==="verify")});
-  render({host:"labeled", items:DATA.filter(p=>p.status!=="verify")});
+  render({host:"failed", items:DATA.filter(p=>p.status==="failed")});
+  render({host:"labeled", items:DATA.filter(p=>p.status==="labeled")});
   // load images then paint
   for(const c of document.querySelectorAll(".card")){
     const p=c._p;
@@ -251,26 +268,32 @@ main();
 
 def main() -> int:
     merged = json.loads((SRC / "merged.json").read_text())
-    # order: verify first (the ones that need a human), then labeled
+    # order: verify first (the ones that need a human), then failed, then labeled
     verify = [p for p in merged if p["status"] == "verify"]
-    labeled = [p for p in merged if p["status"] != "verify"]
+    failed = [p for p in merged if p["status"] == "failed"]
+    labeled = [p for p in merged if p["status"] == "labeled"]
     verify.sort(key=lambda p: abs((p.get("detector") or 0) - (p.get("vision") or 0)), reverse=True)
+    failed.sort(key=lambda p: p.get("attempts") or 0, reverse=True)
     labeled.sort(key=lambda p: p["id"])
 
     OUT.mkdir(parents=True, exist_ok=True)
     dst = OUT / "img"
     dst.mkdir(exist_ok=True)
     n = 0
-    for p in merged:
-        for f in (p["bg"], p["piece"]):
-            s = IMG_SRC / f
-            if s.exists():
-                shutil.copyfile(s, dst / f)
-                n += 1
+    if dst.resolve() != IMG_SRC.resolve():
+        for p in merged:
+            for f in (p["bg"], p["piece"]):
+                s = IMG_SRC / f
+                if s.exists():
+                    shutil.copyfile(s, dst / f)
+                    n += 1
+    else:
+        n = len(list(dst.glob("*.png")))
 
     payload = [{k: p.get(k) for k in ("id", "bg", "piece", "detector", "flat_dark",
-                                      "vision", "conf", "truth", "source", "status")}
-               for p in verify + labeled]
+                                      "vision", "conf", "truth", "source", "status",
+                                      "attempts", "fails")}
+               for p in verify + failed + labeled]
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -279,7 +302,7 @@ def main() -> int:
 <body>
 <header>
   <h1>Aliyun slider — gap X review</h1>
-  <span class="meta">{len(verify)} to verify · {len(labeled)} labeled · {n//2} puzzles</span>
+  <span class="meta">{len(verify)} to verify · {len(failed)} failed · {len(labeled)} labeled · {len(merged)} puzzles</span>
   <span class="spacer"></span>
   <button class="primary" id="export">Export my labels</button>
 </header>
@@ -295,6 +318,13 @@ def main() -> int:
     <div class="grid" id="verify"></div>
   </section>
   <section>
+    <h2>Failed <span class="count">{len(failed)}</span></h2>
+    <p class="hint">The solver never landed these (aim off &gt;5px, so the drag missed).
+    Labeling them is the human-feedback step: the X you set is stored and the same
+    puzzle is then answered for free next time (see <code>slider_attempts.py</code>).</p>
+    <div class="grid" id="failed"></div>
+  </section>
+  <section>
     <h2>Labeled <span class="count">{len(labeled)}</span></h2>
     <p class="hint">Already trusted: real slider passes, team-confirmed labels, or the
     detector and vision model agree. Read-only — spot-check if you like.</p>
@@ -302,17 +332,18 @@ def main() -> int:
   </section>
   <p><button id="export2">Export my labels</button>
      <span class="mini">— downloads <code>slider_verified.json</code> with your X for every
-     card in "Needs verification".</span></p>
+     card in "Needs verification" and "Failed".</span></p>
 </main>
 <footer>Generated by <code>scripts/slider_review_html.py</code> from
-<code>/tmp/slider_review/merged.json</code>. Images: Aliyun slider puzzles captured by the
-z.ai signup flow.</footer>
+<code>reports/slider_review/merged.json</code> — one folder holds the images, the
+attempt dataset, every label source, and this page. Images: Aliyun slider puzzles
+captured by the z.ai signup flow.</footer>
 <script>{JS.replace("__DATA__", json.dumps(payload))}</script>
 </body></html>
 """
     (OUT / "index.html").write_text(html)
     print("wrote", OUT / "index.html", f"({len(html)//1024} KB, {n} images)")
-    print("  verify:", len(verify), " labeled:", len(labeled))
+    print("  verify:", len(verify), " failed:", len(failed), " labeled:", len(labeled))
     return 0
 
 

@@ -45,10 +45,17 @@ COEF = (0.0036, 0.0631, 0.6007)  # refit from 148 probes (rms 0.18px), 2026-10-1
 # this many px, skip the (benchmark ~50%) drag and go straight to vision.
 DISAGREE_GATE = 4
 NINE_ROUTER_HOME = Path(os.environ.get("NINE_ROUTER_HOME", Path.home() / ".9router"))
-# cbai/glm-5v-turbo: the ag/gemini routes HANG on image content (60s+ no reply,
-# burned the mint); cbai answers in ~1s. Accuracy on labeled puzzles is only
-# ~1/6, but that still beats the blind sweep prior -- and costs nothing.
-VISION_MODEL = os.environ.get("CAPTCHA_VISION_MODEL", "cbai/glm-5v-turbo")
+# HTTP vision was a trap: every free vision model on the pool (cbai/glm-5v-turbo,
+# qwen3-vl, kimi-k2.5, glm-4.6v-flash) answers with a round constant (100/146/150)
+# instead of reading the seam -- measured 12/12 wrong, 0 exact on the labels, and
+# the old prompt's "Example: 146" made it worse (94 dataset rows all aimed at 150).
+# Worse, the confidence gate let that constant OVERRIDE a good detector guess, so
+# the solver dragged to 150 and missed ~always. Vision is therefore OFF by default;
+# set CAPTCHA_VISION_MODEL to re-enable it behind a real (verified) model.
+VISION_MODEL = os.environ.get("CAPTCHA_VISION_MODEL", "")
+# Accepted landing range for a gap X. The 41 user-verified labels span 15..240, so
+# clamping to [100,300] silently threw away the low-X puzzles (x=15/81/89/...).
+GAP_MIN, GAP_MAX = 0, 300
 
 IDS = {
     "bg": "aliyunCaptcha-img",
@@ -287,6 +294,60 @@ def _r9_key(base: str = "http://localhost:20128") -> str:
     return ""
 
 
+def gap_by_label(bg_b64: str, piece_b64: str) -> int | None:
+    """Answer from the accumulated label store: if this exact puzzle image was
+    solved/labeled before, reuse the known X (content-hash keyed).
+
+    This is the RLHF payoff -- every pass and every user-verified label makes
+    future repeats FREE and exact. Store lives in the slider folder
+    (slider_labels_store.json); see slider_attempts.mine_labels().
+    """
+    store = _label_store()
+    if not store:
+        return None
+    h = hashlib.sha256(_png_bytes(bg_b64)).hexdigest()[:16]
+    v = store.get(h)
+    if v is None:
+        return None
+    try:
+        x = int(v.get("x") if isinstance(v, dict) else v)
+    except (TypeError, ValueError):
+        return None
+    return x if GAP_MIN <= x <= GAP_MAX else None
+
+
+_LABEL_STORE_CACHE: dict | None = None
+
+
+def _label_store() -> dict:
+    global _LABEL_STORE_CACHE
+    if _LABEL_STORE_CACHE is not None:
+        return _LABEL_STORE_CACHE
+    out: dict = {}
+    for name in ("slider_labels_store.json", "slider_mined.json",
+                 "slider_verified.json"):
+        p = DATA_DIR.parent / name
+        if not p.exists():
+            continue
+        try:
+            raw = json.loads(p.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        for k, v in (raw or {}).items():
+            if k in out:
+                continue
+            # verified/mined key on the image id (not a content hash); map both
+            out.setdefault(k, v)
+            fp = DATA_DIR / f"{k}_bg.png"
+            if fp.exists():
+                try:
+                    out[hashlib.sha256(fp.read_bytes()).hexdigest()[:16]] = v
+                except OSError:
+                    pass
+    _LABEL_STORE_CACHE = out
+    return out
+
+
 def gap_by_vision(bg_b64: str, piece_b64: str, *, model: str = VISION_MODEL,
                   base: str = "http://localhost:20128", timeout: float = 15) -> int | None:
     """Ask a vision model where the piece belongs. Returns the x pixel, or None."""
@@ -298,12 +359,14 @@ def gap_by_vision(bg_b64: str, piece_b64: str, *, model: str = VISION_MODEL,
     if "," not in piece_b64:
         piece_b64 = "data:image/png;base64," + piece_b64
     ask = (
-        "Task: Solve an Aliyun inpaint restore slider puzzle.\n"
-        "Image 1 is the 300x150 background canvas with a displaced vertical slice.\n"
-        "Image 2 is the puzzle slice.\n"
-        "Find the horizontal X pixel column (integer between 10 and 290) in Image 1 "
-        "where Image 2 restores the background.\n"
-        "Return ONLY the single integer X coordinate. Example: 146"
+        "Look at the two images.\n"
+        "Image 1 is a photo with a vertical strip cut out and inpainted (the strip "
+        "leaves a visible seam / texture discontinuity).\n"
+        "Image 2 is the strip that was removed.\n"
+        "Give the horizontal pixel X (0-299) of the LEFT edge of the cut in Image 1.\n"
+        "Answer with ONE integer only, no words.\n"
+        "IMPORTANT: the answer varies per image. Do NOT default to a round number; "
+        "measure the seam you actually see."
     )
     body = {
         "model": model, "stream": False, "max_tokens": 20,
@@ -776,8 +839,11 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
     """
     # target = where the piece's LEFT should end up. Order: detector guess first
     # (blur/smear metric is right ~25% and exact when right), then a data-driven
-    # sweep of the observed range.
-    SWEEP = [205, 195, 185, 215, 225, 235, 175, 165, 245, 155, 240, 170, 250, 160]
+    # sweep of the observed range. The 41 user labels span 15..240 (7 below
+    # 130), so the old 155-min sweep could never reach the low-X puzzles; the
+    # band below widens downward while keeping the dense 150-240 core first.
+    SWEEP = [205, 195, 185, 215, 175, 165, 225, 235, 155, 145, 135, 245, 125,
+             240, 170, 250, 160, 115, 105, 95, 85, 75, 65, 55, 45, 35, 25, 15]
 
     if not await _wait_open(page):
         log("  [slider] widget would not open")
@@ -810,13 +876,20 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         images = _save_puzzle_images(pid, imgs[0], imgs[1]) if imgs else {}
         guess = None
         if imgs:
-            guess = gap_by_diff(imgs[0], imgs[1])
+            # 0. Label store first: a puzzle we've already solved/labeled is a
+            #    free, exact answer (the RLHF reuse payoff). Content-hash keyed.
+            guess = gap_by_label(imgs[0], imgs[1])
+            if guess is None:
+                guess = gap_by_diff(imgs[0], imgs[1])
             # Confidence gate: two diverse scorers agreeing => ~80% precision
             # (benchmark); disagreeing => ~50%, so skip the doomed drag and
-            # spend the vision call before touching the slider.
+            # spend the vision call before touching the slider. NOTE: vision is
+            # OFF by default (free pool models answer a round constant); only a
+            # verified CAPTCHA_VISION_MODEL is trusted, and it never overrides a
+            # confident label-store hit.
             g2 = flat_dark_guess(imgs[0], imgs[1]) if guess is not None else None
-            if (missed or guess is None
-                    or (g2 is not None and abs(guess - g2) > DISAGREE_GATE)):
+            if (model and (missed or guess is None
+                    or (g2 is not None and abs(guess - g2) > DISAGREE_GATE))):
                 v = None
                 if images:
                     v = gap_by_cmd(DATA_DIR / images["bg"], DATA_DIR / images["piece"])
@@ -825,10 +898,10 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
                         v = gap_by_vision(imgs[0], imgs[1], model=model)
                     except Exception:  # noqa: BLE001
                         v = None
-                if v and 100 <= v <= 300:
+                if v is not None and GAP_MIN <= v <= GAP_MAX:
                     guess = v
-        targets = ([guess] if guess and 100 <= guess <= 300 else []) + \
-                  [t for t in SWEEP if t != guess]
+        targets = ([guess] if guess is not None and GAP_MIN <= guess <= GAP_MAX
+                   else []) + [t for t in SWEEP if t != guess]
         t = targets[0]
         box = await _slider_box(page)
         if not box:
