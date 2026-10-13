@@ -98,6 +98,40 @@ class TestAppErrorDetection(unittest.TestCase):
             FakeResponse(b'{"code":1005,"msg":"exceed quota limit"}'))
         self.assertIsNotNone(err, "an error body must not be returned as success")
 
+    def test_call_upstream_flags_json_error_even_for_stream_requests(self):
+        """A spent bucket answers a `stream: true` request with plain JSON, so
+        the bridge must still detect it (omp streams, and this is what stuck Janus)."""
+        body = b'{"code":1005,"msg":"exceed quota limit","logid":"x"}'
+
+        import urllib.request
+        orig = urllib.request.urlopen
+        urllib.request.urlopen = lambda req, timeout=None: FakeResponse(body)
+        try:
+            for stream in (True, False):
+                resp, err = self.m.call_upstream(
+                    {"model": "GLM-5.3", "stream": stream,
+                     "messages": [{"role": "user", "content": "hi"}]}, "a@b.c")
+                self.assertIsNone(resp, "stream=%s must not return a response" % stream)
+                self.assertIsInstance(err, self.m.UpstreamAppError)
+                self.assertEqual(err.app_code, 1005)
+        finally:
+            urllib.request.urlopen = orig
+
+    def test_healthy_sse_is_not_peeked(self):
+        """text/event-stream must pass through untouched (no blocking read)."""
+        import urllib.request
+        orig = urllib.request.urlopen
+        urllib.request.urlopen = lambda req, timeout=None: FakeResponse(
+            b'data: {"type":"message_start"}\n\n', "text/event-stream; charset=utf-8")
+        try:
+            resp, err = self.m.call_upstream(
+                {"model": "GLM-5.3", "stream": True,
+                 "messages": [{"role": "user", "content": "hi"}]}, "a@b.c")
+            self.assertIsNone(err)
+            self.assertIn(b"message_start", resp.read())
+        finally:
+            urllib.request.urlopen = orig
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -421,9 +421,12 @@ def call_upstream(payload, email="", timeout=600):
         # completion_tokens=0, finish_reason=stop), which clients report as
         # "Assistant returned empty stop". Surface it as an error instead so
         # failover can pick another account/model.
-        # Skipped for SSE: peeking would block the live stream (read(n) waits
-        # for n bytes), and a streamed error arrives as an `error` event anyway.
-        if not payload.get("stream"):
+        #
+        # A healthy stream is `text/event-stream`; a spent bucket answers even a
+        # stream request with a plain `application/json` error body. Only sniff
+        # non-SSE responses so we never block on a live stream.
+        ctype = (resp.headers.get("content-type") or "").lower()
+        if "text/event-stream" not in ctype:
             app_err, resp = _peek_app_error(resp)
             if app_err is not None:
                 return None, app_err
