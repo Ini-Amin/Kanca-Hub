@@ -216,7 +216,12 @@ def cmd_run(a) -> int:
     print(f"target: farm {n} TokenHarbor account(s), then inject into 9Router")
     print()
 
-    steps: list[list[str]] = [["proxy", "verify"]]
+    # The verify gate must prove the SAME egress the batch will use, otherwise it
+    # probes the default :8888 gateway and aborts even when --proxy is masked.
+    verify = ["proxy", "verify"]
+    if a.proxy:
+        verify += ["--proxy", a.proxy]
+    steps: list[list[str]] = [verify]
     batch = ["thk", "batch", str(n)]
     if a.proxy:
         batch += ["--proxy", a.proxy]
