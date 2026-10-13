@@ -38,24 +38,30 @@ async def main():
         ctx=b.contexts[0] if b.contexts else await b.new_context()
         page=await ctx.new_page()
         await page.goto(url, wait_until="domcontentloaded", timeout=60000); await page.wait_for_timeout(4000)
+        cap = False
         try:
             await page.get_by_text("Continue with Email").first.click(timeout=6000); await page.wait_for_timeout(2000)
             await page.fill('input[type="email"]', EMAIL); await page.fill('input[type="password"]', PW)
-            print("captcha:", await CS.solve_aliyun(page, puzzles=25), flush=True)
-            # A DOM .click() on "Sign in" does NOT submit the React form -- the
-            # page just sits on /auth. A REAL mouse click (get_by_text().click())
-            # does submit: POST /auths/signin -> /auth/oauth/authorize (consent).
-            # (This is why minting a fresh account silently failed before.)
-            try:
-                await page.get_by_text("Sign in", exact=True).last.click(timeout=6000)
-            except Exception:
-                await page.evaluate(JS, "Sign in")
-            await page.wait_for_timeout(6000)
+            cap = await CS.solve_aliyun(page, puzzles=25)
+            print("captcha:", cap, flush=True)
+            # Only submit once the captcha passed: with a failed captcha "Sign in"
+            # does not log in, and the page drifts onto the GitHub login chooser
+            # (the old github detour). A REAL mouse click is required anyway -- a
+            # DOM .click() does not submit this React form.
+            if cap:
+                try:
+                    await page.get_by_text("Sign in", exact=True).last.click(timeout=6000)
+                except Exception:
+                    await page.evaluate(JS, "Sign in")
+                await page.wait_for_timeout(6000)
         except Exception as e: print("signin skip:", str(e)[:40], flush=True)
-        # consent_hard clicks any "Continue" leaf — on the login chooser that is
-        # "Continue with Github" (github detour). Only run it off the login page.
-        chooser = await page.evaluate("() => document.body.innerText.includes('Continue with Github')")
-        ok = await accept_consent(page) if not chooser and "code=" not in page.url else False
+        if not cap:
+            print("captcha failed -> not submitting (no code)", flush=True)
+        # consent_hard clicks any "Continue" leaf -- on the login chooser that is
+        # "Continue with Github". Only run it on the real OAuth authorize page.
+        ok = False
+        if cap and "/auth/oauth/authorize" in page.url and "code=" not in page.url:
+            ok = await accept_consent(page)
         print("consent:", ok, "url:", page.url[:100], flush=True)
         q=urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
         code=(q.get('code') or [''])[0]

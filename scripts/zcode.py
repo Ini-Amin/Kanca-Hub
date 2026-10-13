@@ -133,7 +133,8 @@ def cmd_account_add(a):
             f.write("%s=%s\n" % (key, a.email))
         print("bridge key for 9router:", key)
     if not a.no_mint:
-        cmd_mint(argparse.Namespace(email=a.email))
+        # cmd_mint reads a.all and a.password; a bare Namespace(email=...) crashes.
+        cmd_mint(argparse.Namespace(email=a.email, all=False, password=a.pw))
     os.makedirs(p("jwt"), exist_ok=True)
     # Minting only makes the bridge serve the account; 9Router also needs a
     # providerConnection row (name Zcode<N>, apiKey = the bridge key). Without it
