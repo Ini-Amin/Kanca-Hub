@@ -65,20 +65,61 @@ def log(msg: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────── gentle locking
+import threading
+
+_LOCK_T = threading.RLock()
+_LOCK_ST = {"fh": None, "depth": 0}
+
+
 @contextmanager
 def _lock():
-    """Serialise account operations across processes/subagents so we never
-    hammer zmine.si from several workers at once."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    fh = open(LOCKFILE, "a+")
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        yield
-    finally:
+    """Serialise state-file writes across processes/subagents. Reentrant inside a
+    process (one shared fd) so nested use can never self-deadlock."""
+    with _LOCK_T:
+        if _LOCK_ST["depth"] == 0:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            fh = open(LOCKFILE, "a+")
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            _LOCK_ST["fh"] = fh
+        _LOCK_ST["depth"] += 1
         try:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            yield
         finally:
-            fh.close()
+            _LOCK_ST["depth"] -= 1
+            if _LOCK_ST["depth"] == 0:
+                fh = _LOCK_ST["fh"]
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+                finally:
+                    fh.close()
+                _LOCK_ST["fh"] = None
+
+
+# Account creation is the sybil-sensitive call, so it is spaced GLOBALLY across
+# every process/subagent (a shared timestamp file), not merely per worker. Task
+# answering stays per-account paced, so parallel workers still make progress.
+REG_GAP = float(os.environ.get("ZMINE_REG_GAP", "35"))
+GATE_FILE = STATE_DIR / "zmine_reg_gate.json"
+
+
+def _register_gate():
+    """Block until at least REG_GAP seconds since the last registration anywhere.
+    The lock is held only to read+reserve the slot; the sleep happens OUTSIDE it
+    so parallel workers can keep answering tasks while they wait their turn."""
+    while True:
+        with _lock():
+            now = time.time()
+            try:
+                last = float(json.loads(GATE_FILE.read_text()).get("ts") or 0)
+            except Exception:  # noqa: BLE001
+                last = 0.0
+            wait = REG_GAP - (now - last)
+            if wait <= 0:
+                GATE_FILE.write_text(json.dumps({"ts": now}))
+                return
+        log(f"    [gate] waiting {wait:.0f}s for the next registration slot")
+        time.sleep(min(wait, 5.0) + random.uniform(0, 1.0))
+
 
 
 # ─────────────────────────────────────────────────────────────── http plumbing
@@ -113,7 +154,10 @@ def _req(op, path, *, method="GET", body=None, cookie=None, timeout=30):
 
 
 # ─────────────────────────────────────────────────────────────── account ops
-def register(display_name: str, ref: str | None = None, op=None, jar=None):
+def register(display_name: str, ref: str | None = None, op=None, jar=None,
+             gate: bool = True):
+    if gate:
+        _register_gate()
     op, jar = _opener() if op is None else (op, jar)
     code, j = _req(op, "/auth/register", method="POST",
                    body={"displayName": display_name, "referralCode": ref or None})
@@ -353,11 +397,9 @@ def farm(count: int, ref: str | None, *, pace: float = 45.0, model: str = TASK_M
     session and answer its tasks. Never hammers: `pace` seconds between accounts."""
     made = []
     for i in range(count):
-        if i:
-            time.sleep(pace + random.uniform(0, pace * 0.3))
+        name = _rand_name()
         with _lock():
-            name = _rand_name()
-            code, j = register(name, ref)
+            code, j = register(name, ref)  # register() waits on the global gate
             if code not in (200, 201) or not j.get("loginKey"):
                 log_fn(f"[{i + 1}/{count}] register {name} -> {code} {str(j)[:160]}")
                 if "already" in str(j).lower() or "unique" in str(j).lower() \
@@ -374,6 +416,26 @@ def farm(count: int, ref: str | None, *, pace: float = 45.0, model: str = TASK_M
             made.append(rec)
             do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn)
     return made
+
+
+def worker(ref: str | None = None, *, model: str = TASK_MODEL, want: int = 12,
+           log_fn=log) -> dict:
+    """One unit of delegated work: register a single miner, start its session and
+    answer its tasks. Safe to run from many subagents at once — registrations are
+    serialised by the global gate, so the site is never hammered."""
+    name = _rand_name()
+    with _lock():
+        code, j = register(name, ref)   # register() itself waits on the global gate
+    if code not in (200, 201) or not j.get("loginKey"):
+        log_fn(f"register {name} -> {code} {str(j)[:160]}")
+        return {"ok": False, "code": code}
+    rec = {"displayName": name, "handle": (j.get("user") or {}).get("handle"),
+           "loginKey": j.get("loginKey"), "recoveryPhrase": j.get("recoveryPhrase"),
+           "ref": ref, "ts": time.time()}
+    with _lock():
+        _save_account(rec)
+    log_fn(f"registered {name} handle={rec['handle']}")
+    return do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn)
 
 
 def tick(*, model: str = TASK_MODEL, want: int = 12, pace: float = 20.0, log_fn=log) -> None:
@@ -405,6 +467,10 @@ def main(argv=None) -> int:
     s.add_argument("--model", default=TASK_MODEL)
     s.add_argument("--want", type=int, default=12)
     s = sub.add_parser("tasks"); s.add_argument("--login-key")
+    s = sub.add_parser("worker")
+    s.add_argument("--ref", default="RCFZ9GA7")
+    s.add_argument("--model", default=TASK_MODEL)
+    s.add_argument("--want", type=int, default=12)
     s = sub.add_parser("status")
 
     a = ap.parse_args(argv)
@@ -430,6 +496,8 @@ def main(argv=None) -> int:
         for k in keys:
             with _lock():
                 do_account(k)
+    elif a.cmd == "worker":
+        worker(a.ref, model=a.model, want=a.want)
     elif a.cmd == "status":
         accts = _load_accounts()
         log(f"{len(accts)} account(s) in {ACCOUNTS}")

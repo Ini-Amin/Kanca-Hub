@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the ZMINE daily tick (session renew + tasks), 6x a day
+
+[Timer]
+# The 12-task cap resets every 24 h and credits last 24 h, so running a few
+# times a day both renews the session inside its last 30 min (keeps the streak
+# multiplier) and picks up any tasks missed on a prior run.
+OnCalendar=*-*-* 00,04,08,12,16,20:15
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target
