@@ -2,13 +2,15 @@
 Description=Farm z.ai accounts on LightVela, ingest them into the ZCode bridge
 # LightVela is always-on and has a masked WARP egress, so it does the signup;
 # this laptop owns the bridge + CDP Chrome, so it mints (the watcher does that).
-# Replaces the THK loop, whose supply is dead.
+# Replaces the THK loop, whose supply is dead. Same script as the Railway farm,
+# selected with FARM_HOST.
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Auto-FreeCF
 Environment=PYTHONDONTWRITEBYTECODE=1
-Environment=LV_FARM_MAX=3
-ExecStart=%h/Auto-FreeCF/scripts/lv_zai_farm.sh
+Environment=FARM_HOST=lightvela
+Environment=FARM_COUNT=3
+ExecStart=/bin/bash -c '%h/Auto-FreeCF/scripts/rail_zai_farm.sh ${FARM_COUNT}'
 TimeoutStartSec=2400
 Nice=10

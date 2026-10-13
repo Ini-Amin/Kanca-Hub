@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-Inject TokenHarbor API keys (from harbor/tokenharbor) into 9Router.
+Inject free-provider API keys into 9Router.
 
-9Router ships an openai-compatible "TokenHarbor" provider node:
-    id   : openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a
-    data : {"prefix":"THK","apiType":"chat","baseUrl":"https://tokenharbor.ai/v1"}
+One upsert path (ensure node -> upsert one providerConnections row per key ->
+backup the DB), two key sources selected with --kind:
 
-This reads harbor's account.json (list of {email,password,api_key,...} where
-api_key is `thk_live_...`) and upserts one providerConnections row per key.
+  thk    TokenHarbor keys. Source: harbor/account.json (api_key is `thk_live_...`).
+         Node: openai-compatible "TokenHarbor", base https://tokenharbor.ai/v1
+  zcode  ZCode bridge keys. Source: ~/.zcode-bridge/keys.txt (`key=email`).
+         Node: openai-compatible "Zcode", base http://127.0.0.1:8787/v1
+         One row per ACCOUNT even when an account has several bridge keys.
 
 Usage:
-    python3 inject_thk_9router.py -i <repo>/harbor/account.json
+    python3 inject_thk_9router.py                        # thk, default account.json
     python3 inject_thk_9router.py -i account.json --verify --dry-run
-    python3 inject_thk_9router.py -i account.json --model deepseek-v4.1-flash:free
+    python3 inject_thk_9router.py --kind zcode           # every ZCode bridge account
+    python3 inject_thk_9router.py --kind zcode --dry-run
 """
 
 from __future__ import annotations
@@ -32,19 +35,16 @@ from pathlib import Path
 
 NINE_ROUTER_HOME = Path(os.environ.get("NINE_ROUTER_HOME", Path.home() / ".9router"))
 DB_PATH = NINE_ROUTER_HOME / "db" / "data.sqlite"
-
-THK_NODE_ID = "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a"
-THK_NODE_NAME = "TokenHarbor"
-THK_PREFIX = "THK"
-THK_BASE = "https://tokenharbor.ai/v1"
-THK_DEFAULT_MODEL = "deepseek-v4.1-flash:free"
+REPO = Path(__file__).resolve().parent.parent
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def load_accounts(path: str) -> list[dict]:
+# ─────────────────────────────────────────────────────────────── key sources
+def load_harbor(path: str) -> list[dict]:
+    """[(key, name)] from harbor's account.json."""
     data = json.loads(Path(path).read_text())
     if isinstance(data, dict):
         # harbor's _save_account writes a bare single-account object when the
@@ -53,20 +53,30 @@ def load_accounts(path: str) -> list[dict]:
             data = [data]
         else:
             data = data.get("accounts") or data.get("results") or []
-    return [a for a in data if isinstance(a, dict)]
-
-
-def valid_keys(accounts: list[dict]) -> list[dict]:
     out = []
-    for a in accounts:
+    for i, a in enumerate([x for x in data if isinstance(x, dict)], 1):
         k = (a.get("api_key") or a.get("key") or "").strip()
         if k.startswith("thk_"):
-            out.append(a)
+            out.append({"key": k, "name": a.get("email") or f"thk-{i}", "email": a.get("email")})
     return out
 
 
-def verify_key(key: str, model: str, timeout: int = 30) -> tuple[bool, str]:
-    url = f"{THK_BASE}/chat/completions"
+def load_zcode(path: str) -> list[dict]:
+    """[(key, email)] from ~/.zcode-bridge/keys.txt (`key=email`)."""
+    out = []
+    p = Path(path)
+    if not p.exists():
+        return out
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, email = line.split("=", 1)
+            out.append({"key": k.strip(), "name": email.strip(), "email": email.strip()})
+    return out
+
+
+def verify_http(base: str, key: str, model: str, timeout: int = 30) -> tuple[bool, str]:
+    url = f"{base}/chat/completions"
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": "hi"}],
                        "max_tokens": 1}).encode()
     req = urllib.request.Request(url, data=body, method="POST",
@@ -81,48 +91,77 @@ def verify_key(key: str, model: str, timeout: int = 30) -> tuple[bool, str]:
         return False, type(e).__name__
 
 
-def backup_db(db: Path) -> Path | None:
+SOURCES = {
+    "thk": {
+        "node_id": "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a",
+        "node_name": "TokenHarbor",
+        "prefix": "THK",
+        "base": "https://tokenharbor.ai/v1",
+        "model": "deepseek-v4.1-flash:free",
+        "default_input": str(REPO / "harbor" / "account.json"),
+        "load": load_harbor,
+        "verify": True,
+        "one_per_email": False,
+    },
+    "zcode": {
+        "node_id": "openai-compatible-chat-357dffc2-100b-4534-86e4-78cab29ba14b",
+        "node_name": "Zcode",
+        "prefix": "Zcode",
+        "base": "http://127.0.0.1:8787/v1",
+        "model": "GLM-5.3",
+        "default_input": str(Path.home() / ".zcode-bridge" / "keys.txt"),
+        "load": load_zcode,
+        "verify": False,          # the bridge 401s for an unminted account; no cheap probe
+        "one_per_email": True,    # an account may hold >1 bridge key; keep one row
+    },
+}
+
+
+# ─────────────────────────────────────────────────────────────── db helpers
+def backup_db(db: Path, tag: str) -> Path | None:
     if not db.exists():
         return None
-    dest = db.with_suffix(f".sqlite.thk-{time.strftime('%Y%m%d-%H%M%S')}.bak")
+    dest = db.with_suffix(f".sqlite.{tag}-{time.strftime('%Y%m%d-%H%M%S')}.bak")
     shutil.copy2(db, dest)
     return dest
 
 
-def ensure_node(con: sqlite3.Connection, dry_run: bool) -> str:
-    """Ensure the TokenHarbor node exists; return its id."""
+def ensure_node(con: sqlite3.Connection, src: dict, dry_run: bool) -> str:
+    """Ensure the source's provider node exists; return its id."""
     cur = con.cursor()
-    row = cur.execute("SELECT id FROM providerNodes WHERE id = ?", (THK_NODE_ID,)).fetchone()
-    if row:
-        return THK_NODE_ID
-    # try to find any node with the same prefix
+    if cur.execute("SELECT id FROM providerNodes WHERE id = ?", (src["node_id"],)).fetchone():
+        return src["node_id"]
     for nid, data in cur.execute("SELECT id, data FROM providerNodes"):
         try:
-            if json.loads(data or "{}").get("prefix") == THK_PREFIX:
+            if json.loads(data or "{}").get("prefix") == src["prefix"]:
                 return nid
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
     ts = now_iso()
-    node_data = {"prefix": THK_PREFIX, "apiType": "chat", "baseUrl": THK_BASE}
+    node_data = {"prefix": src["prefix"], "apiType": "chat", "baseUrl": src["base"]}
     if not dry_run:
         cur.execute(
             "INSERT INTO providerNodes (id, type, name, data, createdAt, updatedAt) VALUES (?,?,?,?,?,?)",
-            (THK_NODE_ID, "openai-compatible", THK_NODE_NAME, json.dumps(node_data), ts, ts),
+            (src["node_id"], "openai-compatible", src["node_name"], json.dumps(node_data), ts, ts),
         )
-    print(f"  + node created: {THK_NODE_NAME}")
-    return THK_NODE_ID
+    print(f"  + node created: {src['node_name']}")
+    return src["node_id"]
 
 
-def upsert(con: sqlite3.Connection, node_id: str, key: str, name: str,
-           model: str, dry_run: bool) -> str:
+def _psd(src: dict) -> dict:
+    return {"prefix": src["prefix"], "apiType": "chat", "baseUrl": src["base"],
+            "nodeName": src["node_name"], "connectionProxyEnabled": False,
+            "connectionProxyUrl": "", "connectionNoProxy": ""}
+
+
+def upsert(con: sqlite3.Connection, node_id: str, src: dict, key: str, name: str,
+           dry_run: bool) -> str:
+    """Insert or refresh one connection. Returns "updated" or "inserted"."""
     cur = con.cursor()
     ts = now_iso()
-    psd = {"prefix": THK_PREFIX, "apiType": "chat", "baseUrl": THK_BASE, "nodeName": THK_NODE_NAME,
-           "connectionProxyEnabled": False, "connectionProxyUrl": "", "connectionNoProxy": ""}
-    data = {"defaultModel": model, "apiKey": key, "testStatus": "active",
-            "providerSpecificData": psd, "errorCode": None, "backoffLevel": 0,
-            f"modelLock_{model}": None}
-
+    data = {"defaultModel": src["model"], "apiKey": key, "testStatus": "active",
+            "providerSpecificData": _psd(src), "errorCode": None, "backoffLevel": 0,
+            f"modelLock_{src['model']}": None}
     existing = None
     for cid, cdata in cur.execute("SELECT id, data FROM providerConnections WHERE provider = ?", (node_id,)):
         if key in (cdata or ""):
@@ -133,7 +172,7 @@ def upsert(con: sqlite3.Connection, node_id: str, key: str, name: str,
             cur.execute("UPDATE providerConnections SET data=?, isActive=1, name=?, updatedAt=? WHERE id=?",
                         (json.dumps(data), name, ts, existing))
         print(f"  ~ updated  {name}")
-        return existing
+        return "updated"
     new_id = str(uuid.uuid4())
     if not dry_run:
         cur.execute(
@@ -142,66 +181,106 @@ def upsert(con: sqlite3.Connection, node_id: str, key: str, name: str,
             (new_id, node_id, "apikey", name, None, 1, 1, json.dumps(data), ts, ts),
         )
     print(f"  + inserted {name}")
-    return new_id
+    return "inserted"
+
+
+def next_name(con: sqlite3.Connection, node_id: str, src: dict, pending: set) -> str:
+    """Zcode1, Zcode2, ... — the first free N (skipping ones we are about to add)."""
+    import re
+    used = set(pending)
+    for (name,) in con.execute("SELECT name FROM providerConnections WHERE provider = ?", (node_id,)):
+        m = re.fullmatch(re.escape(src["prefix"]) + r"(\d+)", name or "")
+        if m:
+            used.add(int(m.group(1)))
+    n = 1
+    while n in used:
+        n += 1
+    pending.add(n)
+    return "%s%d" % (src["prefix"], n)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Inject TokenHarbor keys into 9Router")
-    ap.add_argument("-i", "--input", default=str(Path(__file__).resolve().parent.parent / "harbor" / "account.json"),
-                    help="harbor account.json")
+    ap = argparse.ArgumentParser(description="Inject free-provider keys into 9Router")
+    ap.add_argument("--kind", choices=sorted(SOURCES), default="thk",
+                    help="which key source (default: thk)")
+    ap.add_argument("-i", "--input", default=None, help="key source path (default per --kind)")
     ap.add_argument("--db", default=str(DB_PATH))
-    ap.add_argument("--model", default=THK_DEFAULT_MODEL)
-    ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--model", default=None, help="override the default model")
+    ap.add_argument("--verify", action="store_true", help="probe each key before inserting")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    src = dict(SOURCES[args.kind])
+    if args.model:
+        src["model"] = args.model
+    inp = args.input or src["default_input"]
 
     if not Path(args.db).exists():
         print(f"✗ 9Router DB not found: {args.db}", file=sys.stderr)
         return 1
-    if not Path(args.input).exists():
-        print(f"✗ account.json not found: {args.input}", file=sys.stderr)
+    if not Path(inp).exists():
+        print(f"✗ key source not found: {inp}", file=sys.stderr)
         return 1
 
-    accounts = load_accounts(args.input)
-    keys = valid_keys(accounts)
-    print(f"Loaded {len(accounts)} accounts, {len(keys)} with thk_ keys.")
-    if not keys:
+    entries = src["load"](inp)
+    print(f"[{args.kind}] loaded {len(entries)} key(s) from {inp}")
+    if not entries:
         print("Nothing to inject.")
         return 0
 
-    if args.verify:
-        print("Verifying keys against TokenHarbor…")
+    if args.verify and src["verify"]:
+        print(f"Verifying keys against {src['node_name']}…")
         kept = []
-        for a in keys:
-            k = a.get("api_key") or a["key"]
-            ok, detail = verify_key(k, args.model)
-            print(f"  {'✅' if ok else '❌'} {a.get('email','?'):34s} {detail}")
-            kept.append(a) if ok else None
-        keys = kept
-        if not keys:
+        for e in entries:
+            ok, detail = verify_http(src["base"], e["key"], src["model"])
+            print(f"  {'✅' if ok else '❌'} {(e.get('email') or '?'):34s} {detail}")
+            if ok:
+                kept.append(e)
+        entries = kept
+        if not entries:
             print("No keys passed verification.")
             return 1
 
     if not args.dry_run:
-        b = backup_db(Path(args.db))
+        b = backup_db(Path(args.db), args.kind)
         if b:
             print(f"Backup: {b}")
 
     con = sqlite3.connect(args.db)
+    added = updated = skipped = 0
     try:
         con.execute("PRAGMA journal_mode=WAL")
-        node_id = ensure_node(con, args.dry_run)
-        for i, a in enumerate(keys, 1):
-            key = a.get("api_key") or a["key"]
-            name = a.get("email") or f"thk-{i}"
-            upsert(con, node_id, key, name, args.model, args.dry_run)
+        node_id = ensure_node(con, src, args.dry_run)
+
+        # one_per_email: a key whose account already has a row is not a new row
+        covered = set()
+        if src["one_per_email"]:
+            by_key = {e["key"]: e.get("email") for e in entries}
+            for (_, cdata) in con.execute(
+                    "SELECT id, data FROM providerConnections WHERE provider = ?", (node_id,)):
+                for k, email in by_key.items():
+                    if k in (cdata or ""):
+                        covered.add(email)
+
+        pending: set = set()
+        for e in entries:
+            if src["one_per_email"] and e.get("email") in covered:
+                print(f"  = skip     {e['email']} (already has a connection)")
+                skipped += 1
+                continue
+            name = e["name"] if not src["one_per_email"] else next_name(con, node_id, src, pending)
+            if upsert(con, node_id, src, e["key"], name, args.dry_run) == "inserted":
+                added += 1
+            else:
+                updated += 1
         if not args.dry_run:
             con.commit()
     finally:
         con.close()
 
     verb = "would inject" if args.dry_run else "Injected"
-    print(f"\n{verb} {len(keys)} TokenHarbor key(s) into 9Router (provider {THK_NODE_NAME}).")
+    print(f"\n{verb} {added} new / {updated} refreshed / {skipped} skipped "
+          f"{args.kind} key(s) into 9Router (node {src['node_name']}).")
     return 0
 
 
