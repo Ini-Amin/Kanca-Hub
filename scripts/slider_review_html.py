@@ -73,7 +73,10 @@ h2 .count{font-family:var(--mono);color:var(--ink-2);font-weight:500}
 .lab .state{color:var(--ok)}
 .pair{display:flex;gap:8px;padding:9px;align-items:flex-start}
 canvas{display:block;border:1px solid var(--line);border-radius:4px;background:#222;
-  image-rendering:pixelated;cursor:crosshair}
+  image-rendering:pixelated;cursor:grab;touch-action:none}
+.card.dragging canvas{cursor:grabbing}
+.card.dragging{border-color:var(--ink)}
+.card.dragging canvas{box-shadow:0 0 0 2px var(--ink)}
 .fields{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
 label.row{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2)}
 label.row span.k{width:52px;flex:none;font-family:var(--mono)}
@@ -132,6 +135,46 @@ function clamp(v){ return (v==null||isNaN(v))?null:Math.max(0,Math.min(300,v)); 
 function load(img,src){ return new Promise(r=>{ img.onload=()=>r(img);
   img.onerror=()=>r(null); img.src=src; }); }
 
+// ---- drag the piece straight to the gap (the whole point of the page) ----
+function attachDrag(el){
+  const cv = el.querySelector("canvas");
+  const inp = el.querySelector("input");
+  let dragging = false;
+  // canvas is 300 CSS px wide (native 300) -> X == offsetX, but scale anyway
+  const xFromEvent = e => {
+    const r = cv.getBoundingClientRect();
+    return Math.round((e.clientX - r.left) * (cv.width / r.width));
+  };
+  const setX = v => { inp.value = clamp(v); inp.dispatchEvent(new Event("input")); };
+  cv.addEventListener("pointerdown", e => {
+    if(e.button!=null && e.button!==0) return;
+    dragging = true; el.classList.add("dragging");
+    cv.setPointerCapture(e.pointerId);
+    setX(xFromEvent(e));                 // click anywhere = snap there
+    e.preventDefault();
+  });
+  cv.addEventListener("pointermove", e => {
+    if(!dragging) return;
+    setX(xFromEvent(e));
+    e.preventDefault();
+  });
+  const stop = e => {
+    if(!dragging) return;
+    dragging = false; el.classList.remove("dragging");
+    try{ cv.releasePointerCapture(e.pointerId); }catch(_){}
+  };
+  cv.addEventListener("pointerup", stop);
+  cv.addEventListener("pointercancel", stop);
+  // left/right arrows also nudge, matching up/down in the number field
+  cv.tabIndex = 0;
+  cv.addEventListener("keydown", e => {
+    if(e.key==="ArrowLeft"||e.key==="ArrowRight"){
+      e.preventDefault();
+      setX((parseInt(inp.value,10)||0)+(e.key==="ArrowRight"?1:-1));
+    }
+  });
+}
+
 function card(p){
   const el = document.createElement("div");
   el.className = "card " + (p.status==="verify"?"verify":"lab");
@@ -140,7 +183,7 @@ function card(p){
   el.innerHTML =
     '<div class="cap"><span class="id">'+p.id.slice(0,10)+'</span>'+
     '<span class="state">'+(p.status==="verify"?"verify":"labeled")+'</span></div>'+
-    '<div class="pair"><canvas width="300" height="300"></canvas>'+
+    '<div class="pair"><canvas width="300" height="300" title="drag the piece to the slot"></canvas>'+
       '<div class="fields">'+
         '<label class="row"><span class="k">gap&nbsp;X</span>'+
           '<input type="number" min="0" max="300" step="1" value="'+start+'"></label>'+
@@ -155,6 +198,7 @@ function card(p){
         '<div class="err"></div>'+
       '</div></div>';
   el._p = p;
+  attachDrag(el);
   const inp = el.querySelector("input");
   inp.addEventListener("input", ()=>{ p.chosen = clamp(parseInt(inp.value,10)); draw(el); });
   inp.addEventListener("keydown", e=>{
@@ -242,9 +286,10 @@ def main() -> int:
 <main>
   <section>
     <h2>Needs verification <span class="count">{len(verify)}</span></h2>
-    <p class="hint">The diff detector and the vision model disagree on these. Look at the
-    background, find the dark slot, and type its left edge as <b>gap X</b>. The piece snaps
-    to the number you type. <kbd>↑</kbd><kbd>↓</kbd> or the wheel nudge by 1px. Dashed
+    <p class="hint">The diff detector and the vision model disagree on these. <b>Drag the
+    piece</b> until it drops into the dark slot — click anywhere to snap, drag to fine-tune.
+    The number updates as you move. <kbd>←</kbd><kbd>→</kbd> (on the image) or <kbd>↑</kbd><kbd>↓</kbd>
+    (in the box) nudge by 1px; the wheel nudges the focused box. Dashed
     <span class="det"><span class="swatch"></span>blue</span> = detector,
     <span class="vis"><span class="swatch"></span>red</span> = vision.</p>
     <div class="grid" id="verify"></div>
