@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import random
 import string
 import sys
@@ -31,7 +32,9 @@ sys.path.insert(0, str(SCRIPTS))
 
 AUTH = "https://chat.z.ai/auth"
 LEDGER = Path.home() / ".config" / "auto-freecf" / "zai_accounts.jsonl"
-MAIL_DOMAIN = "kancalabs.biz.id"
+# biz.id goes through the relay (needs a mail key); a throwaway box with no
+# secrets sets ZAI_MAIL_DOMAIN=kancalabs.my.id to use the keyless Tempik Worker.
+MAIL_DOMAIN = os.environ.get("ZAI_MAIL_DOMAIN", "kancalabs.biz.id")
 
 _JS_CLICK = """(text) => {
     const els=[...document.querySelectorAll('button,a,span,div')]
