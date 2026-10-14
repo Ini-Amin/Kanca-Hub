@@ -13,7 +13,7 @@ Usage:
 
 CLI (managed venv):
     /home/amen/.local/share/auto-freecf/venv/bin/python scripts/yowes_docs.py \
-        --first John --last Doe --school "Norton Elementary" --out /tmp/doc.png
+        --first John --last Doe --school "Norton Elementary" --out ~/.config/auto-freecf/doc.png
 """
 
 from __future__ import annotations

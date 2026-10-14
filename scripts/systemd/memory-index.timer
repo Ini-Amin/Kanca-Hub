@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly refresh of the shared agent memory index
+
+[Timer]
+OnCalendar=*-*-* 03:40
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

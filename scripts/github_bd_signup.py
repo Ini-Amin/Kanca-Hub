@@ -76,7 +76,13 @@ def _tinyfish_session(country: str = "US", api_key: str = "") -> str:
 
 
 def _username() -> str:
-    return "kanca" + "".join(random.choices(string.ascii_lowercase + string.digits, k=7))
+    # International, region-tagged handle from the shared persona module. The old
+    # hardcoded "kanca" prefix fingerprinted every account as one owner.
+    try:
+        from persona import username  # noqa: PLC0415
+        return username(max_len=20)
+    except Exception:  # noqa: BLE001
+        return "user_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=7))
 
 
 def _password() -> str:

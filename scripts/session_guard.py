@@ -149,6 +149,15 @@ def per_ip_report(path: Path | str | None = None) -> str:
     lines.append("          prefer a device node / mobile egress whose IP is stable during a session.")
     return "\n".join(lines)
 
+def bot_flag_section() -> str:
+    """Per-IP bot-protection cooldowns (ip_flag_guard) — same IP half of pacing."""
+    try:
+        import ip_flag_guard
+        t = ip_flag_guard.table()
+        return "  bot-flag cooldowns:\n" + ("\n".join("  " + ln for ln in t.splitlines()) if t != "no flagged IPs" else "    none")
+    except Exception as e:  # noqa: BLE001
+        return f"  bot-flag cooldowns: unavailable ({e})"
+
 
 def _cli() -> int:
     ap = argparse.ArgumentParser(description="CGNAT-aware session/IP stability guard")
@@ -185,6 +194,7 @@ def _cli() -> int:
             print(f"  {ip}  x{n}")
         return 0
     print(per_ip_report(args.path))
+    print(bot_flag_section())
     return 0
 
 

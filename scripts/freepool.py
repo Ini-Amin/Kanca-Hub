@@ -353,7 +353,7 @@ def main() -> int:
     f.add_argument("--workers", type=int, default=30)
     f.set_defaults(fn=cmd_filter)
     px = sub.add_parser("proxyma", help="write a verified keyless Proxyma pool")
-    px.add_argument("--out", default="/tmp/opencode/proxyma_ok.txt")
+    px.add_argument("--out", default=os.path.expanduser("~/.config/auto-freecf/proxyma_ok.txt"))
     px.add_argument("--max-time", type=float, default=10.0, help="drop nodes slower than this")
     px.set_defaults(fn=cmd_proxyma)
     sub.add_parser("show", help="what is on disk").set_defaults(fn=cmd_show)

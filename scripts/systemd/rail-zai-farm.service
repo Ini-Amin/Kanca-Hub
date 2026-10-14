@@ -1,0 +1,19 @@
+[Unit]
+Description=Farm z.ai accounts on a throwaway Railway 60-min VM (no account/claim)
+# Railway gives an unclaimed box 60 minutes. Bootstrap once, then sign up inside
+# the window; rail_zai_farm.sh rotates a fresh box ~4 min before expiry. Railway
+# caps ~3 boxes per IP per day, so this runs modestly (2 windows/day).
+# The box's own masked egress is what z.ai sees; records are pulled home and
+# ingested into the ZCode bridge by the same script.
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=FARM_HOST=railway
+Environment=FARM_PER_BOX=4
+Environment=FARM_MARGIN=4
+Environment=FARM_COUNT=8
+ExecStart=/bin/bash -c '%h/Auto-FreeCF/scripts/rail_zai_farm.sh ${FARM_COUNT}'
+TimeoutStartSec=5400
+Nice=10

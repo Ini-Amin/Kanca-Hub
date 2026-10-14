@@ -135,6 +135,7 @@ _REEXPORTS = {
     "commands_thk": "THK_PER_IP_DEFAULT THK_PER_IP_MAX thk_classify _thk_account_count _current_ip "
                     "_thk_fresh_ip thk_chunks cmd_thk _thk_sync cmd_mail cmd_gmail",
     "commands_farm": "cmd_warp cmd_yowes",
+    "commands_vpn": "cmd_vpn",
     "commands_otp": "cmd_otp cmd_scrape cmd_autofarm",
     "doctor": "cmd_doctor",
     "menu": "MENU_BACKGROUND MENU_BACKGROUND_CMD UNIFIED_MENU MENU_STAGE_HEADERS MENU_FARM_KEYS "
@@ -314,6 +315,17 @@ def build_parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("report", help="show the farm run ledger (what worked/failed across runs)")
     rep.add_argument("-n", "--tail", type=int, default=0, help="also show the last N entries")
     rep.add_argument("--clear", action="store_true", help="clear the ledger")
+    # ---- memory (shared agent memory on Supabase pgvector) ----
+    mem = sub.add_parser("memory", help="shared agent memory (pgvector RAG over AGENTS.md/docs/scripts)")
+    mes = mem.add_subparsers(dest="memory_cmd")
+    mei = mes.add_parser("index", help="embed + upsert changed sources (default)")
+    mei.add_argument("--full", action="store_true", help="re-embed every source, not just changed")
+    mes.add_parser("reindex", help="drop + rebuild the whole index")
+    mes.add_parser("stats", help="row count, sources, last update")
+    mesq = mes.add_parser("search", help="nearest memory chunks for a query")
+    mesq.add_argument("query"); mesq.add_argument("-k", type=int, default=8)
+    mesa = mes.add_parser("ask", help="search, then answer with the LLM (Zcode flash)")
+    mesa.add_argument("query"); mesa.add_argument("-k", type=int, default=8)
     sub.add_parser("beginner", help="guided, plain-English mode — start here if you're new")
     # ---- adb (Android device for trusted Google signups) ----
     adp = sub.add_parser("adb", help="Android device (ADB) — connect a phone for trusted Google signups")
@@ -346,6 +358,22 @@ def build_parser() -> argparse.ArgumentParser:
     ws.add_parser("down", help="bring the WARP tunnel down")
     ws.add_parser("gen", help="generate a fresh WARP profile")
     ws.add_parser("status", help="show tunnel state + egress IP (default)")
+
+    # ---- vpn (free VPN-fleet CONNECT pool: windscribe/veepn/browsec) ----
+    vp = sub.add_parser("vpn", help="Free VPN-fleet egress pool: Windscribe/VeePN/Browsec (validated CONNECT proxies)")
+    vs = vp.add_subparsers(dest="vpn_cmd")
+    vs.add_parser("status", help="pool summary + per-IP flag cooldowns (default)")
+    vl = vs.add_parser("list", help="list pool entries")
+    vl.add_argument("country", nargs="?", default=None, metavar="CC", help="country filter (e.g. US, NL)")
+    vg = vs.add_parser("get", help="pick ONE validated entry (egress IP verified)")
+    vg.add_argument("country", nargs="?", default=None, metavar="CC")
+    vg.add_argument("--no-verify", action="store_true", help="skip live egress validation")
+    vf = vs.add_parser("farm", help="farm new Windscribe accounts (2GB each, no email/captcha)")
+    vf.add_argument("count", nargs="?", type=int, default=1)
+    vfl = vs.add_parser("flag", help="record/clear a per-IP bot-flag cooldown (DataDome etc.)")
+    vfl.add_argument("--ip", default=None)
+    vfl.add_argument("--host", default=None)
+    vfl.add_argument("--clear", dest="clear_flag", action="store_true", help="clear cooldowns instead of flagging")
 
     # ---- region ----
     rp = sub.add_parser("region", help="region profiles: target geo-specific signup promos & bonuses (US/UK/SG/ID)")
@@ -820,6 +848,18 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_doctor(args)
     if g == "report":
         return cmd_report(args)
+    if g == "memory":
+        import memory as _mem  # noqa: PLC0415
+        cmd = getattr(args, "memory_cmd", None) or "index"
+        if cmd in ("index", "reindex"):
+            return _mem.main([cmd] + (["--full"] if getattr(args, "full", False) else []))
+        if cmd == "stats":
+            return _mem.main(["stats"])
+        if cmd == "search":
+            return _mem.main(["search", args.query, "-k", str(args.k)])
+        if cmd == "ask":
+            return _mem.main(["ask", args.query, "-k", str(args.k)])
+        return 2
     if g == "9router":
         return cmd_9router(args)
     if g == "ip-reuse":
@@ -840,6 +880,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_warp(args)
     if g == "region":
         return cmd_region(args)
+    if g == "vpn":
+        return cmd_vpn(args)
     if g == "thk":
         if not getattr(args, "thk_cmd", None):
             p.parse_args(["thk", "--help"]); return 1

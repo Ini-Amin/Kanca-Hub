@@ -126,6 +126,15 @@ def summarize(entries: list[dict]) -> str:
     if fails:
         top = ", ".join(f"{k}×{v}" for k, v in fails.most_common(5))
         lines.append(f"  top block stages: {top}")
+    # per-IP bot-flag cooldowns (live, from ip_flag_guard)
+    try:
+        import ip_flag_guard
+        t = ip_flag_guard.table()
+        if t != "no flagged IPs":
+            lines.append("  IP flag cooldowns:")
+            lines.extend("    " + ln for ln in t.splitlines())
+    except Exception:  # noqa: BLE001
+        pass
     return "\n".join(lines)
 
 

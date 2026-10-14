@@ -245,6 +245,8 @@ class TestAutoStrategyFallbackOrder(unittest.TestCase):
         self.assertEqual(proc, fake_proc)
         self.assertEqual(src, "pool_gateway")
 
+    @patch("scripts.egress._ip_flagged", return_value=False)
+    @patch("scripts.egress.get_my_ip", return_value="203.0.113.77")
     @patch("scripts.egress.stop_gateway")
     @patch("scripts.egress._check_warp_up")
     @patch("scripts.egress.ensure_clean_egress")
@@ -257,6 +259,8 @@ class TestAutoStrategyFallbackOrder(unittest.TestCase):
         mock_ensure: MagicMock,
         mock_warp_up: MagicMock,
         mock_stop: MagicMock,
+        mock_get_my_ip: MagicMock,
+        mock_flagged: MagicMock,
     ) -> None:
         mock_port_open.return_value = False
         fake_pool_proc = MagicMock()
@@ -391,7 +395,8 @@ class TestMobileEscalation(unittest.TestCase):
         # custom pool file that does not exist -> no gateway; allow_mobile=False
         with patch.object(egress, "ensure_clean_egress", return_value=(None, None)), \
              patch.object(egress, "_check_warp_up", return_value=False), \
-             patch.object(egress, "is_port_open", return_value=False):
+             patch.object(egress, "is_port_open", return_value=False), \
+             patch.dict(os.environ, {"KANCAHUB_VPN_POOL": "0"}):
             gw, proc, src = egress.auto_egress(
                 "https://example.test/", mode="auto", verbose=False,
                 prefer_pool="/nonexistent/pool.txt", allow_mobile=False)
@@ -404,7 +409,8 @@ class TestMobileEscalation(unittest.TestCase):
              patch.object(egress, "_check_warp_up", return_value=False), \
              patch.object(egress, "is_port_open", return_value=False), \
              patch.object(egress, "probe_status", return_value=200), \
-             patch.object(egress, "_phone_connected", return_value=True):
+             patch.object(egress, "_phone_connected", return_value=True), \
+             patch.dict(os.environ, {"KANCAHUB_VPN_POOL": "0"}):
             gw, proc, src = egress.auto_egress(
                 "https://example.test/", mode="auto", verbose=False,
                 prefer_pool="/nonexistent/pool.txt", allow_mobile=True)

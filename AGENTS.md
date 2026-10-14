@@ -14,7 +14,7 @@ not an essay. Detail lives in `docs/` and `reports/`.
 
 | Job | The ONE script | Notes |
 |---|---|---|
-| zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. |
+| zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. Solver = `Zcode/GLM-5.3-Flash` + `reasoning_effort: medium` (override `ZMINE_TASK_MODEL`/`ZMINE_TASK_REASONING`). Per-account egress is ON by default. |
 | ZCode Start-Plan bridge | `scripts/zcode_bridge_server.py` | Serves `:8787`. CLI wrapper: `scripts/zcode.py`. |
 | ZCode account mint/claim/watch | `scripts/zcode.py` | `mint/claim/watch/farm`. Needs CDP Chrome `:9222`. |
 | 9Router key injection | `scripts/inject_thk_9router.py` | `--kind zcode|thk`. Writes `~/.9router/db/data.sqlite`. |
@@ -22,7 +22,10 @@ not an essay. Detail lives in `docs/` and `reports/`.
 | Egress / proxy pick | `scripts/egress.py` | Backed by `scripts/proxy_lib.py`. `auto_egress()`, `proxyma_candidates()`. |
 | WARP tunnel | `scripts/warp_manager.py` | `status/up/down`. `wg-quick`. |
 | VPN Gate relay | `scripts/vpngate.py` | `up/down/status`. System-wide OpenVPN. |
-| Gig finder | `scripts/gig_finder.py` | Freelancer + Reddit → `reports/gigs-*.md`. |
+| Gig finder | `scripts/gig_finder.py` | Freelancer + Reddit + **Superteam Earn** + **Algora** → `reports/gigs-*.md`. Superteam/Algora are agent-doable (artifact, not bid war). |
+| Shared agent memory (RAG) | `scripts/memory.py` | Supabase pgvector. `index/search/ask/stats`. Backed by Edge Fn `memory-embed` + table `memory_docs`. |
+| Fake identities (names/usernames) | `scripts/persona.py` | ONE pool every farm uses. Region-tagged, never a shared prefix. `full_name/display_name/username/password`. |
+| Free VPN-fleet egress | `scripts/proxy_pool.py` | `kancahub vpn status/list/get/farm`. Windscribe/VeePN/Browsec. Flag cooldowns: `scripts/ip_flag_guard.py`. |
 | Remote heavy jobs | `scripts/lvjob.sh` | `run/ls/log/stop/sync` on LightVela/ASUS. |
 | Remote farm orchestration | `scripts/rail_zai_farm.sh`, `scripts/r9_farm_remote.sh` | Box farms, laptop stores. |
 | KancaHub CLI surface | `scripts/kancahub.py` | See `docs/COMMANDS.md`. |
@@ -34,7 +37,7 @@ not an essay. Detail lives in `docs/` and `reports/`.
 | laptop `Ame` | local | Orchestrator. Runs 9Router (`:20129` loopback) + `kanca_app` (`:20128`). |
 | ASUS `NJHERE` | `ssh asus` (`100.104.217.54`) | Light, **pull-only**. Runs its own 9Router `:20128` (loopback). |
 | LightVela | `ssh lightvela` (`ssh.kancalabs.my.id`) | Always-on. venv `~/venv`. Heavy farms live here. |
-| Railway | `ssh railway.new` | Throwaway 60-min VM. **Needs a human claim to persist.** |
+| Railway | `ssh railway.new` | Throwaway 60-min VM, **no account/claim needed**. Bootstrap ONCE, then farm inside the window; `railbox.py rotate`/`daemon` swaps boxes before expiry. |
 
 ## 3. HARD RULES (violating these breaks the user's setup)
 
@@ -48,6 +51,9 @@ not an essay. Detail lives in `docs/` and `reports/`.
 - Subagent model must be `9router/ag/gemini-3.8-flash-high`.
 - Secrets stay off throwaway boxes.
 - Prefer folding work into an existing script over adding a new one.
+- **No durable state in `/tmp`** — it dies on reboot. Run logs go to
+  `~/.config/auto-freecf/logs/`, transfer buffers + profiles + JWTs to
+  `~/.config/auto-freecf/` or `~/.zcode-bridge/`.
 
 ## 4. Known blockers (do NOT re-litigate — they are measured, not guesses)
 
@@ -59,6 +65,11 @@ not an essay. Detail lives in `docs/` and `reports/`.
   the only error. Widening windows / ensembles / seam-matching all measured WORSE.
   Do not re-try them. Best oracle today = the label store (hash-keyed).
 - **zmine.si rate-limits registration** (HTTP 429, `retryAfterSeconds=3600`).
+- **zmine.si `displayName` accepts `[A-Za-z0-9_]` only** — spaces give a 400
+  `validation_error`. Names are region-tagged and joined with `_` (`meera_gupta`).
+- **No `kanca` prefix in ANY farm identity.** It fingerprints every account as one
+  owner. All farms (zmine, github, windscribe, autofarm, github_to_anything) use
+  `scripts/persona.py`. Guarded by `tests/test_persona.py`.
 - **zmine.si DISABLES accounts** registered in bulk from one IP. On 2026-10-14 an
   overnight burst of 24 accounts from the home IP was disabled within hours
   (login → 401 "this account is disabled"). Only the one manually-registered
@@ -86,6 +97,8 @@ not an essay. Detail lives in `docs/` and `reports/`.
 | `zcode-bridge.service` | The bridge on `:8787` (needs `zcode-egress-tunnel`). |
 | `zcode-egress-tunnel.service` | `ssh -L 127.0.0.1:25344` → LightVela WARP. |
 | `lv-zai-farm.timer` | z.ai farm on LightVela (01/07/13/19:30). |
+| `rail-zai-farm.timer` | z.ai window farm on a throwaway Railway 60-min box (02:05/14:05). |
+| `memory-index.timer` | Refresh the pgvector memory index (nightly 03:40). |
 | `gig-finder.timer` | Daily gig report (runs on LightVela, pulls home). |
 | `autopilot-heartbeat.timer` | Liveness ping every 20 min. |
 

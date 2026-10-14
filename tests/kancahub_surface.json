@@ -285,6 +285,30 @@
 "mail test": [
 "help"
 ],
+"memory": [
+"help",
+"memory_cmd"
+],
+"memory ask": [
+"help",
+"k",
+"query"
+],
+"memory index": [
+"full",
+"help"
+],
+"memory reindex": [
+"help"
+],
+"memory search": [
+"help",
+"k",
+"query"
+],
+"memory stats": [
+"help"
+],
 "menu": [
 "help"
 ],
@@ -647,6 +671,32 @@
 "thk test-key": [
 "help",
 "key"
+],
+"vpn": [
+"help",
+"vpn_cmd"
+],
+"vpn farm": [
+"count",
+"help"
+],
+"vpn flag": [
+"clear_flag",
+"help",
+"host",
+"ip"
+],
+"vpn get": [
+"country",
+"help",
+"no_verify"
+],
+"vpn list": [
+"country",
+"help"
+],
+"vpn status": [
+"help"
 ],
 "warp": [
 "help",

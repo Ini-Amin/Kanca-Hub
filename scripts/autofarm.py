@@ -34,6 +34,17 @@ FARMS_DIR = SCRIPTS / "custom_farms"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+
+def _persona_name_parts() -> tuple[str, str]:
+    """(first, last) from the shared persona module, region-matched. Falls back
+    to a neutral pair if persona is unavailable. Never a shared brand token."""
+    try:
+        from persona import _parts  # noqa: PLC0415
+        p = _parts(second=False)
+        return p[0].capitalize(), p[1].capitalize()
+    except Exception:  # noqa: BLE001
+        return "Alex", "Tan"
+
 # Reuse the proven, strictly-gated helpers from github_to_anything (pure
 # functions + loader). Import is defensive so autofarm still runs if that
 # module is unavailable — the fallbacks below keep the honesty contract.
@@ -452,10 +463,24 @@ async def _drive_page(
     try:
         resp = await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         if resp is not None and getattr(resp, "status", None) in (403, 429):
-            result["stopped_at"] = f"http_{resp.status}"
-            result["error"] = f"target returned HTTP {resp.status} (egress blocked)"
-            print(f"  ✗ Target returned HTTP {resp.status}; stopping (no fill attempted).")
-            return result
+            # DataDome/CF serve 403 + JS challenge, then reload themselves.
+            # Wait out the challenge and recheck before giving up.
+            for _ in range(2):
+                await page.wait_for_timeout(6000)
+                if "captcha-delivery" not in (page.url or "") and "challenges" not in (page.url or ""):
+                    try:
+                        if (await page.title()) not in ("Just a moment...", "github.com", "Attention Required!"):
+                            resp = None  # challenge passed
+                            break
+                    except Exception:
+                        resp = None
+                        break
+            else:
+                result["stopped_at"] = "http_403_challenge"
+                result["error"] = "target returned HTTP 403 and JS challenge did not clear (egress flagged)"
+                print("  ✗ 403 challenge did not clear; stopping (no fill attempted).")
+                return result
+            print("  • 403 challenge cleared after wait")
     except Exception as exc:
         result["stopped_at"] = "page_load_error"
         result["error"] = str(exc)
@@ -760,16 +785,19 @@ async def _fill_known_fields(page, email: str, password: str, username: str) -> 
     try:
         fn_el = await page.query_selector(first_sel)
         ln_el = await page.query_selector(last_sel)
+        # Region-tagged names from the shared persona module — never a shared
+        # "Kanca"/"Labs" pair, which fingerprints every account as one owner.
+        _first, _last = _persona_name_parts()
         if fn_el and await fn_el.is_visible():
             if not (await fn_el.input_value() or "").strip():
                 print("  • Found first name input, filling…")
-                await fn_el.fill("Kanca")
+                await fn_el.fill(_first)
                 filled_any = True
                 await page.wait_for_timeout(400)
         if ln_el and await ln_el.is_visible():
             if not (await ln_el.input_value() or "").strip():
                 print("  • Found last name input, filling…")
-                await ln_el.fill("Labs")
+                await ln_el.fill(_last)
                 filled_any = True
                 await page.wait_for_timeout(400)
     except Exception:

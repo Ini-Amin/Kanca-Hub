@@ -884,12 +884,27 @@ def run_with_mobile_retry(
             _kc()._session_guard_end(account)
 def _ledger_record(farm: str, *, target: str = "", egress: str = "", exit_ip: str = "",
                    stage: str = "", ok: bool = False, count: int = 0, note: str = "") -> None:
-    """Best-effort append to the farm run ledger (never raises)."""
+    """Best-effort append to the farm run ledger (never raises).
+
+    Blocked stages (403/challenge/429) additionally start a per-IP cooldown via
+    ip_flag_guard, so auto_egress() skips this exit IP for that target while it
+    cools down (DataDome flags last hours; re-probing only deepens the flag).
+    """
     try:
         if str(SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(SCRIPTS_DIR))
         import farm_ledger
         farm_ledger.record(farm, target=target, egress=egress, exit_ip=exit_ip,
                            stage=stage, ok=ok, count=count, note=note)
+        if not ok and exit_ip and target and any(k in f"{stage} {note}".lower()
+                                                 for k in ("403", "429", "challenge", "captcha", "blocked")):
+            try:
+                import ip_flag_guard
+                from urllib.parse import urlparse
+                host = urlparse(target).netloc or target
+                kind = "challenge" if "challenge" in f"{stage} {note}".lower() or "403" in f"{stage} {note}" else "429"
+                ip_flag_guard.flag(exit_ip, host, kind)
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001
         pass

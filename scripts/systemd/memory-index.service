@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh the shared agent memory index (Supabase pgvector)
+# Keeps the RAG index in sync with AGENTS.md/docs/reports/scripts as they change.
+# Incremental: `memory.py index` skips sources already stored, so a nightly run
+# is a few seconds when nothing changed.
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/bin/bash -c 'mkdir -p %h/.config/auto-freecf/logs && /usr/bin/python3 %h/Auto-FreeCF/scripts/memory.py index >> %h/.config/auto-freecf/logs/memory-index.log 2>&1'
+TimeoutStartSec=2400
+Nice=15

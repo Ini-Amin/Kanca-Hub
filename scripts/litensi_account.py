@@ -58,7 +58,7 @@ def save_account(**kw) -> None:
 async def _screenshot(page, tag: str) -> None:
     if os.environ.get("LITENSI_DEBUG"):
         try:
-            p = Path("/tmp/opencode") / f"litensi_{tag}.png"
+            p = Path(os.path.expanduser("~/.config/auto-freecf/logs")) / f"litensi_{tag}.png"
             await page.screenshot(path=str(p), full_page=True)
             print(f"    (shot -> {p})")
         except Exception:

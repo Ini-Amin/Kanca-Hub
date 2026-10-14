@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -127,7 +128,7 @@ def claim(jwt, param, region):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Claim ZCode Start Plan without the app")
-    ap.add_argument("--jwt-file", default="/tmp/opencode/zc_jwt.txt")
+    ap.add_argument("--jwt-file", default=os.path.expanduser("~/.zcode-bridge/zc_jwt.txt"))
     ap.add_argument("--jwt", default=None)
     ap.add_argument("--param", default=None, help="pre-solved captchaVerifyParam")
     a = ap.parse_args(argv)

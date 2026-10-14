@@ -244,6 +244,121 @@ def _try_proxyma(target_url: str, verbose: bool, *, timeout: float = 12.0) -> st
             return cand
     return None
 
+def _flag_host(target_url: str) -> str:
+    """Host part of a target URL for ip_flag_guard bookkeeping."""
+    try:
+        from urllib.parse import urlparse
+        return urlparse(target_url).netloc or target_url
+    except Exception:
+        return target_url
+
+
+def _ip_flagged(ip: str | None, target_url: str, verbose: bool) -> bool:
+    """True while this exit IP is cooling down for the target host."""
+    if not ip:
+        return False
+    try:
+        import ip_flag_guard
+        host = _flag_host(target_url)
+        v = ip_flag_guard.verdict(ip, host)
+        if v != "ok":
+            if verbose:
+                print(f"  [egress] • Exit {ip} cooling down for {host} ({v}); skipping", file=sys.stderr)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _record_flag(ip: str | None, target_url: str, status: int) -> None:
+    """Record a bot-flag hit (403/429) so the IP cools down for this host."""
+    if not ip:
+        return
+    try:
+        import ip_flag_guard
+        kind = {403: "challenge", 429: "429"}.get(status, "403")
+        ip_flag_guard.flag(ip, _flag_host(target_url), kind)
+    except Exception:
+        pass
+
+
+def _try_vpn_pool(target_url: str, verbose: bool, *, country=None, exclude_countries=None) -> str | None:
+    """Free VPN-egress pool (scripts/proxy_pool.py): Windscribe/VeePN/Browsec.
+
+    Browser-grade TLS (curl_cffi chrome131) CONNECT proxies with per-request
+    rotation. ~100+ hosts across 40+ countries; no keys, no setup. Rung sits
+    above freepool (these are maintained fleets, not scraped lists) and below
+    WARP (they are datacenter exits: they clear Cloudflare gates but NOT
+    DataDome-protected signups like github.com).
+    """
+    try:
+        import proxy_pool
+    except Exception as exc:  # noqa: BLE001
+        if verbose:
+            print(f"  [egress] • VPN pool unavailable ({exc})", file=sys.stderr)
+        return None
+    norm_country = _normalize_countries(country)
+    norm_exclude = _normalize_countries(exclude_countries)
+    cc_arg = None
+    if norm_country:
+        allow = norm_country if isinstance(norm_country, (list, tuple, set)) else [norm_country]
+        cc_arg = next(iter(allow), None)
+    try:
+        entries = proxy_pool.all_entries(cc_arg)
+    except Exception as exc:  # noqa: BLE001
+        if verbose:
+            print(f"  [egress] • VPN pool listing failed ({exc})", file=sys.stderr)
+        return None
+    # Skip warp entries here: system-level, handled by its own rung below.
+    entries = [e for e in entries if e.get("provider") != "warp"]
+    tried = 0
+    for e in entries:
+        if tried >= 6:  # keep the rung quick; a healthy fleet answers in 1-2
+            break
+        p = e.get("proxy") or {}
+        server = p.get("server")
+        if not server:
+            continue
+        cand = server
+        if p.get("username"):
+            cand = f"https://{p['username']}:{p['password']}@{server.split('//')[1]}"
+        tried += 1
+        eg_ip = e.get("egress_ip")
+        if norm_country or norm_exclude:
+            # Entries may not carry a resolved egress yet — check now.
+            if not eg_ip:
+                from urllib.parse import urlparse
+                hostport = urlparse(server).netloc
+                import base64 as _b64
+                _auth = None
+                if p.get("username"):
+                    _auth = _b64.b64encode(f"{p['username']}:{p['password']}".encode()).decode()
+                try:
+                    import proxy_pool as _pp
+                    eg_ip = _pp._egress(urlparse(server).hostname, urlparse(server).port or 443, auth=_auth)
+                except Exception:
+                    eg_ip = None
+                if not eg_ip:
+                    continue
+            cc, _, resolved = lookup_ip_country(eg_ip)
+            if not country_allowed(cc, allow=norm_country, exclude=norm_exclude, resolved=resolved):
+                if verbose:
+                    print(f"  [egress] • VPN pool {e['provider']} ({e.get('region','?')}) exits via {eg_ip} ({cc}) violating country filter; skipping", file=sys.stderr)
+                continue
+            e["egress_ip"] = eg_ip
+        if _ip_flagged(eg_ip, target_url, verbose):
+            continue
+        st = probe_status(target_url, proxy=cand, timeout=12.0)
+        if st in (403, 429):
+            _record_flag(eg_ip, target_url, st)
+        if 200 <= st < 400 and not is_blocked(st):
+            if verbose:
+                print(f"  [egress] ✓ VPN pool {e['provider']} ({e.get('region','?')}, exit {eg_ip or '?'}) verified for {target_url} (HTTP {st})", file=sys.stderr)
+            return cand
+        elif verbose:
+            print(f"  [egress] • VPN pool {e['provider']} ({e.get('region','?')}) returned HTTP {st}", file=sys.stderr)
+    return None
+
 
 def _check_warp_up() -> bool:
     """Check if Cloudflare WARP tunnel is active via scripts/warp_manager.py."""
@@ -348,6 +463,8 @@ def auto_egress(
                             print(f"  [egress] • Local gateway on :{port} exits via {eg_ip} ({cc}) which violates country filter; skipping", file=sys.stderr)
                         continue
             st = probe_status(target_url, proxy=cand, timeout=10.0)
+            if st in (403, 429):
+                _record_flag(check_gateway_egress(cand, retries=1, timeout=3.0), target_url, st)
             if 200 <= st < 400 and not is_blocked(st):
                 if verbose:
                     print(f"  [egress] ✓ Active local gateway on :{port} verified for {target_url} (HTTP {st})", file=sys.stderr)
@@ -363,12 +480,20 @@ def auto_egress(
         default_pool = repo_root / "signup_from_scratch" / "proxies.txt"
         pool_arg = str(default_pool) if default_pool.exists() else None
 
-    gw_url, gw_proc = ensure_clean_egress(
-        prefer_pool=pool_arg,
-        verbose=verbose,
-        countries=norm_country,
-        exclude_countries=norm_exclude,
-    )
+    # A missing/empty pool file means ensure_clean_egress would harvest public
+    # proxies (slow, ~1% alive, worse than the VPN fleet). Only spend time on it
+    # when there is an actual pool to draw from.
+    _pool_usable = False
+    if pool_arg and Path(pool_arg).exists() and Path(pool_arg).stat().st_size > 0:
+        _pool_usable = True
+    gw_url = gw_proc = None
+    if _pool_usable:
+        gw_url, gw_proc = ensure_clean_egress(
+            prefer_pool=pool_arg,
+            verbose=verbose,
+            countries=norm_country,
+            exclude_countries=norm_exclude,
+        )
     if gw_url:
         st = probe_status(target_url, proxy=gw_url, timeout=10.0)
         if 200 <= st < 400 and not is_blocked(st):
@@ -395,6 +520,13 @@ def auto_egress(
         if px:
             return px, None, "proxyma"
 
+    # 2c. VPN pool (Windscribe/VeePN/Browsec — browser-grade free fleets).
+    #     Runs when there is no explicit pool, or the explicit pool is unusable
+    #     (empty/missing file would otherwise trigger a slow public harvest).
+    if not _pool_usable and os.environ.get("KANCAHUB_VPN_POOL", "1") == "1":
+        vp = _try_vpn_pool(target_url, verbose, country=norm_country, exclude_countries=norm_exclude)
+        if vp:
+            return vp, None, "vpn_pool"
     # 3. Escalate to WARP / residential
     # 3a. Check if WARP is up
     if _check_warp_up():
@@ -408,7 +540,13 @@ def auto_egress(
                     if verbose:
                         print(f"  [egress] • WARP exits via {my_ip} ({cc}) which violates country filter; skipping", file=sys.stderr)
         if warp_ok:
+            my_ip2 = get_my_ip(timeout=4.0)
+            if _ip_flagged(my_ip2, target_url, verbose):
+                warp_ok = False
+        if warp_ok:
             st = probe_status(target_url, proxy=None, timeout=10.0)
+            if st in (403, 429):
+                _record_flag(my_ip2, target_url, st)
             if 200 <= st < 400 and not is_blocked(st):
                 if verbose:
                     print(f"  [egress] ✓ WARP tunnel active and verified for {target_url} (HTTP {st})", file=sys.stderr)
@@ -440,6 +578,8 @@ def auto_egress(
         )
         if res_gw:
             st = probe_status(target_url, proxy=res_gw, timeout=10.0)
+            if st in (403, 429):
+                _record_flag(check_gateway_egress(res_gw, retries=1, timeout=3.0), target_url, st)
             if 200 <= st < 400 and not is_blocked(st):
                 if verbose:
                     print(f"  [egress] ✓ Residential gateway verified for {target_url} (HTTP {st})", file=sys.stderr)
@@ -455,10 +595,15 @@ def auto_egress(
     # the target over the laptop's (now mobile) connection. A real mobile IP is
     # often accepted where datacenter/WARP are blocked (proved with TokenHarbor),
     # so this is worth a try before giving up to a plain direct connection.
-    if allow_mobile and not is_blocked(probe_status(target_url, proxy=None, timeout=8.0)):
-        if verbose:
-            print("  [egress] ✓ Direct/mobile connection already passes; using it", file=sys.stderr)
-        return None, None, "mobile" if _phone_connected() else "direct"
+    direct_ip = get_my_ip(timeout=4.0)
+    if allow_mobile and not _ip_flagged(direct_ip, target_url, verbose):
+        st = probe_status(target_url, proxy=None, timeout=8.0)
+        if st in (403, 429):
+            _record_flag(direct_ip, target_url, st)
+        if not is_blocked(st):
+            if verbose:
+                print("  [egress] ✓ Direct/mobile connection already passes; using it", file=sys.stderr)
+            return None, None, "mobile" if _phone_connected() else "direct"
     if allow_mobile and _phone_connected():
         if verbose:
             print("  [egress] • Escalating to MOBILE phone egress (rotating carrier IP)…", file=sys.stderr)
