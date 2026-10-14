@@ -152,6 +152,68 @@ def _try_freepool(target_url: str, verbose: bool, *, limit: int = 8,
     return None
 
 
+def proxyma_candidates(target_url: str = "https://api.ipify.org", *, limit: int = 8,
+                       timeout: float = 12.0, dedupe_ip: bool = True) -> list[str]:
+    """Return MANY verified Proxyma exits (one per online node, best-latency first).
+
+    Unlike `_try_proxyma` (which returns the single best), this hands the caller a
+    pool so a farm can give EACH account a DIFFERENT exit IP. Verified with a real
+    probe against `target_url`, so a dead/blocked node is never returned. When
+    `dedupe_ip`, nodes that resolve to an already-seen exit IP are dropped, so
+    every returned proxy really is a distinct identity."""
+    import json as _json
+    import urllib.request as _ur
+
+    try:
+        def _get(path, secret=None):
+            req = _ur.Request("https://proxyma.space" + path,
+                              headers={"X-Proxy-Secret": secret or "", "User-Agent": "Mozilla/5.0"})
+            return _json.load(_ur.urlopen(req, timeout=timeout))
+        secret = _get("/api/secret")["secret"]
+        cred = _get("/api/proxy-credentials", secret)["data"]
+        nodes = [n for n in _get("/api/proxies?nodes=1", secret)["data"] if n.get("status") == "online"]
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[str] = []
+    seen_ips: set[str] = set()
+    for n in sorted(nodes, key=lambda x: x.get("latency_ms", 9999)):
+        cand = f"https://{cred['username']}:{cred['password']}@{n['host']}:{n['port']}"
+        try:
+            st = probe_status(target_url, proxy=cand, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            continue
+        if not (200 <= st < 400 and not is_blocked(st)):
+            continue
+        if dedupe_ip:
+            ip = _exit_ip(cand, timeout=timeout)
+            if ip and ip in seen_ips:
+                continue
+            if ip:
+                seen_ips.add(ip)
+        out.append(cand)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _exit_ip(proxy: str, *, timeout: float = 12.0) -> str | None:
+    """Best-effort public IP behind `proxy` (ipify). None if it can't be read."""
+    import json as _json
+    import urllib.request as _ur
+    try:
+        op = _ur.build_opener(_ur.ProxyHandler({"http": proxy, "https": proxy}))
+        op.addheaders = [("user-agent", "Mozilla/5.0")]
+        r = op.open("https://api.ipify.org?format=json", timeout=timeout)
+        return _json.load(r).get("ip")
+    except Exception:  # noqa: BLE001
+        try:
+            from curl_cffi import requests as cr  # noqa: PLC0415
+            return cr.get("https://api.ipify.org?format=json", proxy=proxy,
+                          impersonate="chrome131", timeout=timeout).json().get("ip")
+        except Exception:  # noqa: BLE001
+            return None
+
+
 def _try_proxyma(target_url: str, verbose: bool, *, timeout: float = 12.0) -> str | None:
     """Anonymous, keyless HTTPS proxies from proxyma.space (datacenter exits).
 

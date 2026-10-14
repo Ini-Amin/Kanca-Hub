@@ -9,6 +9,11 @@ Description=ZMINE autopilot: gently grow the referral farm + renew sessions + da
 Type=oneshot
 WorkingDirectory=%h/Auto-FreeCF
 Environment=PYTHONDONTWRITEBYTECODE=1
+# ZMINE_EGRESS=pool gives every new account its OWN verified relay exit IP, so the
+# farm does not look like one person registering 25 accounts from one IP (that is
+# exactly what got the previous batch disabled). Falls back to direct if the free
+# relay pool is empty, so a pass never fails just because the pool is down.
+Environment=ZMINE_EGRESS=pool
 ExecStart=/usr/bin/python3 %h/Auto-FreeCF/scripts/zmine.py autopilot --target 25 --ref RCFZ9GA7
 TimeoutStartSec=5400
 Nice=10

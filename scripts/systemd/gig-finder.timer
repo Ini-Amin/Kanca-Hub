@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the daily gig finder (Freelancer + Reddit -> reports/gigs-*.md)
+
+[Timer]
+# Once a day, mid-morning WIB, with jitter so it does not hammer the sources.
+OnCalendar=*-*-* 09:20
+Persistent=true
+RandomizedDelaySec=1800
+
+[Install]
+WantedBy=timers.target
