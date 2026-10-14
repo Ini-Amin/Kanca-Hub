@@ -145,42 +145,62 @@ def _register_gate():
 
 
 # ─────────────────────────────────────────────────────────────── http plumbing
-def _opener(jar=None):
+def _opener(jar=None, proxy=None):
+    """HTTP opener. Without a proxy this is the plain urllib opener (unchanged).
+
+    With a proxy we use a `requests` Session: the free relays we farm through are
+    HTTPS-CONNECT proxies, which urllib cannot speak (it resets the connection).
+    A Session also carries its own cookie jar, so `jar` is its cookie jar."""
     jar = jar if jar is not None else http.cookiejar.CookieJar()
+    if proxy:
+        import requests  # noqa: PLC0415
+        s = requests.Session()
+        s.headers.update({"user-agent": UA, "origin": ORIGIN, "referer": ORIGIN + "/"})
+        s.proxies = {"http": proxy, "https": proxy}
+        return s, s.cookies
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     op.addheaders = [("user-agent", UA), ("origin", ORIGIN), ("referer", ORIGIN + "/")]
     return op, jar
 
 
+def _cookie_header(jar) -> str:
+    """Serialise a cookie jar (urllib or requests) into a Cookie header."""
+    try:
+        return "; ".join(f"{k}={v}" for k, v in jar.items())
+    except Exception:  # noqa: BLE001
+        return "; ".join(f"{c.name}={c.value}" for c in jar)
+
+
 def _req(op, path, *, method="GET", body=None, cookie=None, timeout=30):
+    url = BASE + path
     data = json.dumps(body).encode() if body is not None else None
     headers = {"content-type": "application/json"} if body is not None else {}
     if cookie:
         headers["cookie"] = cookie
-    req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
     try:
-        with op.open(req, timeout=timeout) as r:
-            raw = r.read().decode()
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode()
-        try:
-            j = json.loads(raw)
-        except Exception:  # noqa: BLE001
-            j = {"raw": raw[:300]}
-        # A 429 must NEVER be retried blindly -- zmine.si answers
-        # {"code":"rate_limited","retryAfterSeconds":3600}. Surface it so callers
-        # back off (the user's explicit rule: no hammering).
-        if e.code == 429:
-            j = dict(j) if isinstance(j, dict) else {"raw": raw[:300]}
-            j["_retry_after"] = (j.get("error") or {}).get("details", {}).get("retryAfterSeconds") \
-                if isinstance(j.get("error"), dict) else None
-        return e.code, j
+        if hasattr(op, "request"):        # requests.Session (proxy-capable)
+            r = op.request(method, url, data=data, headers=headers, timeout=timeout)
+            code, raw = r.status_code, r.text
+        else:                             # urllib opener
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with op.open(req, timeout=timeout) as r:
+                code, raw = r.status, r.read().decode()
+    except urllib.error.HTTPError as e:   # urllib raises on 4xx/5xx
+        code, raw = e.code, e.read().decode()
     except Exception as e:  # noqa: BLE001
         return 0, {"error": f"{type(e).__name__}: {e}"}
     try:
-        return 200, json.loads(raw)
+        j = json.loads(raw)
     except Exception:  # noqa: BLE001
-        return 200, {"raw": raw[:300]}
+        j = {"raw": raw[:300]}
+    # A 429 must NEVER be retried blindly -- zmine.si answers
+    # {"code":"rate_limited","retryAfterSeconds":3600}. Surface it so callers
+    # back off (the user's explicit rule: no hammering).
+    if code == 429:
+        j = dict(j) if isinstance(j, dict) else {"raw": raw[:300]}
+        j["_retry_after"] = (j.get("error") or {}).get("details", {}).get("retryAfterSeconds") \
+            if isinstance(j.get("error"), dict) else None
+    return code, j
 
 
 def _retry_after_seconds(j) -> float | None:
@@ -213,22 +233,38 @@ def _rate_gate(seconds: float, why: str = "rate limit") -> None:
 
 
 # ─────────────────────────────────────────────────────────────── account ops
+def egress_pool(target: str = ORIGIN, *, limit: int = 8, verbose: bool = False) -> list[str]:
+    """Verified proxy exits, best-latency first, for giving each account its own IP.
+
+    Opt-in via `ZMINE_EGRESS=pool` (or `--egress pool`). Uses the SAME free
+    keyless Proxyma relay the rest of the pipeline uses (scripts/egress.py), so
+    there is no new egress path to maintain. Returns [] on any failure, and
+    callers fall back to the direct/WARP connection."""
+    try:
+        sys.path.insert(0, str(SCRIPTS))
+        import egress as _eg  # noqa: PLC0415
+        return _eg.proxyma_candidates(target, limit=limit)
+    except Exception as e:  # noqa: BLE001
+        if verbose:
+            log(f"    [egress] pool unavailable: {type(e).__name__}: {e}")
+        return []
+
+
 def register(display_name: str, ref: str | None = None, op=None, jar=None,
-             gate: bool = True):
+             gate: bool = True, proxy: str | None = None):
     if gate:
         _register_gate()
-    op, jar = _opener() if op is None else (op, jar)
+    op, jar = _opener(proxy=proxy) if op is None else (op, jar)
     code, j = _req(op, "/auth/register", method="POST",
                    body={"displayName": display_name, "referralCode": ref or None})
     return code, j
 
 
-def login(login_key: str):
+def login(login_key: str, proxy: str | None = None):
     """Return (code, user, cookie_header)."""
-    op, jar = _opener()
+    op, jar = _opener(proxy=proxy)
     code, j = _req(op, "/auth/login", method="POST", body={"loginKey": login_key})
-    cookie = "; ".join(f"{c.name}={c.value}" for c in jar)
-    return code, j, cookie
+    return code, j, _cookie_header(jar)
 
 
 def activate(cookie: str, op=None):
@@ -369,13 +405,13 @@ def solve(prompt: str, options: list, model: str = TASK_MODEL, log_fn=log) -> in
 
 # ─────────────────────────────────────────────────────────────── pipelines
 def run_tasks(cookie: str, *, want: int = 12, model: str = TASK_MODEL,
-              delay=(4.0, 8.0), log_fn=log) -> dict:
+              delay=(4.0, 8.0), log_fn=log, op=None) -> dict:
     """Answer up to `want` SI tasks. Stops on the first unsolvable task (never
     gamble: 3 wrong in a row = cooldown). Returns a small stats dict."""
     done = ok = 0
     stats = {}
     for i in range(want):
-        code, j = tasks_next(cookie)
+        code, j = tasks_next(cookie, op=op)
         if code != 200 or not j.get("task"):
             reason = (j or {}).get("reason")
             log_fn(f"    tasks: stop ({code} reason={reason})")
@@ -393,7 +429,7 @@ def run_tasks(cookie: str, *, want: int = 12, model: str = TASK_MODEL,
             log_fn(f"    task {i + 1}: could not solve -> stop (avoid cooldown)")
             break
         time.sleep(random.uniform(*delay))
-        code, r = tasks_answer(cookie, t["token"], idx)
+        code, r = tasks_answer(cookie, t["token"], idx, op=op)
         done += 1
         if code == 200 and r.get("correct"):
             ok += 1
@@ -407,21 +443,31 @@ def run_tasks(cookie: str, *, want: int = 12, model: str = TASK_MODEL,
     return {"answered": done, "correct": ok, "stats": stats}
 
 
-def do_account(login_key: str, *, model: str = TASK_MODEL, want: int = 12, log_fn=log) -> dict:
-    """login -> activate session -> answer the daily tasks."""
-    code, j, cookie = login(login_key)
+def do_account(login_key: str, *, model: str = TASK_MODEL, want: int = 12, log_fn=log,
+               proxy: str | None = None) -> dict:
+    """login -> activate session -> answer the daily tasks. `proxy` pins this
+    account to one egress exit (so each account looks like a different person).
+    A disabled account is stamped in the store so it stops counting as usable."""
+    code, j, cookie = login(login_key, proxy=proxy)
     if code != 200 or not cookie:
-        log_fn(f"  login failed ({code}) {str(j)[:120]}")
+        msg = str(j)
+        if "disabled" in msg:
+            log_fn("  login failed: account DISABLED -> flagging as unusable")
+            _update_account(login_key, disabled=True, disabled_ts=time.time())
+            return {"ok": False, "stage": "login", "disabled": True}
+        log_fn(f"  login failed ({code}) {msg[:120]}")
         return {"ok": False, "stage": "login"}
     who = (j.get("user") or {}).get("displayName")
     log_fn(f"  logged in as {who} ({(j.get('user') or {}).get('handle')})")
-    code, m = activate(cookie)
+    _update_account(login_key, disabled=False)
+    op, _ = _opener(proxy=proxy)
+    code, m = activate(cookie, op=op)
     if code == 200:
         hp = m.get("hashpower") or {}
         log_fn(f"  session active={m.get('sessionActive')} total={hp.get('totalMh')} mH")
     else:
         log_fn(f"  activate -> {code} {str(m)[:120]}")
-    r = run_tasks(cookie, want=want, model=model, log_fn=log_fn)
+    r = run_tasks(cookie, want=want, model=model, log_fn=log_fn, op=op)
     log_fn(f"  tasks: {r['correct']}/{r['answered']} correct")
     return {"ok": True, "display": who, **r}
 
@@ -446,8 +492,79 @@ def _save_account(rec: dict) -> None:
         f.write(json.dumps(rec) + "\n")
 
 
+def _update_account(login_key: str, **fields) -> None:
+    """Rewrite the account store with `fields` merged into the matching record.
+    Used to stamp `disabled=True` so a dead account stops counting toward the
+    target (and can be replaced) instead of silently occupying a slot forever."""
+    with _lock():
+        accts = _load_accounts()
+        for a in accts:
+            if a.get("loginKey") == login_key:
+                a.update(fields)
+        tmp = ACCOUNTS.with_suffix(".jsonl.tmp")
+        tmp.write_text("".join(json.dumps(a) + "\n" for a in accts), encoding="utf-8")
+        tmp.replace(ACCOUNTS)
+
+
 def _rand_name() -> str:
-    return "kanca" + "".join(random.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(5))
+    """A realistic, human-looking Indonesian display name. Never a shared brand
+    prefix (the earlier `kanca*` prefix made every account obviously one owner).
+
+    The site shows this name to the user's referral tree, so it must not be a
+    giveaway. Uses a first-name + surname pool with light spelling variation."""
+    first = random.choice(_FIRST)
+    last = random.choice(_LAST)
+    # occasional second given name, like real Indonesian names
+    if random.random() < 0.35:
+        first = f"{first} {random.choice(_FIRST)}"
+    name = f"{first} {last}"
+    if random.random() < 0.30:                 # some people append a number
+        name += str(random.randint(10, 99))
+    return name
+
+
+_FIRST = (
+    "rizky", "dimas", "bayu", "arif", "fajar", "yoga", "hendra", "agus", "putra",
+    "wawan", "dedi", "andi", "irfan", "galih", "reza", "taufik", "yusuf", "rahmat",
+    "siti", "dewi", "ayu", "putri", "rina", "maya", "lia", "sari", "indah", "nur",
+    "fitri", "wulan", "intan", "ratna", "yuni", "lina", "tari", "dian", "mega",
+    "budi", "eko", "joko", "slamet", "hari", "prasetyo", "wahyu", "rizal", "feri",
+    "arifin", "hasan", "ilham", "krisna", "lukman", "maulana", "nanda", "oscar",
+)
+_LAST = (
+    "pratama", "saputra", "wijaya", "hidayat", "nugroho", "setiawan", "firmansyah",
+    "ramadhan", "maulana", "kusuma", "permana", "susanto", "gunawan", "hartono",
+    "santoso", "halim", "wibowo", "utomo", "purnama", "suryana", "lestari",
+    "anggraini", "mahmud", "fauzi", "islami", "rahmawati", "astuti", "handayani",
+    "oktaviani", "simanjuntak", "siregar", "nasution", "harahap", "situmorang",
+)
+
+
+# ─────────────────────────────────────────────────────────────── egress picker
+# One shared, lazily-filled pool of verified exits. `ZMINE_EGRESS=pool` turns it
+# on; anything else keeps the old direct/WARP behaviour. Each account gets the
+# next exit round-robin, so N accounts never share one IP (until the pool wraps).
+_EGRESS = {"enabled": None, "pool": [], "i": 0}
+
+
+def _egress_enabled() -> bool:
+    if _EGRESS["enabled"] is None:
+        _EGRESS["enabled"] = os.environ.get("ZMINE_EGRESS", "").strip().lower() in ("pool", "1", "on")
+    return _EGRESS["enabled"]
+
+
+def _next_proxy(log_fn=log) -> str | None:
+    """Next verified exit, or None to use the direct/WARP connection."""
+    if not _egress_enabled():
+        return None
+    if not _EGRESS["pool"]:
+        _EGRESS["pool"] = egress_pool(ORIGIN, limit=12, verbose=True)
+        log_fn(f"    [egress] pool: {len(_EGRESS['pool'])} verified exit(s)")
+    if not _EGRESS["pool"]:
+        return None
+    p = _EGRESS["pool"][_EGRESS["i"] % len(_EGRESS["pool"])]
+    _EGRESS["i"] += 1
+    return p
 
 
 def farm(count: int, ref: str | None, *, pace: float = 45.0, model: str = TASK_MODEL,
@@ -459,8 +576,9 @@ def farm(count: int, ref: str | None, *, pace: float = 45.0, model: str = TASK_M
     made = []
     for i in range(count):
         name = _rand_name()
+        proxy = _next_proxy(log_fn)
         with _lock():
-            code, j = register(name, ref)  # register() waits on the global gate
+            code, j = register(name, ref, proxy=proxy)  # register() waits on the global gate
         if code == 429:
             ra = _retry_after_seconds(j) or 3600.0
             _rate_gate(ra, "429")
@@ -473,10 +591,10 @@ def farm(count: int, ref: str | None, *, pace: float = 45.0, model: str = TASK_M
         log_fn(f"[{i + 1}/{count}] registered {name} handle={(j.get('user') or {}).get('handle')}")
         rec = {"displayName": name, "handle": (j.get("user") or {}).get("handle"),
                "loginKey": j.get("loginKey"), "recoveryPhrase": j.get("recoveryPhrase"),
-               "ref": ref, "ts": time.time()}
+               "ref": ref, "proxy": proxy, "ts": time.time()}
         _save_account(rec)
         made.append(rec)
-        do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn)
+        do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn, proxy=proxy)
         if i + 1 < count:
             time.sleep(pace)
     return made
@@ -489,8 +607,9 @@ def worker(ref: str | None = None, *, model: str = TASK_MODEL, want: int = 12,
     serialised by the global gate, so the site is never hammered. A 429 parks all
     workers for the site's retryAfter window and this call exits without retrying."""
     name = _rand_name()
+    proxy = _next_proxy(log_fn)
     with _lock():
-        code, j = register(name, ref)   # register() itself waits on the global gate
+        code, j = register(name, ref, proxy=proxy)   # register() itself waits on the global gate
     if code == 429:
         ra = _retry_after_seconds(j) or 3600.0
         _rate_gate(ra, "429")
@@ -500,11 +619,11 @@ def worker(ref: str | None = None, *, model: str = TASK_MODEL, want: int = 12,
         return {"ok": False, "code": code}
     rec = {"displayName": name, "handle": (j.get("user") or {}).get("handle"),
            "loginKey": j.get("loginKey"), "recoveryPhrase": j.get("recoveryPhrase"),
-           "ref": ref, "ts": time.time()}
+           "ref": ref, "proxy": proxy, "ts": time.time()}
     with _lock():
         _save_account(rec)
     log_fn(f"registered {name} handle={rec['handle']}")
-    return do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn)
+    return do_account(rec["loginKey"], model=model, want=want, log_fn=log_fn, proxy=proxy)
 
 
 def autopilot(target: int = 25, ref: str | None = "RCFZ9GA7", *,
@@ -519,14 +638,20 @@ def autopilot(target: int = 25, ref: str | None = "RCFZ9GA7", *,
     `target` accounts while keeping all of them mining."""
     accts = _load_accounts()
     referred = [a for a in accts if a.get("ref") == ref] if ref else accts
-    log_fn(f"autopilot: {len(accts)} stored, {len(referred)} referred (target {target})")
+    # A disabled account still occupies a slot in the store but is worthless, so
+    # it must NOT count toward the target (otherwise the farm stops at 25 dead
+    # accounts). Count only usable ones and keep registering to replace them.
+    usable = [a for a in referred if not a.get("disabled")]
+    dead = len(referred) - len(usable)
+    log_fn(f"autopilot: {len(accts)} stored, {len(referred)} referred "
+           f"({len(usable)} usable, {dead} disabled) (target {target})")
     added = 0
     parked = _gate_wait_seconds()
     if parked > 60:
         log_fn(f"autopilot: registration parked for {parked / 60:.0f} min "
                f"-> skipping new signups this pass, still renewing sessions/tasks")
     else:
-        while len(referred) + added < target:
+        while len(usable) + added < target:
             r = worker(ref, model=model, want=want, log_fn=log_fn)
             if r.get("code") == 429:
                 log_fn("autopilot: rate-limited -> stopping registration this pass")
@@ -542,7 +667,8 @@ def autopilot(target: int = 25, ref: str | None = "RCFZ9GA7", *,
 
 
 def tick(*, model: str = TASK_MODEL, want: int = 12, pace: float = 20.0, log_fn=log) -> None:
-    """Daily maintenance: activate + answer tasks for every stored account."""
+    """Daily maintenance: activate + answer tasks for every stored account. Reuses
+    each account's stored `proxy` when present, else the direct/WARP connection."""
     accts = _load_accounts()
     log_fn(f"tick: {len(accts)} stored account(s)")
     for i, a in enumerate(accts):
@@ -550,7 +676,8 @@ def tick(*, model: str = TASK_MODEL, want: int = 12, pace: float = 20.0, log_fn=
             time.sleep(pace)
         log_fn(f"[{i + 1}/{len(accts)}] {a.get('displayName')} ({(a.get('user') or {}).get('handle') or a.get('handle')})")
         with _lock():
-            do_account(a["loginKey"], model=model, want=want, log_fn=log_fn)
+            do_account(a["loginKey"], model=model, want=want, log_fn=log_fn,
+                       proxy=a.get("proxy"))
 
 
 # ─────────────────────────────────────────────────────────────── CLI
@@ -559,12 +686,14 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("register"); s.add_argument("--name"); s.add_argument("--ref", default="RCFZ9GA7")
+    s.add_argument("--egress", default="", help="'pool' to register through a fresh relay exit")
     s = sub.add_parser("farm")
     s.add_argument("--count", type=int, default=1)
     s.add_argument("--ref", default="RCFZ9GA7")
     s.add_argument("--pace", type=float, default=45.0)
     s.add_argument("--model", default=TASK_MODEL)
     s.add_argument("--want", type=int, default=12)
+    s.add_argument("--egress", default="", help="'pool' to give each account its own exit IP")
     s = sub.add_parser("tick")
     s.add_argument("--pace", type=float, default=20.0)
     s.add_argument("--model", default=TASK_MODEL)
@@ -574,21 +703,27 @@ def main(argv=None) -> int:
     s.add_argument("--ref", default="RCFZ9GA7")
     s.add_argument("--model", default=TASK_MODEL)
     s.add_argument("--want", type=int, default=12)
+    s.add_argument("--egress", default="", help="'pool' to give this account its own exit IP")
     s = sub.add_parser("autopilot")
     s.add_argument("--target", type=int, default=25)
     s.add_argument("--ref", default="RCFZ9GA7")
     s.add_argument("--model", default=TASK_MODEL)
     s.add_argument("--want", type=int, default=12)
+    s.add_argument("--egress", default="", help="'pool' to give each account its own exit IP")
     s = sub.add_parser("status")
+    s = sub.add_parser("pool"); s.add_argument("--limit", type=int, default=12)
 
     a = ap.parse_args(argv)
+    if getattr(a, "egress", ""):
+        os.environ["ZMINE_EGRESS"] = a.egress
     if a.cmd == "register":
         name = a.name or _rand_name()
-        code, j = register(name, a.ref)
+        proxy = _next_proxy()
+        code, j = register(name, a.ref, proxy=proxy)
         if code in (200, 201) and j.get("loginKey"):
             rec = {"displayName": name, "handle": (j.get("user") or {}).get("handle"),
                    "loginKey": j.get("loginKey"), "recoveryPhrase": j.get("recoveryPhrase"),
-                   "ts": time.time()}
+                   "proxy": proxy, "ts": time.time()}
             _save_account(rec)
             log(f"registered {name} handle={rec['handle']} loginKey={rec['loginKey']}")
         else:
@@ -614,6 +749,11 @@ def main(argv=None) -> int:
         log(f"{len(accts)} account(s) in {ACCOUNTS}")
         for x in accts:
             log(f"  {x.get('displayName'):14s} handle={x.get('handle')} key={str(x.get('loginKey'))[:18]}...")
+    elif a.cmd == "pool":
+        px = egress_pool(ORIGIN, limit=a.limit, verbose=True)
+        log(f"{len(px)} verified exit(s):")
+        for p in px:
+            log(f"  {p}")
     return 0
 
 

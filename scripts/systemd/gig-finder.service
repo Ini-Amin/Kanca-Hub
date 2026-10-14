@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily gig finder: run on LightVela, pull the report home for the agents
+# Autonomous, no human in the loop. LightVela is the always-on box; the report is
+# pulled back to reports/ so agents on the laptop can read it. Falls back to a
+# local run if LightVela is unreachable, so a pass never silently does nothing.
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/bin/bash -c 'D=$(date +%%Y-%%m-%%d); if ssh -o BatchMode=yes -o ConnectTimeout=20 lightvela "cd ~/Auto-FreeCF && git pull -q && python3 scripts/gig_finder.py"; then scp -q lightvela:~/Auto-FreeCF/reports/gigs-$D.md %h/Auto-FreeCF/reports/ 2>/dev/null || true; else echo "LightVela unreachable -> running locally"; python3 %h/Auto-FreeCF/scripts/gig_finder.py; fi'
+TimeoutStartSec=900
+Nice=10
