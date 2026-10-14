@@ -104,7 +104,7 @@ not an essay. Detail lives in `docs/` and `reports/`.
 | Timer | Does |
 |---|---|
 | `zmine-tick.timer` | `zmine.py autopilot --target 25` every 2 h (with `ZMINE_EGRESS=pool`). |
-| `zcode-watch.service` | Auto-mint JWTs, autofarm when usable pool drops to `min_active` (3). Pace (`pace_minutes`, 15) — not the post-success cooldown — gates catch-up farms. `usable` = quota on GLM-5.3 OR Flash. |
+| `zcode-watch.service` | Auto-mint JWTs. Farming is driven by the existing loop scripts (`rail_zai_farm.sh`, `r9_farm_loop.py`) — NOT by inventing new autofarm logic in `zcode.py`. |
 | `zcode-bridge.service` | The bridge on `:8787` (needs `zcode-egress-tunnel`). |
 | `zcode-egress-tunnel.service` | `ssh -L 127.0.0.1:25344` → LightVela WARP. |
 | `lv-zai-farm.timer` | z.ai farm on LightVela (01/07/13/19:30). |
