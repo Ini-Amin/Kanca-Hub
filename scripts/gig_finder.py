@@ -94,9 +94,13 @@ def good(g):
     blob = f"{g['title']} {g['text']}"
     hi = g["usd"][1]
     if g["src"] in ("superteam", "algora"):
-        # agent-doable work: no bid cap (submissions aren't a bidding war), and
-        # either the platform says agents may enter or the work reads like code.
-        return bool(g.get("agent") or FIT_ST.search(blob))
+        # Agent-doable work ONLY: the AGENT_ALLOWED flag alone is not enough —
+        # sponsors flag content/social bounties too (e.g. a Spanish promo bounty
+        # that bans fully-AI content yet carries the agent flag). Require the
+        # work itself to read like code/audit/dev.
+        if not FIT_ST.search(blob):
+            return False
+        return True
     return FIT.search(blob) and not NOPE.search(blob) and g["bids"] <= MAX_BIDS and (hi == 0 or MIN_USD <= hi <= MAX_USD)
 
 
@@ -137,8 +141,11 @@ if __name__ == "__main__":
         assert not good({**base, "title": "Design a logo"})
         assert not good({**base, "title": "Python bot", "bids": 90})
         assert not good({**base, "title": "Scraper", "usd": (2000, 5000)})
-        assert good({**base, "title": "Write a thread about X", "src": "superteam", "agent": True})
         assert good({**base, "title": "Smart contract audit", "src": "algora"})
+        assert good({**base, "title": "Write a thread about X", "src": "superteam",
+                     "text": "bounty agent submission for code review", "agent": True})
+        assert not good({**base, "title": "Write a thread about X", "src": "superteam",
+                         "text": "social content promo", "agent": True})
         assert not good({**base, "title": "Make a meme video", "src": "superteam"})
         sys.exit(print("ok"))
     main()
