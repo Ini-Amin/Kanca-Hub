@@ -60,11 +60,13 @@ not an essay. Detail lives in `docs/` and `reports/`.
 
 - **z.ai WAF blocks the laptop's home IP** (HTML 405). The bridge must reach z.ai
   through the egress tunnel (`zcode-egress-tunnel` → LightVela WARP `:25344`).
-- **z.ai WAF also flags a stale WARP egress.** On 2026-10-14 ~08:30–09:01 the
-  tunnel's 23h-old WARP session got blocked (all `Zcode/*` → Alibaba 405 page).
-  Fix = restart wireproxy on LightVela for a fresh egress IP (doesn't touch ssh
-  or the box). While `Zcode/*` is down, the farm solver uses
-  `cl/z-ai/glm-5.3-flash` (same model, different route — verified working).
+- **z.ai WAF now blocks the whole WARP egress range, not one IP.** 2026-10-14
+  pm: fresh wireproxy sessions (.254.46, .222.47) both serve the Alibaba 405
+  on chat/completions on arrival. Rotating buys nothing anymore. Billing/mint
+  endpoints still pass (0 billing_err — low volume). Bridge chat burn is
+  ~283 req/hour through one egress: that volume is what gets flagged
+  (405 pages, then 3012 "unusual activity"). Use cl/nr routes until the
+  bridge gets a non-WARP upstream.
 - **Aliyun claim captcha is signed + behavioural.** Scripted drags are rejected
   with `3007`. A claim only succeeds via a real interactive solve → not automatable.
 - **Slider low-x (x < 130) is unsolved.** Drag + verdict are correct; the *aim* is
