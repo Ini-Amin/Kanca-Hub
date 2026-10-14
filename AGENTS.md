@@ -72,12 +72,11 @@ not an essay. Detail lives in `docs/` and `reports/`.
 - **zmine.si rate-limits registration** (HTTP 429, `retryAfterSeconds=3600`).
 - **zmine.si `displayName` accepts `[A-Za-z0-9_]` only** — spaces give a 400
   `validation_error`. Names are region-tagged and joined with `_` (`meera_gupta`).
-- **zmine referral code RCFZ9GA7 is NOT attributed to amenkanca.** Two fully
-  active referred accounts (meera_gupta 12/12 tasks + session, pedro_flores
-  12/12 + session) show as `/referrals total: 0`. Our register request is
-  byte-identical to the web app (`{displayName, referralCode}`), so the code
-  belongs to a different account or the server drops it. User must verify in
-  the app which account owns the code. (`register` CLI now saves `ref`.)
+- **zmine referral RCFZ9GA7 IS the user's; attribution WORKS.** App shows 30
+  referrals incl. our `meera_gupta` + `pedro_flores`. Only the API endpoint
+  `GET /referrals` returns `total: 0` (stale/quirk — don't trust it; the app is
+  truth). Our register request is byte-identical to the web app.
+  (`register` CLI now saves `ref`.)
 - **No `kanca` prefix in ANY farm identity.** It fingerprints every account as one
   owner. All farms (zmine, github, windscribe, autofarm, github_to_anything) use
   `scripts/persona.py`. Guarded by `tests/test_persona.py`.
