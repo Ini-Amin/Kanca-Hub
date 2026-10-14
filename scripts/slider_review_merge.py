@@ -9,6 +9,8 @@ Sources (all inside reports/slider_review/, override with SLIDER_DIR)
   * verified.json   — the human's own X from the review page = trusted truth
   * vision.json     — the vision-oracle X from the subagents (weak)
   * mined.json      — the RLHF pass-mined truth (a landed target = truth)
+  * ws_verified.json — human labels for the Windscribe slider (SEPARATE table:
+    reports/slider_review/ws.json holds the puzzle index, ws_img/ the images)
 
 A puzzle is "labeled" when it already has a trusted truth (team / verified /
 mined pass) OR the diff detector and the vision oracle agree within TOL px.
@@ -143,6 +145,25 @@ def main() -> int:
     (src / "merged.json").write_text(json.dumps(rows, indent=1))
     print(f"merged {len(rows)} puzzles -> {src/'merged.json'}  "
           f"(labeled={n_lab} verify={n_ver} failed={n_fail})")
+
+    # ---- windscribe table (separate provider, separate images/labels) ----
+    ws_meta = _json(src / "ws.json")
+    ws_truth = {i: int(_x_of(v)) for i, v in _json(src / "ws_verified.json").items()
+                if _x_of(v) is not None}
+    ws_rows = []
+    for i, m in sorted(ws_meta.items()):
+        if not (src / "ws_img" / f"{i}_bg.png").exists():
+            continue
+        t = ws_truth.get(i)
+        ws_rows.append(dict(id=i, bg=f"{i}_bg.png", piece=f"{i}_piece.png",
+                            detector=None, flat_dark=None, vision=None, conf=None,
+                            truth=t, source="verified" if t is not None else "",
+                            status="labeled" if t is not None else "windscribe",
+                            attempts=0, fails=0, top=m.get("top")))
+    (src / "ws_merged.json").write_text(json.dumps(ws_rows, indent=1))
+    n_ws_lab = sum(1 for r in ws_rows if r["truth"] is not None)
+    print(f"windscribe {len(ws_rows)} puzzles -> {src/'ws_merged.json'}  "
+          f"(labeled={n_ws_lab})")
     return 0
 
 

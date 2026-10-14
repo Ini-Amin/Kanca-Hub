@@ -10,6 +10,8 @@ backup the DB), two key sources selected with --kind:
   zcode  ZCode bridge keys. Source: ~/.zcode-bridge/keys.txt (`key=email`).
          Node: openai-compatible "Zcode", base http://127.0.0.1:8787/v1
          One row per ACCOUNT even when an account has several bridge keys.
+  gemini Gemini web bridge. Source: ~/.gemini-bridge/keys.json (`{name: key}`).
+         Node: openai-compatible "GeminiWeb", base http://127.0.0.1:8789/v1
 
 Usage:
     python3 inject_thk_9router.py                        # thk, default account.json
@@ -75,6 +77,18 @@ def load_zcode(path: str) -> list[dict]:
     return out
 
 
+def load_gemini(path: str) -> list[dict]:
+    """One local key for the Gemini bridge. Created on first serve; the file is
+    a 9Router-style map {name: key} so multiple keys stay possible."""
+    p = Path(path)
+    if not p.exists():
+        return []
+    data = json.loads(p.read_text())
+    if isinstance(data, dict):
+        return [{"key": v, "name": k, "email": None} for k, v in data.items() if v]
+    return []
+
+
 def verify_http(base: str, key: str, model: str, timeout: int = 30) -> tuple[bool, str]:
     url = f"{base}/chat/completions"
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": "hi"}],
@@ -117,9 +131,25 @@ SOURCES = {
         # client cannot pile onto a single account (which 3009s on concurrency)
         "round_robin": True,
     },
+    "gemini": {
+        # Gemini web app (gemini.google.com/app) via scripts/gemini_bridge.py
+        # (:8789). Web-session cookies, NOT the Antigravity OAuth token.
+        "node_id": "openai-compatible-chat-f77c4c7c-4d55-4b06-b702-e470578c5483",
+        "node_name": "GeminiWeb",
+        "prefix": "GeminiWeb",
+        "base": "http://127.0.0.1:8789/v1",
+        "model": "gemini-web",
+        "default_input": str(Path.home() / ".gemini-bridge" / "keys.json"),
+        "load": load_gemini,
+        "verify": True,
+        "one_per_email": False,
+    },
     "zcode-janus": {
-        # Janus's dedicated bridge (:8788, own egress). Same keys, separate
-        # node so Janus's quota burn and failover never touch the main pool.
+        # RETIRED 2026-10-14: Janus was retired at the user's request. The bridge
+        # (:8788) and its dedicated egress (:25345) are stopped + disabled, units
+        # parked as *.retired, and the ZcodeJanus node was deleted from 9Router.
+        # Kept here so re-adding the node later is one command. Re-enable by
+        # restoring scripts/systemd/zcode-janus-*.service and janus_egress.env.
         "node_id": "openai-compatible-chat-9f2c1a7e-7d4d-4e9a-b3f1-2c8d4e6a0f1b",
         "node_name": "ZcodeJanus",
         "prefix": "ZcodeJ",
@@ -130,6 +160,7 @@ SOURCES = {
         "verify": False,
         "one_per_email": True,
         "round_robin": True,
+        "retired": True,
     },
 }
 
@@ -259,6 +290,9 @@ def main() -> int:
     args = ap.parse_args()
 
     src = dict(SOURCES[args.kind])
+    if src.get("retired"):
+        print(f"✗ {args.kind} is retired (see SOURCES comment) — nothing injected.", file=sys.stderr)
+        return 1
     if args.model:
         src["model"] = args.model
     inp = args.input or src["default_input"]

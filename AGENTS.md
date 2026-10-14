@@ -15,8 +15,9 @@ not an essay. Detail lives in `docs/` and `reports/`.
 | Job | The ONE script | Notes |
 |---|---|---|
 | zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. Solver = `Zcode/GLM-5.3-Flash` (medium) → `nr/stepfun-3.7-flash` → `kilo laguna free`, sequential (override `ZMINE_TASK_MODEL(S)`). Per-account egress is ON by default. |
-| ZCode Start-Plan bridge | `:8787` → relay `:25346` → VeePN exit B | Main pool. `zcode-bridge` + `zcode-main-egress`. ASUS rides via `zcode-asus-tunnel` (reverse ssh, zero ASUS changes). |
-| ZCode bridge for Janus | `:8788` + `:25345` relay | SAME keys, DEDICATED VeePN exit A. Services `zcode-janus-bridge` + `zcode-janus-egress`. 9Router node `ZcodeJanus` (`ZcodeJ/*`). Spare egress: Browsec (measured 200 to z.ai:443, no auth). Windscribe = web-only without account auth. |
+| ZCode bridge | `:8787` → relay `:25346` → **Browsec exit** `us34.rapidcdn.xyz:7241` | Main pool. `zcode-bridge` + `zcode-main-egress`. Works from the laptop directly (Browsec exit clears the WAF); the old VeePN/WARP paths are 405. ASUS rides via `zcode-asus-tunnel`. |
+| ZCode bridge for Janus | **RETIRED 2026-10-14** | `zcode-janus-bridge` (`:8788`) + `zcode-janus-egress` (`:25345`) stopped/disabled, units parked `*.retired`, node `ZcodeJanus` deleted from 9Router. Restore from `scripts/systemd/zcode-janus-*.service.retired` + `janus_egress.env.retired` if ever needed. |
+| Gemini web bridge | `:8789` | `scripts/gemini_bridge.py` (`gemini-bridge.service`). gemini.google.com/app via web-session cookies (`~/.gemini-bridge/`), NOT the Antigravity OAuth token. 9Router node `GeminiWeb` (`GeminiWeb/*`). Serialized + 3 s min gap. |
 | ZCode account mint/claim/watch | `scripts/zcode.py` | `mint/claim/watch/farm`. Needs CDP Chrome `:9222`. |
 | 9Router key injection | `scripts/inject_thk_9router.py` | `--kind zcode|thk`. Writes `~/.9router/db/data.sqlite`. |
 | Slider CAPTCHA solver | `scripts/captcha_slider.py` | Vision labeler: `scripts/slider_vision_label.py`. Review UI: `reports/slider_review/`. |
@@ -61,6 +62,15 @@ not an essay. Detail lives in `docs/` and `reports/`.
 
 - **z.ai WAF blocks the laptop's home IP** (HTML 405). The bridge must reach z.ai
   through the egress tunnel (`zcode-egress-tunnel` → LightVela WARP `:25344`).
+- **Which egress passes z.ai (measured 2026-10-14 pm):** veepn exits = 405;
+  Windscribe/Browsec TLS fronts return 401 = proxy-auth challenge (they need a
+  paid/registered account, `egress_ip` null) — NOT a WAF pass. **Browsec open
+  exits pass**: relay → `https://us34.rapidcdn.xyz:7241` → z.ai = 401 from the
+  app (WAF cleared). `main_egress.env` `MAIN_UPSTREAM` now points there and
+  ZCode chat returns 200 with GLM-5.3 (verified: 1 request). Backup at
+  `main_egress.env.bak-20261014-160837` (veepn). To re-probe: POST the messages
+  endpoint through each `proxy_pool.all_entries()` entry and treat 405 as the
+  only block (`/tmp/opencode/zai_probe.py` pattern).
 - **z.ai WAF now blocks the whole WARP egress range, not one IP.** 2026-10-14
   pm: fresh wireproxy sessions (.254.46, .222.47) both serve the Alibaba 405
   on chat/completions on arrival. Rotating buys nothing anymore. Billing/mint

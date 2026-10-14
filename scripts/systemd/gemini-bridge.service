@@ -1,0 +1,19 @@
+# /home/amen/.config/systemd/user/gemini-bridge.service -> scripts/systemd/gemini-bridge.service
+[Unit]
+Description=Gemini web bridge (OpenAI-compatible, :8789)
+# BindsTo: if 9router stops, this stops with it; it also refuses to run alone
+PartOf=app-9router@autostart.service
+After=network-online.target app-9router@autostart.service
+
+[Service]
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+# gemini_webapi lives in its own venv: it pins pydantic/curl-cffi versions that
+# the shared auto-freecf venv cannot satisfy.
+ExecStart=%h/.local/share/gemini-webapi-venv/bin/python scripts/gemini_bridge.py serve --port 8789
+Restart=on-failure
+RestartSec=5
+
+[Install]
+# NOT default.target: pulled in by 9router's own start job instead
+WantedBy=app-9router@autostart.service

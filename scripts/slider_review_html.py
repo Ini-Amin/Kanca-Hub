@@ -19,6 +19,9 @@ Three sections:
     feeds the label store so the same puzzle is answered for free next time.
   * "Labeled" — puzzles that already have a trusted X (team labels / real passes)
     or where detector and vision agree. Read-only, for spot-checking.
+  * "Windscribe" — SEPARATE section, own image set (ws_img/, 700px-wide bg +
+    240px piece + a `top` offset hint) and its own export file (ws_verified.json).
+    These guard the AuthToken/login slider on api.windscribe.com.
 
 The page is a utility, not a landing page: one job (read the gap, fix the number),
 so it is a light, flat, high-density tool. No gradients, no glass, no glow.
@@ -120,7 +123,8 @@ function draw(card){
   g.drawImage(p._bg, 0,0, cv.width, cv.height);
   if(x!=null){
     g.globalAlpha=.95;
-    g.drawImage(p._pc, x*s, 0, p._pc.naturalWidth*s, p._pc.naturalHeight*s);
+    const sc = cv.width / p._bg.naturalWidth;   // uniform: display px per bg px
+    g.drawImage(p._pc, x*sc, (p.top||0)*sc, p._pc.naturalWidth*sc, p._pc.naturalHeight*sc);
     g.globalAlpha=1;
   }
   // guides
@@ -141,7 +145,7 @@ function draw(card){
     out.className="err";
   } else out.textContent="";
 }
-function clamp(v){ return (v==null||isNaN(v))?null:Math.max(0,Math.min(300,v)); }
+function clamp(v,max){ max=max||300; return (v==null||isNaN(v))?null:Math.max(0,Math.min(max,v)); }
 
 function load(img,src){ return new Promise(r=>{ img.onload=()=>r(img);
   img.onerror=()=>r(null); img.src=src; }); }
@@ -154,19 +158,25 @@ function attachDrag(el){
   // canvas is 300 CSS px wide (native 300) -> X == offsetX, but scale anyway
   const xFromEvent = e => {
     const r = cv.getBoundingClientRect();
-    return Math.round((e.clientX - r.left) * (cv.width / r.width));
+    const bgw = el._p.status==="windscribe" ? 700 : 300;   // input is in BG pixels
+    return Math.round((e.clientX - r.left) * (bgw / r.width));
   };
-  const setX = v => { inp.value = clamp(v); inp.dispatchEvent(new Event("input")); };
+  const xmax = el._p.status==="windscribe" ? 460 : 300;
+  const setX = v => { inp.value = clamp(v, xmax); inp.dispatchEvent(new Event("input")); };
+  let grabBg = 0, grabClientX = 0;   // delta-drag: piece moves WITH the cursor
   cv.addEventListener("pointerdown", e => {
     if(e.button!=null && e.button!==0) return;
     dragging = true; el.classList.add("dragging");
     cv.setPointerCapture(e.pointerId);
-    setX(xFromEvent(e));                 // click anywhere = snap there
+    grabBg = parseInt(inp.value,10)||0;
+    grabClientX = e.clientX;
     e.preventDefault();
   });
   cv.addEventListener("pointermove", e => {
     if(!dragging) return;
-    setX(xFromEvent(e));
+    const r = cv.getBoundingClientRect();
+    const bgw = el._p.status==="windscribe" ? 700 : 300;
+    setX(Math.round(grabBg + (e.clientX - grabClientX) * (bgw / r.width)));
     e.preventDefault();
   });
   const stop = e => {
@@ -188,18 +198,18 @@ function attachDrag(el){
 
 function card(p){
   const el = document.createElement("div");
-  const kind = p.status==="verify" ? "verify" : p.status==="failed" ? "fail" : "lab";
+  const kind = p.status==="verify" ? "verify" : p.status==="failed" ? "fail"
+             : p.status==="windscribe" ? "lab" : "lab";
   el.className = "card " + kind;
-  const start = p.status==="labeled" ? (p.truth ?? p.detector ?? p.vision ?? 0)
-                                    : (p.detector ?? p.vision ?? p.truth ?? 0);
-  const label = p.status==="verify" ? "verify" : p.status==="failed" ? "failed" : "labeled";
+  const start = p.truth ?? p.detector ?? p.vision ?? 0;
+  const label = p.status==="windscribe" ? "windscribe" : p.status==="verify" ? "verify" : p.status==="failed" ? "failed" : "labeled";
   el.innerHTML =
     '<div class="cap"><span class="id">'+p.id.slice(0,10)+'</span>'+
     '<span class="state">'+label+'</span></div>'+
-    '<div class="pair"><canvas width="300" height="300" title="drag the piece to the slot"></canvas>'+
+    '<div class="pair"><canvas width="'+(p.status==="windscribe"?700:300)+'" height="'+(p.status==="windscribe"?400:300)+'" style="width:100%;height:auto" title="drag the piece to the slot"></canvas>'+
       '<div class="fields">'+
         '<label class="row"><span class="k">gap&nbsp;X</span>'+
-          '<input type="number" min="0" max="300" step="1" value="'+start+'"></label>'+
+          '<input type="number" min="0" max="'+(p.status==="windscribe"?460:300)+'" step="1" value="'+start+'"></label>'+
         '<div class="row det"><span class="val"><span class="swatch"></span>'+
           (p.detector==null?"—":p.detector)+'</span> <span class="mini">detector</span></div>'+
         '<div class="row vis"><span class="val"><span class="swatch"></span>'+
@@ -215,15 +225,15 @@ function card(p){
   el._p = p;
   attachDrag(el);
   const inp = el.querySelector("input");
-  inp.addEventListener("input", ()=>{ p.chosen = clamp(parseInt(inp.value,10)); draw(el); });
+  inp.addEventListener("input", ()=>{ p.chosen = clamp(parseInt(inp.value,10), p.status==="windscribe"?460:300); draw(el); });
   inp.addEventListener("keydown", e=>{
     if(e.key==="ArrowUp"||e.key==="ArrowDown"){
-      e.preventDefault(); inp.value = clamp((parseInt(inp.value,10)||0)+(e.key==="ArrowUp"?1:-1)); 
+      e.preventDefault(); inp.value = clamp((parseInt(inp.value,10)||0)+(e.key==="ArrowUp"?1:-1), p.status==="windscribe"?460:300);
       inp.dispatchEvent(new Event("input"));
     }
   });
   inp.addEventListener("wheel", e=>{ if(document.activeElement===inp){e.preventDefault();
-    inp.value=clamp((parseInt(inp.value,10)||0)+(e.deltaY<0?1:-1));
+    inp.value=clamp((parseInt(inp.value,10)||0)+(e.deltaY<0?1:-1), p.status==="windscribe"?460:300);
     inp.dispatchEvent(new Event("input")); }}, {passive:false});
   return el;
 }
@@ -235,28 +245,34 @@ function render(list){
 }
 
 function exportLabels(){
-  const out = {};
+  const out = {}, ws = {};
   document.querySelectorAll(".card").forEach(c=>{
     const p=c._p, v=c.querySelector("input").value;
-    if(p.status==="verify" || p.status==="failed")
+    if(p.status==="windscribe"){
+      ws[p.id] = {x: clamp(parseInt(v,10),460), top:p.top??null};
+    } else if(p.status==="verify" || p.status==="failed"){
       out[p.id] = {x: clamp(parseInt(v,10)), detector:p.detector,
         vision:p.vision, truth:p.truth??null, conf:p.conf??null};
+    }
   });
-  const blob = new Blob([JSON.stringify(out,null,1)],{type:"application/json"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob); a.download="slider_verified.json"; a.click();
-  URL.revokeObjectURL(a.href);
+  const dl=(obj,name)=>{ const blob=new Blob([JSON.stringify(obj,null,1)],{type:"application/json"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=name; a.click(); URL.revokeObjectURL(a.href); };
+  if(Object.keys(out).length) dl(out,"slider_verified.json");
+  if(Object.keys(ws).length) dl(ws,"ws_verified.json");
 }
 
 async function main(){
   render({host:"verify", items:DATA.filter(p=>p.status==="verify")});
   render({host:"failed", items:DATA.filter(p=>p.status==="failed")});
   render({host:"labeled", items:DATA.filter(p=>p.status==="labeled")});
+  render({host:"windscribe", items:DATA.filter(p=>p.status==="windscribe")});
   // load images then paint
   for(const c of document.querySelectorAll(".card")){
     const p=c._p;
-    p._bg = await load(new Image(), IMG+p.bg);
-    p._pc = await load(new Image(), IMG+p.piece);
+    const dir = p.status==="windscribe" ? "ws_img/" : IMG;
+    p._bg = await load(new Image(), dir+p.bg);
+    p._pc = await load(new Image(), dir+p.piece);
     draw(c);
   }
   document.getElementById("export").addEventListener("click", exportLabels);
@@ -266,8 +282,21 @@ main();
 """
 
 
+def _ws_puzzles() -> list[dict]:
+    meta = json.loads((SRC / "ws.json").read_text()) if (SRC / "ws.json").exists() else {}
+    out = []
+    for i in sorted(meta):
+        if (SRC / "ws_img" / f"{i}_bg.png").exists():
+            out.append(dict(id=i, bg=f"{i}_bg.png", piece=f"{i}_piece.png",
+                            detector=None, flat_dark=None, vision=None, conf=None,
+                            truth=None, source="", status="windscribe",
+                            attempts=0, fails=0, top=meta[i].get("top")))
+    return out
+
+
 def main() -> int:
     merged = json.loads((SRC / "merged.json").read_text())
+    ws = _ws_puzzles()
     # order: verify first (the ones that need a human), then failed, then labeled
     verify = [p for p in merged if p["status"] == "verify"]
     failed = [p for p in merged if p["status"] == "failed"]
@@ -292,8 +321,9 @@ def main() -> int:
 
     payload = [{k: p.get(k) for k in ("id", "bg", "piece", "detector", "flat_dark",
                                       "vision", "conf", "truth", "source", "status",
-                                      "attempts", "fails")}
-               for p in verify + failed + labeled]
+                                      "attempts", "fails", "top")}
+               for p in verify + failed + labeled + ws]
+    wsdir = OUT / "ws_img"
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -302,7 +332,7 @@ def main() -> int:
 <body>
 <header>
   <h1>Aliyun slider — gap X review</h1>
-  <span class="meta">{len(verify)} to verify · {len(failed)} failed · {len(labeled)} labeled · {len(merged)} puzzles</span>
+  <span class="meta">{len(verify)} to verify · {len(failed)} failed · {len(labeled)} labeled · {len(merged)} puzzles · {len(ws)} windscribe</span>
   <span class="spacer"></span>
   <button class="primary" id="export">Export my labels</button>
 </header>
@@ -330,6 +360,14 @@ def main() -> int:
     detector and vision model agree. Read-only — spot-check if you like.</p>
     <div class="grid" id="labeled"></div>
   </section>
+  <section>
+    <h2>Windscribe <span class="count">{len(ws)}</span></h2>
+    <p class="hint">Auth-token slider from <code>api.windscribe.com/AuthToken/login</code>
+    (guard of the account-quota API). Bg is 700px wide and the piece sits at the
+    <b>top</b> offset printed on the card — set the gap X the same way: drag, click,
+    or type. Export lands in <code>ws_verified.json</code>.</p>
+    <div class="grid" id="windscribe"></div>
+  </section>
   <p><button id="export2">Export my labels</button>
      <span class="mini">— downloads <code>slider_verified.json</code> with your X for every
      card in "Needs verification" and "Failed".</span></p>
@@ -337,7 +375,8 @@ def main() -> int:
 <footer>Generated by <code>scripts/slider_review_html.py</code> from
 <code>reports/slider_review/merged.json</code> — one folder holds the images, the
 attempt dataset, every label source, and this page. Images: Aliyun slider puzzles
-captured by the z.ai signup flow.</footer>
+captured by the z.ai signup flow; Windscribe sliders in ws_img/ from the
+AuthToken/login challenge.</footer>
 <script>{JS.replace("__DATA__", json.dumps(payload))}</script>
 </body></html>
 """
