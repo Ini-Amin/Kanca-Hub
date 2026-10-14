@@ -26,7 +26,20 @@ import urllib.request
 from pathlib import Path
 
 ENV_FILE = Path.home() / ".config" / "auto-freecf" / ".env"
+TG_LOG = Path.home() / ".config" / "auto-freecf" / "logs" / "telegram.log"
 CHUNK = 4000
+
+
+def _tg_log(direction: str, chat: str, text: str) -> None:
+    """Append-only conversation log (outbound now; worker appends inbound).
+    The user ordered every customer conversation into the telegram logs."""
+    try:
+        TG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(TG_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": __import__("time").time(), "dir": direction,
+                                "chat": str(chat), "text": text[:2000]}) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _load_env() -> None:
@@ -64,6 +77,7 @@ def send(text: str, chat: str = "") -> list[int]:
         if not j.get("ok"):
             raise RuntimeError(f"sendMessage failed: {j}")
         ids.append((j.get("result") or {}).get("message_id", 0))
+    _tg_log("out", target, text)
     return ids
 
 
