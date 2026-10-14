@@ -34,8 +34,10 @@
 - Payout: user's wallet. Secret lives ONLY in `~/.config/auto-freecf/.env`
   (600, `wallet_superteam`) — NEVER in bashrc (exports leak to subprocesses),
   never in the repo, never on throwaway boxes.
-- Autonomy: **Telegram notify + auto-submit under $X** (threshold TBD by user).
-  Above $X = human approves via Telegram. WhatsApp: no API for personal
-  accounts — Telegram Bot API is the channel (needs BotFather token from user).
+- Autonomy: **Telegram notify + auto-submit under $20** (locked 2026-10-14).
+  Above $20 = human approves via Telegram. WhatsApp: no API for personal
+  accounts — Telegram Bot API is the channel. Notifier = `scripts/notify.py`
+  (token in `.env`, chat id captured via `notify.py setup` after the user
+  messages the bot once).
 - NOT built yet: worker scripts, notifier, threshold. Build after the user
   supplies the Telegram bot token + confirms $X.
