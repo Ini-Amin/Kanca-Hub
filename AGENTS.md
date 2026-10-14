@@ -14,7 +14,7 @@ not an essay. Detail lives in `docs/` and `reports/`.
 
 | Job | The ONE script | Notes |
 |---|---|---|
-| zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. Solver = `cl/z-ai/glm-5.3-flash` + `reasoning_effort: medium`, fallback `nr/laguna-s-2.1` (override `ZMINE_TASK_MODEL(S)`). Per-account egress is ON by default. |
+| zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. Solver = `Zcode/GLM-5.3-Flash` (medium) → `nr/stepfun-3.7-flash` → `kilo laguna free`, sequential (override `ZMINE_TASK_MODEL(S)`). Per-account egress is ON by default. |
 | ZCode Start-Plan bridge | `scripts/zcode_bridge_server.py` | Serves `:8787`. CLI wrapper: `scripts/zcode.py`. |
 | ZCode bridge for Janus | `:8788` + `:25345` relay | SAME keys, DEDICATED VeePN egress (bypasses the WAF-flagged shared tunnel). Services `zcode-janus-bridge` + `zcode-janus-egress`. 9Router node `ZcodeJanus` (`ZcodeJ/*`). |
 | ZCode account mint/claim/watch | `scripts/zcode.py` | `mint/claim/watch/farm`. Needs CDP Chrome `:9222`. |
