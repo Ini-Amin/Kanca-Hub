@@ -14,7 +14,7 @@ not an essay. Detail lives in `docs/` and `reports/`.
 
 | Job | The ONE script | Notes |
 |---|---|---|
-| zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. Solver = `Zcode/GLM-5.3-Flash` + `reasoning_effort: medium` (override `ZMINE_TASK_MODEL`/`ZMINE_TASK_REASONING`). Per-account egress is ON by default. |
+| zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. Solver = `cl/z-ai/glm-5.3-flash` + `reasoning_effort: medium` (override `ZMINE_TASK_MODEL`/`ZMINE_TASK_REASONING`). Per-account egress is ON by default. |
 | ZCode Start-Plan bridge | `scripts/zcode_bridge_server.py` | Serves `:8787`. CLI wrapper: `scripts/zcode.py`. |
 | ZCode account mint/claim/watch | `scripts/zcode.py` | `mint/claim/watch/farm`. Needs CDP Chrome `:9222`. |
 | 9Router key injection | `scripts/inject_thk_9router.py` | `--kind zcode|thk`. Writes `~/.9router/db/data.sqlite`. |
@@ -59,6 +59,11 @@ not an essay. Detail lives in `docs/` and `reports/`.
 
 - **z.ai WAF blocks the laptop's home IP** (HTML 405). The bridge must reach z.ai
   through the egress tunnel (`zcode-egress-tunnel` → LightVela WARP `:25344`).
+- **z.ai WAF also flags a stale WARP egress.** On 2026-10-14 ~08:30–09:01 the
+  tunnel's 23h-old WARP session got blocked (all `Zcode/*` → Alibaba 405 page).
+  Fix = restart wireproxy on LightVela for a fresh egress IP (doesn't touch ssh
+  or the box). While `Zcode/*` is down, the farm solver uses
+  `cl/z-ai/glm-5.3-flash` (same model, different route — verified working).
 - **Aliyun claim captcha is signed + behavioural.** Scripted drags are rejected
   with `3007`. A claim only succeeds via a real interactive solve → not automatable.
 - **Slider low-x (x < 130) is unsolved.** Drag + verdict are correct; the *aim* is
@@ -67,6 +72,12 @@ not an essay. Detail lives in `docs/` and `reports/`.
 - **zmine.si rate-limits registration** (HTTP 429, `retryAfterSeconds=3600`).
 - **zmine.si `displayName` accepts `[A-Za-z0-9_]` only** — spaces give a 400
   `validation_error`. Names are region-tagged and joined with `_` (`meera_gupta`).
+- **zmine referral code RCFZ9GA7 is NOT attributed to amenkanca.** Two fully
+  active referred accounts (meera_gupta 12/12 tasks + session, pedro_flores
+  12/12 + session) show as `/referrals total: 0`. Our register request is
+  byte-identical to the web app (`{displayName, referralCode}`), so the code
+  belongs to a different account or the server drops it. User must verify in
+  the app which account owns the code. (`register` CLI now saves `ref`.)
 - **No `kanca` prefix in ANY farm identity.** It fingerprints every account as one
   owner. All farms (zmine, github, windscribe, autofarm, github_to_anything) use
   `scripts/persona.py`. Guarded by `tests/test_persona.py`.
@@ -93,7 +104,7 @@ not an essay. Detail lives in `docs/` and `reports/`.
 | Timer | Does |
 |---|---|
 | `zmine-tick.timer` | `zmine.py autopilot --target 25` every 2 h (with `ZMINE_EGRESS=pool`). |
-| `zcode-watch.service` | Auto-mint JWTs, autofarm when GLM-5.3 quota is low. |
+| `zcode-watch.service` | Auto-mint JWTs, autofarm when usable pool drops to `min_active` (3). Pace (`pace_minutes`, 15) — not the post-success cooldown — gates catch-up farms. `usable` = quota on GLM-5.3 OR Flash. |
 | `zcode-bridge.service` | The bridge on `:8787` (needs `zcode-egress-tunnel`). |
 | `zcode-egress-tunnel.service` | `ssh -L 127.0.0.1:25344` → LightVela WARP. |
 | `lv-zai-farm.timer` | z.ai farm on LightVela (01/07/13/19:30). |
