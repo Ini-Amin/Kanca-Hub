@@ -24,3 +24,18 @@
 - Gig focus moved to **Superteam Earn + Algora** (agent-doable dev bounties).
   `gig_finder.py` already sources both; daily report surfaces them. No auto-bid
   without the user's explicit go (needs paid Freelancer account for FL bids).
+
+## Automated gigs worker (decided 2026-10-14, runs on LightVela)
+- Box roles: **Railway = farm, LightVela = gigs.** LightVela spec: Ubuntu 24.04,
+  2 core / 7.4 GB / 50 GB, SG IP 161.120.177.213, idle, sudo nopasswd.
+- Workers run **both in parallel** on LightVela (dev-bounty executor + content
+  pipeline); burst compute spills to Railway. No Google Workspace support on
+  the box yet (no Chrome, no Google login) — OAuth/Gmail flows need user setup.
+- Payout: user's wallet. Secret lives ONLY in `~/.config/auto-freecf/.env`
+  (600, `wallet_superteam`) — NEVER in bashrc (exports leak to subprocesses),
+  never in the repo, never on throwaway boxes.
+- Autonomy: **Telegram notify + auto-submit under $X** (threshold TBD by user).
+  Above $X = human approves via Telegram. WhatsApp: no API for personal
+  accounts — Telegram Bot API is the channel (needs BotFather token from user).
+- NOT built yet: worker scripts, notifier, threshold. Build after the user
+  supplies the Telegram bot token + confirms $X.
