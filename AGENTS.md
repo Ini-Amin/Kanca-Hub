@@ -15,8 +15,8 @@ not an essay. Detail lives in `docs/` and `reports/`.
 | Job | The ONE script | Notes |
 |---|---|---|
 | zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. Solver = `Zcode/GLM-5.3-Flash` (medium) → `nr/stepfun-3.7-flash` → `kilo laguna free`, sequential (override `ZMINE_TASK_MODEL(S)`). Per-account egress is ON by default. |
-| ZCode Start-Plan bridge | `scripts/zcode_bridge_server.py` | Serves `:8787`. CLI wrapper: `scripts/zcode.py`. |
-| ZCode bridge for Janus | `:8788` + `:25345` relay | SAME keys, DEDICATED VeePN egress (bypasses the WAF-flagged shared tunnel). Services `zcode-janus-bridge` + `zcode-janus-egress`. 9Router node `ZcodeJanus` (`ZcodeJ/*`). Spare egress: Browsec (measured 200 to z.ai:443, no auth). Windscribe = web-only without account auth. |
+| ZCode Start-Plan bridge | `:8787` → relay `:25346` → VeePN exit B | Main pool. `zcode-bridge` + `zcode-main-egress`. ASUS rides via `zcode-asus-tunnel` (reverse ssh, zero ASUS changes). |
+| ZCode bridge for Janus | `:8788` + `:25345` relay | SAME keys, DEDICATED VeePN exit A. Services `zcode-janus-bridge` + `zcode-janus-egress`. 9Router node `ZcodeJanus` (`ZcodeJ/*`). Spare egress: Browsec (measured 200 to z.ai:443, no auth). Windscribe = web-only without account auth. |
 | ZCode account mint/claim/watch | `scripts/zcode.py` | `mint/claim/watch/farm`. Needs CDP Chrome `:9222`. |
 | 9Router key injection | `scripts/inject_thk_9router.py` | `--kind zcode|thk`. Writes `~/.9router/db/data.sqlite`. |
 | Slider CAPTCHA solver | `scripts/captcha_slider.py` | Vision labeler: `scripts/slider_vision_label.py`. Review UI: `reports/slider_review/`. |
