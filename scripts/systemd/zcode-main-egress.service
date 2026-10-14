@@ -1,0 +1,16 @@
+[Unit]
+Description=Main egress relay: plaintext CONNECT on :25346 chaining into VPN pool exit B
+# Same pattern as zcode-janus-egress (:25345 -> exit A). The main bridge
+# (:8787) uses exit B so the two pools never share one egress IP (volume
+# flags). Upstream comes from main_egress.env (MAIN_UPSTREAM, creds, 600).
+
+[Service]
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=%h/.config/auto-freecf/main_egress.env
+ExecStart=/bin/sh -c 'exec %h/.local/share/auto-freecf/venv/bin/python %h/Auto-FreeCF/scripts/egress.py --relay 25346 --upstream "$MAIN_UPSTREAM"'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

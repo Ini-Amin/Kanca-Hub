@@ -1,0 +1,14 @@
+[Unit]
+Description=Expose laptop ZCode bridge (:8787) on ASUS loopback via reverse tunnel
+# ASUS's 9Router already has a Zcode node pointed at 127.0.0.1:8787 (its own
+# loopback, where nothing listens). This tunnel publishes the LAPTOP's bridge
+# there, so ASUS rides the same keys/quota with ZERO DB changes on ASUS.
+# Runs from the laptop (outbound ssh, no ASUS-side setup).
+
+[Service]
+ExecStart=/usr/bin/ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -N -R 127.0.0.1:8787:127.0.0.1:8787 asus
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
