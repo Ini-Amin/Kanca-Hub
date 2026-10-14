@@ -2,7 +2,7 @@
 """scripts/r9_conncheck.py -- probe every 9Router providerConnection and report health.
 
 Reads ~/.9router/db/data.sqlite (read-only), hits each connection's endpoint with a
-real tiny request, and writes a health snapshot to /tmp/opencode/r9_health.json.
+real tiny request, and writes a health snapshot to ~/.config/auto-freecf/r9_health.json.
 
 This is the missing input for failover: 9Router's own testStatus goes stale
 (it only updates on a real request), so we probe for ground truth.
@@ -25,7 +25,7 @@ import urllib.request
 from pathlib import Path
 
 DB = Path(os.path.expanduser("~/.9router/db/data.sqlite"))
-OUT = Path("/tmp/opencode/r9_health.json")
+OUT = Path(os.path.expanduser("~/.config/auto-freecf/r9_health.json"))
 TIMEOUT = 25
 
 # a cheap model per provider family to probe with (first that the provider serves)

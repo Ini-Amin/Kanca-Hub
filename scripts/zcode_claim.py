@@ -18,7 +18,6 @@ usage: zcode_claim.py <email> <password> [plan_id]
 import asyncio, json, os, sys, urllib.request, urllib.error
 
 sys.path.insert(0, "/home/amen/Auto-FreeCF/scripts")
-sys.path.insert(0, "/tmp/opencode")
 import captcha_slider as CS
 from playwright.async_api import async_playwright
 

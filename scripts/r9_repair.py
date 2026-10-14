@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """scripts/r9_repair.py -- make 9Router key-level failover actually work.
 
-Run `r9_conncheck.py` first (writes /tmp/opencode/r9_health.json), then this.
+Run `r9_conncheck.py` first (writes ~/.config/auto-freecf/r9_health.json), then this.
 
 What it fixes:
   1. PRIORITY TIES  -- connections with equal priority have no deterministic
@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 
 DB = Path(os.path.expanduser("~/.9router/db/data.sqlite"))
-HEALTH = Path("/tmp/opencode/r9_health.json")
+HEALTH = Path(os.path.expanduser("~/.config/auto-freecf/r9_health.json"))
 THK = "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a"
 
 # model names that THK no longer serves (probed live 2026-10-10)

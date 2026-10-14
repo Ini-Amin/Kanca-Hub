@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-OUT = Path("/tmp/opencode/cap_data")
+OUT = Path(os.path.expanduser("~/.config/auto-freecf/cap_data"))
 AUTH = "https://chat.z.ai/auth"
 
 _SLIDER = """() => {

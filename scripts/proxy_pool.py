@@ -1,23 +1,125 @@
 #!/usr/bin/env python3
-"""
-scripts/proxy_pool.py — per-account rotating proxy pool with template expansion.
-
-Ported from abliteration-bulk-creator's proxy.js. Whereas proxy_lib.harvest()
-collects proxies, this hands ONE egress to each account and can expand a
-sticky-rotating gateway template so every account gets a fresh exit IP:
-
-    http://user:pass@gate.superproxy.io:22225
-    -> http://user-session-{session}:pass@...:22225      (a new session per account)
-    supports {session}, {index}, {country}
-
-Sources, in priority order: an explicit list, a proxy file (proxy.txt), or a
-template. Everything is plain data — no I/O beyond reading the file.
+"""Unified free-egress pool: WARP + Windscribe + VeePN + Browsec.
 
 Usage:
-  python scripts/proxy_pool.py --list "http://u:p@h:1,http://u:p@h:2"
-  python scripts/proxy_pool.py --template "http://u-session-{session}:p@gw:22225" --count 5
+  proxy_pool.py list [cc]            # all providers, optional country filter (browsec/ws)
+  proxy_pool.py get [country]        # best available entry -> JSON {provider, proxy, egress_ip}
+  proxy_pool.py test <provider_url>  # egress check for one entry
+  proxy_pool.py rotate               # down/up WARP (only rotatable provider)
+
+Entry JSON is consumed by farm scripts: proxy={"server": "https://host:port", ...}.
+WARP is system-level (default route) — when active, 'get' returns {"provider":"warp","proxy":None}
+meaning callers must run WITHOUT proxy setting.
 """
-from __future__ import annotations
+import json, socket, ssl, subprocess, sys, time, urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+def _egress(host, port, auth=None, timeout=14):
+    """Egress IP via HTTPS-CONNECT proxy using curl_cffi (chrome TLS in-tunnel)."""
+    try:
+        from curl_cffi import requests as cr
+        px=f"https://{host}:{port}"
+        if auth:
+            import base64
+            user,pw=base64.b64decode(auth).decode().split(":",1)
+            px=f"https://{user}:{pw}@{host}:{port}"
+        r=cr.get("https://api.ipify.org?format=json", proxy=px, impersonate="chrome131", timeout=timeout)
+        return r.json().get("ip")
+    except Exception:
+        return None
+
+def warp_entry():
+    import warp_manager
+    st=warp_manager.status()
+    if st.get("up"):
+        return {"provider":"warp","proxy":None,"egress_ip":st.get("egress_ip"),
+                "note":"system tunnel active; run WITHOUT proxy"}
+    return None
+
+def windscribe_entries(cc=None):
+    try:
+        import windscribe_free_proxy as ws
+        hosts=ws.serverlist()
+        if cc: hosts={k:v for k,v in hosts.items() if cc.lower() in k.lower()}
+        return [{"provider":"windscribe","proxy":{"server":f"https://{h}:443"},"region":k}
+                for k,hl in hosts.items() for h in hl[:2]]
+    except Exception:
+        return []
+
+def browsec_entries(cc=None):
+    try:
+        import browsec_free_proxy as br
+        srv=servers=br.servers()
+        if cc: srv={k:v for k,v in srv.items() if k.lower()==cc.lower()}
+        return [{"provider":"browsec","proxy":{"server":f"https://{h}:{p}"},"region":cc_}
+                for cc_,hl in srv.items() for h,p in hl[:2]]
+    except Exception:
+        return []
+
+def veepn_entries(cc="nl"):
+    try:
+        d=json.load(open(Path.home()/".cache/auto-freecf/veepn_pool.json")) if (Path.home()/".cache/auto-freecf/veepn_pool.json").exists() else None
+        if not d:
+            import veepn_free_proxy as vp
+            d=vp.get_servers(cc)
+            (Path.home()/".cache/auto-freecf").mkdir(parents=True,exist_ok=True)
+            json.dump(d, open(Path.home()/".cache/auto-freecf/veepn_pool.json","w"))
+        return [{"provider":"veepn",
+                 "proxy":{"server":f"https://{s['addresses'][0]}:{s['port']}",
+                          "username":s["username"],"password":s["password"]},
+                 "region":s.get("regionName","")}
+                for s in d]
+    except Exception:
+        return []
+
+def all_entries(cc=None):
+    return warp_entry() and [warp_entry()] or [] if False else \
+           ([warp_entry()] if warp_entry() else []) + veepn_entries() + windscribe_entries(cc) + browsec_entries(cc)
+
+def best(country=None, include_warp=True):
+    """First entry whose tunnel actually reaches ipify (validated, not just listed).
+    With a country filter, WARP is skipped (system tunnel has no per-country egress)."""
+    entries=all_entries(country)
+    if country and include_warp:
+        include_warp=False
+    if not include_warp:
+        entries=[e for e in entries if e["provider"]!="warp"]
+    for e in entries:
+        p=e.get("proxy")
+        if p is None: return e  # warp system-level, trust status
+        hostport=p["server"].split("//")[1]
+        host,port=hostport.rsplit(":",1)
+        auth=None
+        if p.get("username"):
+            import base64
+            auth=base64.b64encode(f"{p['username']}:{p['password']}".encode()).decode()
+        ip=_egress(host,port,auth)
+        if ip:
+            e["egress_ip"]=ip
+            return e
+    return None
+
+if __name__=="__main__":
+    cmd=sys.argv[1] if len(sys.argv)>1 else "get"
+    if cmd=="list":
+        for e in all_entries(sys.argv[2] if len(sys.argv)>2 else None):
+            print(f"{e['provider']:11} {e.get('region',''):12} {e['proxy']['server'] if e['proxy'] else '(system)'}")
+    elif cmd=="get":
+        e=best(sys.argv[2] if len(sys.argv)>2 else None)
+        print(json.dumps(e, indent=1) if e else "{}")
+    elif cmd=="test":
+        url=sys.argv[2]
+        host,port=url.split("//")[1].rsplit(":",1)
+        print(json.dumps({"egress_ip":_egress(host,port)}))
+    elif cmd=="rotate":
+        import warp_manager
+        print("rotated:", warp_manager.rotate())
+
+
+
+# ---- legacy rotating-pool API (kept: unit-tested, used by account farm templates) ----
 
 import argparse
 import secrets
@@ -129,23 +231,3 @@ class ProxyPool:
             nxt = self.static[self._cursor % len(self.static)]
         self.usage[nxt] = self.usage.get(nxt, 0) + 1
         return nxt
-
-
-def _main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Per-account rotating proxy pool")
-    ap.add_argument("--list", default="", help="comma/newline separated proxy URLs")
-    ap.add_argument("--file", default="", help="proxy file (one per line)")
-    ap.add_argument("--template", default="", help="gateway template with {session}/{index}/{country}")
-    ap.add_argument("--count", type=int, default=5)
-    ap.add_argument("--country", default="")
-    a = ap.parse_args(argv)
-    lst = [x for x in a.list.replace("\n", ",").split(",") if x.strip()] if a.list else []
-    pool = ProxyPool(proxy_list=lst, proxy_file=a.file, proxy_template=a.template, country=a.country)
-    print(f"  pool enabled={pool.enabled} static={len(pool.static)} template={bool(pool.template)}")
-    for i in range(a.count):
-        print(f"  account {i}: {pool.assign(i) or '(direct)'}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_main())

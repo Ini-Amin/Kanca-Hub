@@ -29,7 +29,8 @@ STATE = os.path.expanduser("~/.zcode-bridge")
 UPSTREAM = "https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages"
 BLOCKS_FILE = os.path.join(HERE, "zcode_system_blocks.json")
 DEFAULT_MODEL = os.environ.get("ZCODE_MODEL", "GLM-5.3")
-FALLBACK_JWT = "/tmp/opencode/zc_jwt.txt"
+FALLBACK_JWT = os.path.join(STATE, "zc_jwt.txt")
+LEGACY_FALLBACK_JWT = "/tmp/opencode/zc_jwt.txt"  # pre-2026-10-14 path; read-only fallback
 
 # Captured verbatim from the app's own model request (mitmproxy flow, 2026-10-10).
 APP_HEADERS = {
@@ -92,7 +93,7 @@ def read_jwt(email=""):
         if tok:
             return tok
     tok = os.environ.get("ZCODE_JWT", "").strip()
-    return tok or _read(FALLBACK_JWT).strip()
+    return tok or _read(FALLBACK_JWT).strip() or _read(LEGACY_FALLBACK_JWT).strip()
 
 
 def persona_text():

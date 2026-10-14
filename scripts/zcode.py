@@ -189,8 +189,8 @@ def cmd_mint(a):
         rc = subprocess.call([PY_BROWSER, MINT], env=env)
         print("mint rc=%s for %s (%s)" % (rc, email, "ok" if os.path.exists(out) else "FAILED"))
         if os.path.exists(out) and email == os.environ.get("ZB_EMAIL"):
-            # keep legacy path in sync (standalone tools read it)
-            write("/tmp/opencode/zc_jwt.txt", read(out).strip() + "\n")
+            # keep the shared fallback in sync (bridge server reads it)
+            write(os.path.join(STATE, "zc_jwt.txt"), read(out).strip() + "\n")
 
 
 # ---------------- persona / combos ----------------
@@ -482,8 +482,9 @@ def _ensure_cdp_chrome():
     for binary in ("/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
                    "/usr/bin/chromium", "/usr/bin/chromium-browser"):
         if os.path.exists(binary):
+            prof = os.path.expanduser("~/.config/auto-freecf/cdp-profile")
             subprocess.Popen([binary, "--remote-debugging-port=9222",
-                              "--user-data-dir=/tmp/opencode/cdp-profile",
+                              "--user-data-dir=" + prof,
                               "--no-first-run", "--no-default-browser-check"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
@@ -528,7 +529,7 @@ def cmd_farm(a=None, cfg=None, dry=False):
         event("farm_err", "no CDP Chrome on :9222 and no chrome binary found")
         return None
     write(p("farm_state.json"), json.dumps({"ts": time.time(), "status": "running"}))
-    out = "/tmp/opencode/farm_signup.json"
+    out = os.path.join(os.path.expanduser("~/.config/auto-freecf"), "farm_signup.json")
     if os.path.exists(out):
         os.remove(out)
     # headed: the chat.z.ai signup captcha fails too often under headless

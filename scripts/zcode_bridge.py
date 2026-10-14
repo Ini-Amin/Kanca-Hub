@@ -4,7 +4,7 @@
 Generate the OAuth URL (zcode_oauth_url pattern) -> sign in -> consent -> code ->
 POST /api/v1/oauth/token -> ZCode JWT. Verified live (code 0, token minted)."""
 import asyncio, os, sys, json, secrets, urllib.request, urllib.parse
-sys.path.insert(0,'/home/amen/Auto-FreeCF/scripts'); sys.path.insert(0,'/tmp/opencode')
+sys.path.insert(0,'/home/amen/Auto-FreeCF/scripts')
 import captcha_slider as CS
 from consent_hard import accept_consent
 from playwright.async_api import async_playwright
@@ -21,7 +21,7 @@ def _zacct():
 
 EMAIL=(sys.argv[1] if len(sys.argv)>1 else '') or _zacct()[0]
 PW=(sys.argv[2] if len(sys.argv)>2 else '') or _zacct()[1]
-OUT=os.environ.get("ZB_OUT") or "/tmp/opencode/zc_jwt.txt"
+OUT=os.environ.get("ZB_OUT") or os.path.expanduser("~/.zcode-bridge/zc_jwt.txt")
 JS="(t)=>{const e=[...document.querySelectorAll('button,a,div,span')].filter(x=>(x.innerText||'').trim()===t&&x.children.length===0);if(e.length){e[e.length-1].click();return true}return false}"
 # The final OAuth hop lands on zcode.z.ai/app/oauth/login?code=... — a page whose
 # only job is to bounce to the zcode:// desktop app ("Open ZCode"). We never need

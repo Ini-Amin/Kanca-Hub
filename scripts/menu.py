@@ -22,6 +22,7 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
     # Top option: guided pipeline
     ("0", "Run end-to-end setup (guided pipeline)", "end-to-end", None),
 
+
     # Group 1-2: Egress & Diagnostics
     ("1", "Check everything is healthy", "doctor", ["doctor"]),
     ("2", "Start the proxy gateway (background)", "proxy gateway", ["proxy", "gateway"]),
@@ -58,6 +59,16 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
     # Group 9: Vendor farms (vendored tools in ~/Auto-FreeCF-vendor-refs)
     ("22", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"]),
     ("23", "ZCode: z.ai Start Plan -> glm pool", "zcode claim --connect", ["zcode", "claim", "--", "--connect"]),
+
+    # Group 10: Free VPN-fleet egress
+    ("24", "VPN pool: status + flag cooldowns", "vpn status", ["vpn", "status"]),
+    ("25", "VPN pool: list entries", "vpn list", ["vpn", "list"]),
+    ("26", "VPN pool: farm Windscribe accounts", "vpn farm", ["vpn", "farm"]),
+
+    # Group 11: Shared agent memory (Supabase pgvector)
+    ("27", "Memory: search what we already know", "memory search", ["memory", "search", "how do we avoid duplicate scripts"]),
+    ("28", "Memory: ask (search + LLM answer)", "memory ask", ["memory", "ask", "where is the zmine farm script"]),
+    ("29", "Memory: reindex AGENTS.md + docs + scripts", "memory index", ["memory", "index"]),
 ]
 
 MENU_STAGE_HEADERS: dict[str, str] = {
@@ -70,6 +81,8 @@ MENU_STAGE_HEADERS: dict[str, str] = {
     "20": "[7] Adapt Any Website (autofarm)",
     "21": "[8] OTP Mailboxes (Litensi)",
     "22": "[9] Vendor Farms (abliteration · ZCode)",
+    "24": "[10] Free VPN-fleet egress",
+    "27": "[11] Shared Agent Memory (Supabase pgvector)",
 }
 
 # Menu keys that are account farms -> the menu asks for count/pace/egress in-CLI.

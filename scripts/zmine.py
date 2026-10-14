@@ -56,7 +56,10 @@ ACCOUNTS = STATE_DIR / "zmine_accounts.jsonl"
 LOCKFILE = STATE_DIR / "zmine.lock"
 SCRIPTS = Path(__file__).resolve().parent
 
-TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "ag/gemini-3.8-flash-high")
+TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "Zcode/GLM-5.3-Flash")
+# Reason sent with every solver call. GLM-5.3-Flash honours `reasoning_effort`;
+# medium is the sweet spot for the SI bank (cheap, still thinks before answering).
+TASK_REASONING = os.environ.get("ZMINE_TASK_REASONING", "medium")
 R9_BASE = os.environ.get("NINE_ROUTER_BASE", "http://localhost:20128")
 
 
@@ -316,6 +319,8 @@ def _ask_model(prompt: str, options: list, model: str = TASK_MODEL) -> int | Non
     opts = "\n".join(f"{i + 1}. {o}" for i, o in enumerate(options))
     body = {"model": model, "stream": False, "max_tokens": 200, "temperature": 0,
             "messages": [{"role": "user", "content": ASK.format(q=prompt, opts=opts)}]}
+    if TASK_REASONING:
+        body["reasoning_effort"] = TASK_REASONING
     req = urllib.request.Request(f"{R9_BASE.rstrip('/')}/v1/chat/completions",
                                  data=json.dumps(body).encode(), method="POST",
                                  headers={"authorization": f"Bearer {key}",
@@ -507,37 +512,20 @@ def _update_account(login_key: str, **fields) -> None:
 
 
 def _rand_name() -> str:
-    """A realistic, human-looking Indonesian display name. Never a shared brand
-    prefix (the earlier `kanca*` prefix made every account obviously one owner).
+    """A realistic, human-looking display name drawn from several countries, so
+    the referral tree doesn't read as one owner from one place. Never a shared
+    brand prefix (the earlier `kanca*` prefix made every account obviously one
+    owner).
 
-    The site shows this name to the user's referral tree, so it must not be a
-    giveaway. Uses a first-name + surname pool with light spelling variation."""
-    first = random.choice(_FIRST)
-    last = random.choice(_LAST)
-    # occasional second given name, like real Indonesian names
-    if random.random() < 0.35:
-        first = f"{first} {random.choice(_FIRST)}"
-    name = f"{first} {last}"
-    if random.random() < 0.30:                 # some people append a number
-        name += str(random.randint(10, 99))
-    return name
-
-
-_FIRST = (
-    "rizky", "dimas", "bayu", "arif", "fajar", "yoga", "hendra", "agus", "putra",
-    "wawan", "dedi", "andi", "irfan", "galih", "reza", "taufik", "yusuf", "rahmat",
-    "siti", "dewi", "ayu", "putri", "rina", "maya", "lia", "sari", "indah", "nur",
-    "fitri", "wulan", "intan", "ratna", "yuni", "lina", "tari", "dian", "mega",
-    "budi", "eko", "joko", "slamet", "hari", "prasetyo", "wahyu", "rizal", "feri",
-    "arifin", "hasan", "ilham", "krisna", "lukman", "maulana", "nanda", "oscar",
-)
-_LAST = (
-    "pratama", "saputra", "wijaya", "hidayat", "nugroho", "setiawan", "firmansyah",
-    "ramadhan", "maulana", "kusuma", "permana", "susanto", "gunawan", "hartono",
-    "santoso", "halim", "wibowo", "utomo", "purnama", "suryana", "lestari",
-    "anggraini", "mahmud", "fauzi", "islami", "rahmawati", "astuti", "handayani",
-    "oktaviani", "simanjuntak", "siregar", "nasution", "harahap", "situmorang",
-)
+    zmine only accepts [A-Za-z0-9_] in displayName (spaces -> 400 validation
+    error). The pools live in ONE place now — `scripts/persona.py` — so every
+    farm shares the same international identities."""
+    try:
+        sys.path.insert(0, str(SCRIPTS))
+        import persona  # noqa: PLC0415
+        return persona.display_name()
+    except Exception:  # noqa: BLE001
+        return "miner_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
 
 # ─────────────────────────────────────────────────────────────── egress picker
@@ -548,8 +536,12 @@ _EGRESS = {"enabled": None, "pool": [], "i": 0}
 
 
 def _egress_enabled() -> bool:
+    """Per-account egress is ON by default: every account gets its own exit IP, so
+    bulk signups never look like one IP (that is exactly what got 24 accounts
+    disabled). Set ZMINE_EGRESS=direct to opt out."""
     if _EGRESS["enabled"] is None:
-        _EGRESS["enabled"] = os.environ.get("ZMINE_EGRESS", "").strip().lower() in ("pool", "1", "on")
+        v = os.environ.get("ZMINE_EGRESS", "pool").strip().lower()
+        _EGRESS["enabled"] = v not in ("direct", "off", "0", "none", "")
     return _EGRESS["enabled"]
 
 

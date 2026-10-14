@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Railway z.ai window farm (02:05 and 14:05, 2 windows/day)
+
+[Timer]
+OnCalendar=*-*-* 02,14:05
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

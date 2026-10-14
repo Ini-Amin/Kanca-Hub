@@ -6,12 +6,17 @@
 #   rail_zai_farm.sh [count]                 # default host: Railway throwaway boxes
 #   FARM_HOST=lightvela rail_zai_farm.sh 3   # LightVela (always-on, WARP egress)
 #
+# Railway needs NO claim and NO account: an unclaimed box lives 60 min, which is
+# plenty for farming when you bootstrap ONCE and then sign up inside the window
+# (that is what this script now does). `railbox.py rotate` swaps in a fresh box
+# ~4 min before expiry, and `railbox.py daemon` keeps rotating forever.
+#   FARM_PER_BOX=4   rotate after 4 accounts on a box (0 = farm until expiry)
+#   FARM_MARGIN=4    minutes of headroom before a box is considered expired
+#
 # Two hosts, one flow (fresh masked egress -> z.ai signup -> pull record ->
 # ingest). They differ only in how the box is reached:
-#   * Railway (default): a throwaway VM per run, keyed by a fresh SSH identity.
-#     NOTE: railway.new now answers "Anonymous visitors are limited. Sign up to
-#     keep building." so this path needs a Railway account; it is kept for when
-#     that returns.
+#   * Railway (default): a throwaway VM per WINDOW, keyed by a fresh SSH identity.
+#     The box's own masked Railway egress is what the signup sees.
 #   * lightvela: the always-on box, reached over plain ssh, farms with xvfb.
 #
 # Secrets stay off the box: ZAI_MAIL_DOMAIN defaults to the keyless Tempik inbox
@@ -83,43 +88,82 @@ PY
 }
 
 farm_railway() {
+    # WINDOW mode (default): one box, bootstrap ONCE, then farm as many accounts
+    # as fit in the 60-min build window. The per-account box+wipe dance spent
+    # most of the window on apt/uv/camoufox installs; the box's own masked
+    # Railway egress is stable, so reusing it is both cheaper and quieter.
+    # FARM_PER_BOX=0 -> farm until the box is ~4 min from expiry (then rotate).
+    local per=${FARM_PER_BOX:-0}
+    local margin=${FARM_MARGIN:-4}
+    echo "=== railway window: target $COUNT account(s), up to ${per:-auto}/box ==="
+    NAME=$("${RB[@]}" new | sed -n 's/^box \([^:]*\):.*/\1/p')
+    if [ -z "${NAME:-}" ]; then echo "no box created; stopping" >&2; exit 1; fi
+    trap '"${RB[@]}" wipe --name "$NAME" >/dev/null 2>&1 || true' EXIT
+    box_ready "$NAME" || { echo "box $NAME not ready; stopping" >&2; exit 1; }
+    echo "--- box $NAME: farming inside the window ---"
     for i in $(seq 1 "$COUNT"); do
-        echo "=== box $i/$COUNT (railway) ==="
-        NAME=$("${RB[@]}" new | sed -n 's/^box \([^:]*\):.*/\1/p')
-        if [ -z "${NAME:-}" ]; then echo "no box created; stopping" >&2; exit 1; fi
-
-        wipe() { "${RB[@]}" wipe --name "$NAME" >/dev/null 2>&1 || true; }
-        trap wipe EXIT
-
-        "${RB[@]}" push --name "$NAME" || { echo "push failed"; exit 1; }
-        "${RB[@]}" ssh --name "$NAME" "sh /app/work/scripts/railbox_bootstrap.sh" 2>&1 | tail -1
-        "${RB[@]}" ssh --name "$NAME" "sh /app/work/scripts/rail_install_camoufox.sh" 2>&1 | tail -1
+        # stop this box when it is nearly expired (a fresh box rotates in)
+        left=$("${RB[@]}" status 2>/dev/null | awk -v n="$NAME" '$1==n {print $2}')
+        if [ -n "${left:-}" ] && [ "$left" -le "$margin" ] 2>/dev/null; then
+            echo "--- box $NAME has ${left} min left -> rotating ---"
+            NAME=$(rotate_box "$margin") || break
+        fi
+        echo "=== signup $i/$COUNT on $NAME ==="
         "${RB[@]}" ssh --name "$NAME" \
-            "cd /app/work && ZAI_MAIL_DOMAIN=$DOMAIN xvfb-run -a /app/venv/bin/python scripts/zai_signup.py --attempts 3 --out-json /app/work/zai_out.json" 2>&1 | tail -20
-
-        OUT=$(mktemp)
+            "cd /app/work && ZAI_MAIL_DOMAIN=$DOMAIN xvfb-run -a /app/venv/bin/python scripts/zai_signup.py --attempts 3 --out-json /app/work/zai_out.json" 2>&1 | tail -8
+        OUT="$KEYDIR/pulled_$NAME.json"
         if "${SCP[@]}" -i "$KEYDIR/$NAME/key" railway.new:/app/work/zai_out.json "$OUT" 2>/dev/null; then
             merge "$OUT"
         else
             echo "  pull failed"
         fi
         rm -f "$OUT"
-        wipe; trap - EXIT
+        if [ "${per:-0}" -gt 0 ] && [ "$i" -ge "$per" ] && [ "$i" -lt "$COUNT" ]; then
+            echo "--- reached FARM_PER_BOX=$per -> rotating ---"
+            NAME=$(rotate_box "$margin") || break
+        fi
     done
+    "${RB[@]}" wipe --name "$NAME" >/dev/null 2>&1 || true
+    trap - EXIT
+}
+
+# box_ready NAME : push the repo, bootstrap deps, install camoufox. Idempotent.
+box_ready() {
+    local n=$1
+    echo "--- box $n: push + bootstrap ---"
+    "${RB[@]}" push --name "$n" || return 1
+    "${RB[@]}" ssh --name "$n" "sh /app/work/scripts/railbox_bootstrap.sh" 2>&1 | tail -1
+    "${RB[@]}" ssh --name "$n" "sh /app/work/scripts/rail_install_camoufox.sh" 2>&1 | tail -1
+}
+
+# rotate_box MARGIN : snapshot -> new box -> re-push -> bootstrap -> wipe old.
+# Echoes the new box name. Returns non-zero if no box came up. NOTE: railbox.py's
+# own rotate() only bootstraps, so we re-run box_ready() to get camoufox too.
+rotate_box() {
+    local margin=$1 n
+    "${RB[@]}" rotate --margin "$margin" >/dev/null 2>&1 || true
+    n=$("${RB[@]}" status 2>/dev/null | awk 'NR==1{print $1}')
+    if [ -z "${n:-}" ]; then echo "rotate failed; stopping" >&2; return 1; fi
+    echo "--- rotated to $n ---" >&2
+    box_ready "$n" >&2 || return 1
+    printf '%s' "$n"
 }
 
 farm_lightvela() {
     echo "=== $COUNT signup(s) on $HOST ==="
+    # Transfer dir is persistent state, NOT /tmp: a reboot mid-run must not eat
+    # pulled records (merge() only runs after the pull).
+    local lvtmp="$HOME/.config/auto-freecf/lv_zai"
     ssh -o BatchMode=yes -o ConnectTimeout=20 "$HOST" \
-      "cd ~/Auto-FreeCF && git pull -q 2>/dev/null; mkdir -p /tmp/lv_zai; rm -f /tmp/lv_zai/*.json; \
+      "cd ~/Auto-FreeCF && git pull -q 2>/dev/null; mkdir -p ~/.config/auto-freecf/lv_zai; rm -f ~/.config/auto-freecf/lv_zai/*.json; \
        for i in \$(seq 1 $COUNT); do \
          echo \"--- remote signup \$i/$COUNT ---\"; \
          ZAI_MAIL_DOMAIN=$DOMAIN xvfb-run -a ~/venv/bin/python scripts/zai_signup.py \
-           --attempts 2 --out-json /tmp/lv_zai/\$i.json 2>&1 | tail -6; \
+           --attempts 2 --out-json ~/.config/auto-freecf/lv_zai/\$i.json 2>&1 | tail -6; \
        done" 2>&1 | tail -40
-    local tmp=/tmp/lv_zai
+    local tmp="$lvtmp"
     mkdir -p "$tmp"; rm -f "$tmp"/*.json
-    scp -q "$HOST:/tmp/lv_zai/*.json" "$tmp/" 2>/dev/null || true
+    scp -q "$HOST:.config/auto-freecf/lv_zai/*.json" "$tmp/" 2>/dev/null || true
     for f in "$tmp"/*.json; do [ -e "$f" ] && merge "$f"; done
 }
 

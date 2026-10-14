@@ -160,10 +160,14 @@ def build_temp_email(domain_choice: str = "bizid", rand_suffix: str | None = Non
 
 
 def gen_password() -> str:
-    """Generate a compliant strong password."""
-    tail = "".join(random.choices(string.ascii_letters + string.digits, k=12))
-    special = random.choice("!@#$%^&*-_")
-    return f"Kanca_{tail}{special}9"
+    """Generate a compliant strong password (no shared brand token)."""
+    try:
+        from persona import password  # noqa: PLC0415
+        return password(14)
+    except Exception:  # noqa: BLE001
+        tail = "".join(random.choices(string.ascii_letters + string.digits, k=12))
+        special = random.choice("!@#$%^&*-_")
+        return f"Ux_{tail}{special}9"
 
 
 def extract_verification_link(text: str, host: str | None = None) -> str | None:
@@ -747,7 +751,12 @@ async def run_single_site_flow(
 
         print(f"      Filling signup form with {temp_email}…", flush=True)
         if await name_inp.count() > 0:
-            await name_inp.fill("Kanca User")
+            try:
+                from persona import full_name  # noqa: PLC0415
+                _nm = full_name()
+            except Exception:  # noqa: BLE001
+                _nm = "Alex Tan"
+            await name_inp.fill(_nm)
             await asyncio.sleep(get_action_delay(1.0, 2.0))
 
         await email_inp.fill(temp_email)
