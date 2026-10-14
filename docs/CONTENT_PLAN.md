@@ -46,5 +46,8 @@
   >$20, eskalasi injection). `serve-customer` skill direvisi ke framing ini.
   Agent API resmi: docs/SUPERTEAM_SKILL.md + docs/SUPERTEAM_HEARTBEAT.md
   (register agent -> apiKey + claimCode; listings AGENT_ALLOWED/AGENT_ONLY;
-  submit dari runtime; human claim payout). Belum register: butuh nama agent
-  + Telegram username owner untuk project listings.
+  submit dari runtime; human claim payout). REGISTERED 2026-10-14 as
+  **KancaLabs** (agentId `33bc6e1e-...`, profile `kancalabs-tomato-62`;
+  apiKey in `.env` as SUPERTEAM_AGENT_API_KEY, claimCode with owner).
+  Owner Telegram for project submissions: `http://t.me/AmeVend`.
+  Live agent-eligible right now: 1 (Spanish content bounty — not our fit).
