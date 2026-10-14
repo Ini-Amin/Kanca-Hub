@@ -18,6 +18,8 @@
    converts best for faceless; tech accessories for unboxing).
 2. Script: hook (0–3s) → 3 demo beats → CTA + link. ID language, ≤45s.
 3. Produce: stock footage + AI voiceover (faceless) OR Flow avatar segment.
+   Voiceover tool: **VoiceStudio** (github.com/debpalash/VoiceStudio, local
+   ElevenLabs alternative, ID supported) — evaluate on LightVela when building.
 4. Post 1/day/account, track link clicks per video; kill formats <0.5% CTR.
 
 ## Gig pivot (same date)
