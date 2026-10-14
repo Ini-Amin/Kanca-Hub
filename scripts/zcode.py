@@ -179,6 +179,8 @@ def cmd_mint(a):
         targets = [(a.email, a.password or "")]
     if not targets:
         sys.exit("no accounts in accounts.txt; add one first")
+    if not _ensure_cdp_chrome():
+        sys.exit("no CDP Chrome on :9222 and no chrome binary found")
     for email, pw in targets:
         if not pw:
             sys.exit("password missing for %s" % email)

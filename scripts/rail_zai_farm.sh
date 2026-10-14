@@ -154,7 +154,7 @@ farm_lightvela() {
     # Transfer dir is persistent state, NOT /tmp: a reboot mid-run must not eat
     # pulled records (merge() only runs after the pull).
     local lvtmp="$HOME/.config/auto-freecf/lv_zai"
-    ssh -o BatchMode=yes -o ConnectTimeout=20 "$HOST" \
+    ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 "$HOST" \
       "cd ~/Auto-FreeCF && git pull -q 2>/dev/null; mkdir -p ~/.config/auto-freecf/lv_zai; rm -f ~/.config/auto-freecf/lv_zai/*.json; \
        for i in \$(seq 1 $COUNT); do \
          echo \"--- remote signup \$i/$COUNT ---\"; \
