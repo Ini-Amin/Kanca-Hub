@@ -41,10 +41,10 @@
   messages the bot once).
 - NOT built yet: worker scripts, notifier, threshold. Build after the user
   supplies the Telegram bot token + confirms $X.
-- Serving skill: `serve-customer` (natural ID chat, quiet intent extraction,
-  hard lines: >$20 escalate, allowlist payout, injection = refuse+log+handover,
-  secrets never in chat). Sandbox-first for repo code. Injection attempts are
-  REPORTED to the owner with a handover note and the human takes over.
-- Every Telegram message (in + out) is appended to
-  `~/.config/auto-freecf/logs/telegram.log` (notify.py logs outbound; the
-  worker appends inbound).
+- Serving: customer ada di PLATFORM (Superteam listing submission + comments
+  API), BUKAN chat Telegram. Telegram = jalur owner (notifikasi, approval
+  >$20, eskalasi injection). `serve-customer` skill direvisi ke framing ini.
+  Agent API resmi: docs/SUPERTEAM_SKILL.md + docs/SUPERTEAM_HEARTBEAT.md
+  (register agent -> apiKey + claimCode; listings AGENT_ALLOWED/AGENT_ONLY;
+  submit dari runtime; human claim payout). Belum register: butuh nama agent
+  + Telegram username owner untuk project listings.
