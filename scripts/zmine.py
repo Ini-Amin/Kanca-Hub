@@ -56,14 +56,16 @@ ACCOUNTS = STATE_DIR / "zmine_accounts.jsonl"
 LOCKFILE = STATE_DIR / "zmine.lock"
 SCRIPTS = Path(__file__).resolve().parent
 
-TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "cl/z-ai/glm-5.3-flash")
-# Fallback chain: if the first model 503s/errors, try the next. `nr/*` =
-# NaraRouter free allowance (laguna verified live; nemotron also works but
-# slower). ZMINE_TASK_MODEL overrides the whole chain with a single model.
+TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "Zcode/GLM-5.3-Flash")
+# Sequential fallback chain (ONE model at a time per account — never parallel
+# fan-out; that wastes tokens). Measured live 2026-10-14, all correct:
+#   Zcode/GLM-5.3-Flash (medium) -> nr/stepfun-3.7-flash -> kilo laguna free.
+# Notes: model IDs are case-sensitive ("zcode/..." 404s); nr/step-5-preview
+# works but slow (7s); cl/stepfun-3.5 + cl/nemotron:free both 503.
 TASK_MODELS = ([os.environ["ZMINE_TASK_MODEL"]] if os.environ.get("ZMINE_TASK_MODEL")
                else [m.strip() for m in
                      os.environ.get("ZMINE_TASK_MODELS",
-                                    "cl/z-ai/glm-5.3-flash,nr/laguna-s-2.1").split(",") if m.strip()])
+                                    "Zcode/GLM-5.3-Flash,nr/stepfun-3.7-flash,kilo/poolside/laguna-s-2.1:free").split(",") if m.strip()])
 # Reason sent with every solver call. GLM-5.3-Flash honours `reasoning_effort`;
 # medium is the sweet spot for the SI bank (cheap, still thinks before answering).
 TASK_REASONING = os.environ.get("ZMINE_TASK_REASONING", "medium")
