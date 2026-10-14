@@ -117,6 +117,20 @@ SOURCES = {
         # client cannot pile onto a single account (which 3009s on concurrency)
         "round_robin": True,
     },
+    "zcode-janus": {
+        # Janus's dedicated bridge (:8788, own egress). Same keys, separate
+        # node so Janus's quota burn and failover never touch the main pool.
+        "node_id": "openai-compatible-chat-9f2c1a7e-7d4d-4e9a-b3f1-2c8d4e6a0f1b",
+        "node_name": "ZcodeJanus",
+        "prefix": "ZcodeJ",
+        "base": "http://127.0.0.1:8788/v1",
+        "model": "GLM-5.3",
+        "default_input": str(Path.home() / ".zcode-bridge" / "keys.txt"),
+        "load": load_zcode,
+        "verify": False,
+        "one_per_email": True,
+        "round_robin": True,
+    },
 }
 
 

@@ -303,6 +303,20 @@ def upstream_proxy():
     return p
 
 
+def _safe_egress() -> str:
+    """upstream_proxy() with any embedded password redacted. Health endpoints
+    get logged/polled broadly; proxy creds must never appear in them."""
+    p = upstream_proxy() or "direct"
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(p if "://" in p else "http://" + p)
+        if u.password:
+            return p.replace(f":{u.password}@", ":***@")
+    except Exception:  # noqa: BLE001
+        pass
+    return p
+
+
 def egress_opener():
     """urllib opener for the upstream call. Uses the configured proxy when its
     port is live; falls back to a direct opener so a down tunnel degrades to
@@ -537,7 +551,7 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/") or "/"
         if path in ("/", "/health"):
             return self._send(200, {"ok": True, "upstream": "zcode-start-plan",
-                                    "model": DEFAULT_MODEL, "egress": upstream_proxy() or "direct",
+                                    "model": DEFAULT_MODEL, "egress": _safe_egress(),
                                     "keys": len(load_key_map()) or len(API_KEYS)})
         if path == "/quota":
             # open on localhost; a valid bridge key narrows to that key's account

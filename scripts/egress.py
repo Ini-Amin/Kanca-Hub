@@ -669,6 +669,118 @@ def _rotate_phone_ip(verbose: bool = True) -> str | None:
         return None
 
 
+def relay(listen_port: int, upstream: str, *, bind: str = "127.0.0.1") -> None:
+    """Plain-HTTP CONNECT relay on localhost chaining into a TLS proxy upstream.
+
+    Why: stdlib urllib (the ZCode bridge) cannot speak HTTPS-proxy CONNECT, but
+    the VPN pool is TLS-only. This relay accepts plaintext CONNECT locally and
+    re-issues it inside TLS to the pool exit (with Basic auth when the entry
+    has credentials). `upstream` = https://[user:pass@]host:port.
+    Runs forever (systemd sidecar); each connection is independent, so a dead
+    upstream fails one request, not the relay.
+    """
+    import base64
+    import socket
+    import ssl
+    import threading
+    from urllib.parse import urlparse
+
+    u = urlparse(upstream if "://" in upstream else "https://" + upstream)
+    up_host, up_port = u.hostname, u.port or 443
+    up_auth = None
+    if u.username:
+        up_auth = base64.b64encode(f"{u.username}:{u.password or ''}".encode()).decode()
+
+    def handle(client):
+        remote = None
+        try:
+            client.settimeout(15)
+            head = b""
+            while b"\r\n\r\n" not in head:
+                d = client.recv(4096)
+                if not d:
+                    client.close()
+                    return
+                head += d
+                if len(head) > 16384:
+                    client.close()
+                    return
+            line = head.split(b"\r\n", 1)[0].decode("latin1")
+            parts = line.split()
+            if len(parts) < 2 or parts[0].upper() != "CONNECT":
+                client.sendall(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
+                client.close()
+                return
+            target = parts[1]
+            raw = socket.create_connection((up_host, up_port), timeout=15)
+            remote = ssl.create_default_context().wrap_socket(raw, server_hostname=up_host)
+            req = f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n"
+            if up_auth:
+                req += f"Proxy-Authorization: Basic {up_auth}\r\n"
+            remote.sendall((req + "\r\n").encode())
+            resp = b""
+            remote.settimeout(15)
+            while b"\r\n\r\n" not in resp:
+                d = remote.recv(400)
+                if not d:
+                    break
+                resp += d
+            if not resp.startswith(b"HTTP/1.1 200") and not resp.startswith(b"HTTP/1.0 200"):
+                client.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                client.close()
+                return
+            client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            client.settimeout(None)
+            remote.settimeout(None)
+            a, b = client, remote
+            a.setblocking(False)
+            b.setblocking(False)
+            import select as _select
+            while True:
+                r, _, _ = _select.select([a, b], [], [], 300)
+                if not r:
+                    break
+                if a in r:
+                    try:
+                        d = a.recv(16384)
+                    except (ssl.SSLWantReadError, BlockingIOError):
+                        d = b"__retry__"
+                    if d == b"":
+                        break
+                    if d != b"__retry__":
+                        b.sendall(d)
+                if b in r:
+                    try:
+                        d = b.recv(16384)
+                    except (ssl.SSLWantReadError, BlockingIOError):
+                        d = b"__retry__"
+                    if d == b"":
+                        break
+                    if d != b"__retry__":
+                        a.sendall(d)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                if remote:
+                    remote.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((bind, listen_port))
+    srv.listen(50)
+    print(f"[egress] relay {bind}:{listen_port} -> {up_host}:{up_port} (TLS)", flush=True)
+    while True:
+        client, _ = srv.accept()
+        threading.Thread(target=handle, args=(client,), daemon=True).start()
+
+
 def _cli() -> int:
     import argparse
     ap = argparse.ArgumentParser(description="Ensure clean non-blocked egress gateway with smart fallback")
@@ -679,7 +791,18 @@ def _cli() -> int:
     ap.add_argument("--country", default=None, help="allowed egress country code(s) (e.g. US, SG)")
     ap.add_argument("--exclude-country", default=None, help="excluded egress country code(s) (e.g. ID)")
     ap.add_argument("--no-mobile", action="store_true", help="do not escalate to the tethered phone's mobile IP")
+    ap.add_argument("--relay", type=int, default=0, metavar="PORT",
+                    help="run a plaintext CONNECT relay on 127.0.0.1:PORT chaining into --upstream (for urllib clients)")
+    ap.add_argument("--upstream", default="",
+                    help="TLS proxy URL for --relay (https://[user:pass@]host:port)")
     args = ap.parse_args()
+
+    if args.relay:
+        if not args.upstream:
+            print("need --upstream https://[user:pass@]host:port", file=sys.stderr)
+            return 2
+        relay(args.relay, args.upstream)
+        return 0
 
     gw, proc, source = auto_egress(
         target_url=args.target,
