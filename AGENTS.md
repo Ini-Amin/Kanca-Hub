@@ -24,6 +24,7 @@ not an essay. Detail lives in `docs/` and `reports/`.
 | VPN Gate relay | `scripts/vpngate.py` | `up/down/status`. System-wide OpenVPN. |
 | Gig finder | `scripts/gig_finder.py` | Freelancer + Reddit + **Superteam Earn** + **Algora** → `reports/gigs-*.md`. Superteam/Algora are agent-doable (artifact, not bid war). |
 | Shared agent memory (RAG) | `scripts/memory.py` | Supabase pgvector. `index/search/ask/stats`. Backed by Edge Fn `memory-embed` + table `memory_docs`. |
+| Reviewer security gate | semgrep in auto-freecf venv | `venv/bin/semgrep --config auto <files>` before any public PR. Installed 2026-10-14. |
 | Fake identities (names/usernames) | `scripts/persona.py` | ONE pool every farm uses. Region-tagged, never a shared prefix. `full_name/display_name/username/password`. |
 | Free VPN-fleet egress | `scripts/proxy_pool.py` | `kancahub vpn status/list/get/farm`. Windscribe/VeePN/Browsec. Flag cooldowns: `scripts/ip_flag_guard.py`. |
 | Remote heavy jobs | `scripts/lvjob.sh` | `run/ls/log/stop/sync` on LightVela/ASUS. |
@@ -80,6 +81,11 @@ not an essay. Detail lives in `docs/` and `reports/`.
 - **No `kanca` prefix in ANY farm identity.** It fingerprints every account as one
   owner. All farms (zmine, github, windscribe, autofarm, github_to_anything) use
   `scripts/persona.py`. Guarded by `tests/test_persona.py`.
+- **Skills policy.** `SKILL.md` drops (antislop, pptx, serve-customer…) install
+  freely to `~/.config/opencode/skills/`. **MCP servers need your OK first**
+  (they edit `~/.config/opencode/opencode.json`, which is off-limits without
+  asking). Overlap rule: camoufox beats browser-use, pgvector memory beats
+  mem0/graphiti/chroma, direct playwright beats playwright-mcp.
 - **zmine.si DISABLES accounts** registered in bulk from one IP. On 2026-10-14 an
   overnight burst of 24 accounts from the home IP was disabled within hours
   (login → 401 "this account is disabled"). Only the one manually-registered
