@@ -56,7 +56,7 @@ ACCOUNTS = STATE_DIR / "zmine_accounts.jsonl"
 LOCKFILE = STATE_DIR / "zmine.lock"
 SCRIPTS = Path(__file__).resolve().parent
 
-TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "Zcode/GLM-5.3-Flash")
+TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "cl/z-ai/glm-5.3-flash")
 # Reason sent with every solver call. GLM-5.3-Flash honours `reasoning_effort`;
 # medium is the sweet spot for the SI bank (cheap, still thinks before answering).
 TASK_REASONING = os.environ.get("ZMINE_TASK_REASONING", "medium")
@@ -715,7 +715,7 @@ def main(argv=None) -> int:
         if code in (200, 201) and j.get("loginKey"):
             rec = {"displayName": name, "handle": (j.get("user") or {}).get("handle"),
                    "loginKey": j.get("loginKey"), "recoveryPhrase": j.get("recoveryPhrase"),
-                   "proxy": proxy, "ts": time.time()}
+                   "ref": a.ref, "proxy": proxy, "ts": time.time()}
             _save_account(rec)
             log(f"registered {name} handle={rec['handle']} loginKey={rec['loginKey']}")
         else:

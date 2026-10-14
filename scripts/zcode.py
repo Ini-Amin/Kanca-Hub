@@ -464,7 +464,7 @@ def _watch_tick():
 # ---------------- autofarm ----------------
 def _farm_cfg():
     return {"enabled": False, "max_accounts": 4, "cooldown_hours": 20,
-            "min_active": 3,
+            "min_active": 3, "pace_minutes": 15,
             **(load_json(p("config.json"), {}).get("autofarm") or {})}
 
 
@@ -501,9 +501,11 @@ def _ensure_cdp_chrome():
     return False
 
 
-def cmd_farm(a=None, cfg=None, dry=False):
+def cmd_farm(a=None, cfg=None, dry=False, force=False):
     """Create one fresh z.ai account (relay mailbox + captcha + verify link),
-    add it to the bridge (accounts.txt + key) and mint its ZCode JWT."""
+    add it to the bridge (accounts.txt + key) and mint its ZCode JWT.
+    `force=True` (the watcher's autofarm tick, which does its own pacing) skips
+    the post-success cooldown; a manual run still respects it."""
     cfg = cfg or _farm_cfg()
     accts = accounts()
     # max_accounts <= 0 means UNLIMITED: keep farming as long as we are not
@@ -518,7 +520,7 @@ def cmd_farm(a=None, cfg=None, dry=False):
     cool = float(cfg.get("cooldown_hours", 20)) * 3600
     if st.get("status") != "done":
         cool = min(cool, 1800)
-    if not dry and time.time() - float(st.get("ts") or 0) < cool:
+    if not dry and not force and time.time() - float(st.get("ts") or 0) < cool:
         left = (cool - (time.time() - float(st.get("ts") or 0))) / 60
         event("farm", "skipped: cooldown (%.0fmin left, last=%s)" % (left, st.get("status")))
         return None
@@ -578,19 +580,26 @@ def _autofarm_tick(cache):
     if not accts:
         return
 
-    def spent(email):
-        """True if this account has an active plan but no GLM-5.3 quota left."""
-        bs = (cache.get(email) or {}).get("buckets", [])
-        glm = [b for b in bs if "model:glm-5.3" in (b.get("capabilities") or [])]
-        return bool(glm) and all(b.get("remaining_units", 0) <= 0 for b in glm)
+    def left(bs, cap):
+        """Remaining units across buckets carrying exactly this capability."""
+        return sum(max(0, b.get("remaining_units", 0))
+                   for b in bs if cap in (b.get("capabilities") or []))
 
-    def usable(email):
-        """True if the account has a live plan with quota left (cache-based)."""
+    def spent(email):
+        """True if this account has quota data but nothing left on EITHER model.
+        (The bridge chains GLM-5.3 -> Flash on 3012, so an account counts as
+        alive while either bucket has units.)"""
         bs = (cache.get(email) or {}).get("buckets", [])
         if not bs:
             return False
-        glm = [b for b in bs if "model:glm-5.3" in (b.get("capabilities") or [])]
-        return bool(glm) and any(b.get("remaining_units", 0) > 0 for b in glm)
+        return left(bs, "model:glm-5.3") <= 0 and left(bs, "model:glm-5.3-flash") <= 0
+
+    def usable(email):
+        """True if the account has quota left on either model (cache-based)."""
+        bs = (cache.get(email) or {}).get("buckets", [])
+        if not bs:
+            return False
+        return left(bs, "model:glm-5.3") > 0 or left(bs, "model:glm-5.3-flash") > 0
 
     # min_active: keep at least this many usable accounts in the pool. Farm when
     # the usable count drops to/below it. Default 3 (see _farm_cfg); set 0 to
@@ -603,8 +612,18 @@ def _autofarm_tick(cache):
         # nothing usable but nothing is spent either -> billing data is stale
         # (no tick has filled the cache yet); don't farm blind.
         return
+    # Pace, not cooldown: the old code applied the full post-success cooldown
+    # (6h) after EVERY farm, so a pool below min_active rebuilt at 1 account
+    # per 6h — slower than quota burns. While below target, farm at most one
+    # account per pace_minutes (default 15): gentle on signup, fast enough to
+    # actually recover.
+    pace = float(cfg.get("pace_minutes", 15)) * 60
+    st = load_json(p("farm_state.json"), {})
+    ago = time.time() - float(st.get("ts") or 0)
+    if ago < pace:
+        return
     event("autofarm", "usable=%d <= min_active=%d -> farming" % (usable_n, min_active))
-    cmd_farm(cfg=cfg)
+    cmd_farm(cfg=cfg, force=True)
 
 
 def cmd_autofarm(a):
@@ -612,7 +631,7 @@ def cmd_autofarm(a):
         print(json.dumps(_farm_cfg(), indent=1))
         return
     _cfg_toggle(lambda c: {**c, "autofarm": {**_farm_cfg(), "enabled": a.action == "on"}})
-    event("autofarm", "autofarm %s" % ("ON" if a.action == "off" or a.action == "on" else a.action))
+    event("autofarm", "autofarm %s" % ("ON" if a.action == "on" else "OFF"))
     print(json.dumps(_farm_cfg(), indent=1))
 
 
