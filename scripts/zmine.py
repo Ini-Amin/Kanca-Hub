@@ -57,6 +57,13 @@ LOCKFILE = STATE_DIR / "zmine.lock"
 SCRIPTS = Path(__file__).resolve().parent
 
 TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "cl/z-ai/glm-5.3-flash")
+# Fallback chain: if the first model 503s/errors, try the next. `nr/*` =
+# NaraRouter free allowance (laguna verified live; nemotron also works but
+# slower). ZMINE_TASK_MODEL overrides the whole chain with a single model.
+TASK_MODELS = ([os.environ["ZMINE_TASK_MODEL"]] if os.environ.get("ZMINE_TASK_MODEL")
+               else [m.strip() for m in
+                     os.environ.get("ZMINE_TASK_MODELS",
+                                    "cl/z-ai/glm-5.3-flash,nr/laguna-s-2.1").split(",") if m.strip()])
 # Reason sent with every solver call. GLM-5.3-Flash honours `reasoning_effort`;
 # medium is the sweet spot for the SI bank (cheap, still thinks before answering).
 TASK_REASONING = os.environ.get("ZMINE_TASK_REASONING", "medium")
@@ -316,7 +323,19 @@ def _ask_model(prompt: str, options: list, model: str = TASK_MODEL) -> int | Non
     key = _r9_key()
     if not key:
         return None
+    # `model` is the preferred pick; the TASK_MODELS chain is the fallback when
+    # a provider 503s (measured: nr/glm-5.3-flash and vs/[opencode]* 503 while
+    # cl/z-ai and nr/laguna-s-2.1 answer).
+    chain = [model] + [m for m in TASK_MODELS if m != model]
     opts = "\n".join(f"{i + 1}. {o}" for i, o in enumerate(options))
+    for m in chain:
+        idx = _ask_one(prompt, opts, options, m, key)
+        if idx is not None:
+            return idx
+    return None
+
+
+def _ask_one(prompt: str, opts: str, options: list, model: str, key: str) -> int | None:
     body = {"model": model, "stream": False, "max_tokens": 200, "temperature": 0,
             "messages": [{"role": "user", "content": ASK.format(q=prompt, opts=opts)}]}
     if TASK_REASONING:
