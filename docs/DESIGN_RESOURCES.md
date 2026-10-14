@@ -10,6 +10,9 @@ The `GROK BOT MEMORY ENGINEERING` diagram (saved with this note) is the bar for
 diagrams: black on white, thin rules, small caps labels, generous whitespace, no
 gradients, no stock illustration. For app UI: copy shadcn/Aceternity structure,
 not their colors — adapt to the product.
+- **diagram-design** (github.com/cathrynlavery/diagram-design, 54k★): 44 editorial
+  diagram types as self-contained HTML+SVG, explicitly no-Mermaid-slop. This is
+  the pattern library for any diagram agents draw.
 
 ## Prompt libraries (describe the design to the agent)
 
