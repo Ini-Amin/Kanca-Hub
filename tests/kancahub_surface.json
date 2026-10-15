@@ -89,6 +89,52 @@
 "adb usb": [
 "help"
 ],
+"autoclaw": [
+"autoclaw_cmd",
+"help"
+],
+"autoclaw accounts": [
+"help"
+],
+"autoclaw bind": [
+"help",
+"invite_code",
+"token"
+],
+"autoclaw captcha": [
+"help"
+],
+"autoclaw claim": [
+"bind",
+"help",
+"port",
+"verify_param"
+],
+"autoclaw login": [
+"bind",
+"code",
+"help",
+"listen",
+"navigate_uri",
+"port",
+"provider",
+"state",
+"verify_param"
+],
+"autoclaw oauth-url": [
+"help",
+"navigate_uri",
+"port",
+"provider",
+"verify_param"
+],
+"autoclaw status": [
+"help"
+],
+"autoclaw wallets": [
+"help",
+"token"
+],
 "autofarm": [
 "domain",
 "headless",

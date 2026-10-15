@@ -436,7 +436,8 @@ def wizard_manage() -> int:
     print(f"   {c('green','2')}  Clean up dead keys")
     print(f"   {c('green','3')}  Log in to a Cloudflare account I already have")
     print(f"   {c('green','4')}  Show TokenHarbor keys + sync")
-    print(f"   {c('green','5')}  Back")
+    print(f"   {c('green','5')}  AutoClaw: z.ai login + claim +800 tokens" + c("dim", " (1-click browser flow)"))
+    print(f"   {c('green','6')}  Back")
     print()
     ch = ask("Pick one", "1")
     if ch == "1":
@@ -449,6 +450,8 @@ def wizard_manage() -> int:
             run_script("kancahub.py", ["stack", "login", acct])
     elif ch == "4":
         run_script("kancahub.py", ["thk", "sync"])
+    elif ch == "5":
+        run_script("kancahub.py", ["autoclaw", "claim"])
     ask("Press Enter to go back")
     return 0
 
