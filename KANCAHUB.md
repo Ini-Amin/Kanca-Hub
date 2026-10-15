@@ -32,6 +32,7 @@ audited feature surfaces (not thin wrappers).
 | `thk` | harbor | TokenHarbor account + API-key generation → 9Router |
 | `grok` | grok-register | xAI/Grok account farm (SSO risk gate, 5 mail providers) |
 | `proxy` | PetaniProxy | Proxy harvest / gateway / Webshare residential / stats / API |
+| `autoclaw` | AutoClaw 2.0.3 | z.ai OAuth login + fission referral bonus (+800 tokens) |
 | `yowes` | yowes | 13-country teacher document generator |
 | `doctor` | (built-in) | Dependency + service health check |
 
@@ -116,6 +117,15 @@ kancahub proxy api /api/all   # hit any gateway endpoint
 kancahub proxy export --to-pool
 ```
 
+### `autoclaw` — AutoClaw 2.0.3 (Zhipu zwork fission bonus)
+```bash
+kancahub autoclaw                 # interactive menu (claim / status / wallets / accounts)
+kancahub autoclaw claim           # 1-click z.ai OAuth: slider -> authorize -> +800 tokens
+kancahub autoclaw status          # fission campaign status & reward limits
+kancahub autoclaw wallets         # token balances after login
+kancahub autoclaw accounts        # saved AutoClaw logins
+```
+
 ### `yowes` — teacher documents
 ```bash
 kancahub yowes list
@@ -155,11 +165,23 @@ links. See `supabase/` and `cloudflare/`. All free, self-hosted.
 
 ---
 
+## Install (fresh machine)
+
+```bash
+git clone <repo-url> ~/Auto-FreeCF
+bash ~/Auto-FreeCF/scripts/install.sh   # venv + deps + ~/.local/bin/kancahub + doctor
+```
+
+The script is idempotent — re-run it any time to repair the venv or shim.
+No manual `pip install` needed: `requirements.txt` now covers every module
+`kancahub doctor` checks (nodriver, DrissionPage, cloudscraper, mcp, …).
+`kancahub` with no arguments opens the beginner menu.
+
 ## Requirements
 
 - Linux (Fedora tested), Python 3.10–3.13, Node ≥18
 - Google Chrome, `wireguard-tools` (for WARP), `ffmpeg`
-- The managed venv at `~/.local/share/auto-freecf/venv` (created by `moycf`)
+- The managed venv at `~/.local/share/auto-freecf/venv` (created by `scripts/install.sh` or `moycf`)
 
 `kancahub doctor` reports exactly what's missing.
 

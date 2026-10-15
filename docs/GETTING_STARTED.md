@@ -58,11 +58,19 @@ custom provider setup is needed.
 
 ## 2. Install
 
-KancaHub expects the standard Auto-FreeCF layout:
+One command on a fresh machine (venv + deps + shim + health check):
+
+```bash
+git clone <repo-url> ~/Auto-FreeCF
+bash ~/Auto-FreeCF/scripts/install.sh
+```
+
+It ends by running `kancahub doctor` so you see exactly what is left.
+Re-run it any time to repair the venv or shim. Layout it creates:
 
 ```
 ~/Auto-FreeCF/                      # this repo
-~/.local/share/auto-freecf/venv/    # managed Python venv (created by `moycf`)
+~/.local/share/auto-freecf/venv/    # managed Python venv
 ~/.local/bin/kancahub               # launcher shim on your PATH
 ```
 

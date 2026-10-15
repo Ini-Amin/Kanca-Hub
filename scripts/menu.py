@@ -59,16 +59,17 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
     # Group 9: Vendor farms (vendored tools in ~/Auto-FreeCF-vendor-refs)
     ("22", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"]),
     ("23", "ZCode: z.ai Start Plan -> glm pool", "zcode claim --connect", ["zcode", "claim", "--", "--connect"]),
+    ("24", "AutoClaw: 1-click z.ai OAuth claim (+800)", "autoclaw claim", ["autoclaw", "claim"]),
 
     # Group 10: Free VPN-fleet egress
-    ("24", "VPN pool: status + flag cooldowns", "vpn status", ["vpn", "status"]),
-    ("25", "VPN pool: list entries", "vpn list", ["vpn", "list"]),
-    ("26", "VPN pool: farm Windscribe accounts", "vpn farm", ["vpn", "farm"]),
+    ("25", "VPN pool: status + flag cooldowns", "vpn status", ["vpn", "status"]),
+    ("26", "VPN pool: list entries", "vpn list", ["vpn", "list"]),
+    ("27", "VPN pool: farm Windscribe accounts", "vpn farm", ["vpn", "farm"]),
 
     # Group 11: Shared agent memory (Supabase pgvector)
-    ("27", "Memory: search what we already know", "memory search", ["memory", "search", "how do we avoid duplicate scripts"]),
-    ("28", "Memory: ask (search + LLM answer)", "memory ask", ["memory", "ask", "where is the zmine farm script"]),
-    ("29", "Memory: reindex AGENTS.md + docs + scripts", "memory index", ["memory", "index"]),
+    ("28", "Memory: search what we already know", "memory search", ["memory", "search", "how do we avoid duplicate scripts"]),
+    ("29", "Memory: ask (search + LLM answer)", "memory ask", ["memory", "ask", "where is the zmine farm script"]),
+    ("30", "Memory: reindex AGENTS.md + docs + scripts", "memory index", ["memory", "index"]),
 ]
 
 MENU_STAGE_HEADERS: dict[str, str] = {
@@ -80,9 +81,9 @@ MENU_STAGE_HEADERS: dict[str, str] = {
     "19": "[6] IDE Interception (MITM · Antigravity/Copilot/Kiro)",
     "20": "[7] Adapt Any Website (autofarm)",
     "21": "[8] OTP Mailboxes (Litensi)",
-    "22": "[9] Vendor Farms (abliteration · ZCode)",
-    "24": "[10] Free VPN-fleet egress",
-    "27": "[11] Shared Agent Memory (Supabase pgvector)",
+    "22": "[9] Vendor Farms (abliteration · ZCode · AutoClaw)",
+    "25": "[10] Free VPN-fleet egress",
+    "28": "[11] Shared Agent Memory (Supabase pgvector)",
 }
 
 # Menu keys that are account farms -> the menu asks for count/pace/egress in-CLI.
@@ -359,7 +360,8 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
         print()
 
         try:
-            choice = input(f" {kancahub.C['bold']}Select an option [0-{len(kancahub.UNIFIED_MENU)-1}, j, h, q]: {kancahub.C['reset']}").strip().lower()
+            max_k = kancahub.UNIFIED_MENU[-1][0]
+            choice = input(f" {kancahub.C['bold']}Select an option [0-{max_k}, j, h, q]: {kancahub.C['reset']}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             jobs.stop_all()
             print("\nExiting.")
@@ -425,10 +427,41 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
                 return 0
             print()
             continue
+        if choice == "24":
+            print(kancahub.col("cyan", "\n── AutoClaw 2.0.3 (z.ai 1-Click OAuth Claim) ──"))
+            import autoclaw_client as ac
+            default_inv = ac.get_default_invite_code()
+            if default_inv:
+                prompt_txt = f" {kancahub.C['bold']}Invite code to claim [Enter for {default_inv}, q to cancel]: {kancahub.C['reset']}"
+            else:
+                prompt_txt = f" {kancahub.C['bold']}Invite code to claim (+800 tokens, Enter to skip, q to cancel): {kancahub.C['reset']}"
+            try:
+                raw = input(prompt_txt).strip()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if raw.lower() in ("q", "quit", "exit", "cancel"):
+                continue
+            bind_code = raw or default_inv
+            cmd_args = ["autoclaw", "claim"]
+            if bind_code:
+                cmd_args.extend(["--bind", bind_code])
+            try:
+                kancahub.dispatch(p, p.parse_args(cmd_args))
+            except Exception as e:  # noqa: BLE001
+                print(kancahub.col("red", f"Error: {e}"))
+            print()
+            try:
+                input(f" {kancahub.C['bold']}Press Enter to return to menu...{kancahub.C['reset']}")
+            except (EOFError, KeyboardInterrupt):
+                jobs.stop_all()
+                return 0
+            print()
+            continue
+
 
         match = next((item for item in kancahub.UNIFIED_MENU if item[0] == choice), None)
         if not match:
-            print(kancahub.col("yellow", f"  Please enter a valid option between 0 and {len(kancahub.UNIFIED_MENU)-1}, h, or q."))
+            print(kancahub.col("yellow", f"  Please enter a valid option between 0 and {kancahub.UNIFIED_MENU[-1][0]}, h, or q."))
             continue
 
         _key, _desc, cmd_str, cmd_args = match

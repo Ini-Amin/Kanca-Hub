@@ -154,7 +154,19 @@ Config: `~/.config/auto-freecf/.env` (`SCHOOL_EMAIL`, `SCHOOL_MAIL_PASSWORD`, `S
 | `kancahub yowes gui` | Launch the legacy desktop GUI | `kancahub yowes gui` |
 | `kancahub yowes mcp` | Run the yowes MCP server (stdio) | `kancahub yowes mcp` |
 
----
+## `autoclaw` — AutoClaw 2.0.3 (Zhipu zwork fission bonuses & z.ai OAuth)
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub autoclaw` | Interactive menu (claim / status / wallets / accounts / bind / captcha) | `kancahub autoclaw` |
+| `kancahub autoclaw claim` | 1-click z.ai OAuth claim, prompts for invite code if missing (Enter = login only) | `kancahub autoclaw claim` |
+| `kancahub autoclaw status` | Check fission campaign status & reward amounts (default) | `kancahub autoclaw status` |
+| `kancahub autoclaw captcha` | Show Aliyun Captcha 2.0 config (scene_id, prefix, region) | `kancahub autoclaw captcha` |
+| `kancahub autoclaw oauth-url` | Generate z.ai OAuth URL using Aliyun captcha verify proof | `kancahub autoclaw oauth-url --verify-param <proof>` |
+| `kancahub autoclaw login` | Complete z.ai OAuth login (via `--listen`, `--verify-param`, or `--code`/`--state`) | `kancahub autoclaw login --listen --bind INV123` |
+| `kancahub autoclaw bind` | Bind inviter referral code, prompts if omitted (+800 inviter tokens) | `kancahub autoclaw bind INV123` |
+| `kancahub autoclaw wallets` | Check token balances and grant instances | `kancahub autoclaw wallets` |
+| `kancahub autoclaw accounts` | List local saved accounts in `autoclaw_accounts.jsonl` | `kancahub autoclaw accounts` |
 
 ## Common one-liners
 
