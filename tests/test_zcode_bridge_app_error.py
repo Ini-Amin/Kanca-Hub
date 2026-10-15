@@ -93,10 +93,13 @@ class TestAppErrorDetection(unittest.TestCase):
             got += c
         self.assertEqual(got, raw)
 
-    def test_abuse_405_advances_model_chain_not_account(self):
+    def test_abuse_3012_advances_both_chain_and_account(self):
+        """2026-10-15: a 3012 is a per-ACCOUNT block (same request succeeded on
+        the next account), so it must rotate accounts AND advance the model
+        chain. Only rotating the model left blocked accounts in the pool."""
         err = self.m.UpstreamAppError(3012, "unusual activity", b'{"code":3012}', 405)
         self.assertTrue(self.m._try_next_model(err))
-        self.assertFalse(self.m._try_another_account(err))
+        self.assertTrue(self.m._try_another_account(err))
 
     def test_abuse_3012_from_peek_still_advances_chain(self):
         """Regression: _peek_app_error builds the error with the DEFAULT
@@ -109,7 +112,7 @@ class TestAppErrorDetection(unittest.TestCase):
         self.assertEqual(err.app_code, 3012)
         self.assertEqual(err.code, 429)
         self.assertTrue(self.m._try_next_model(err))
-        self.assertFalse(self.m._try_another_account(err))
+        self.assertTrue(self.m._try_another_account(err))
 
     def test_401_rotates_account_not_model(self):
         err = self.m.UpstreamAppError(0, "unauthorized", b"{}", 401)

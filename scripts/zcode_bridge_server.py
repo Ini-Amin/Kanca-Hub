@@ -433,11 +433,17 @@ def _peek_app_error(resp):
 
 
 def _try_another_account(err):
-    """Should failover retry this model on a different account?"""
+    """Should failover retry this model on a different account?
+
+    3012 (app-level "unusual activity") is a per-ACCOUNT block: the same request
+    works on another account (measured 2026-10-15: one account 3012, the next
+    answered 200). Without it here, a blocked account keeps getting picked until
+    a human prunes it by hand — and the client sees the raw 3012 instead."""
     if getattr(err, "code", None) == 401:
         return True
-    return getattr(err, "app_code", None) in (1005, 3009, 3010)
-
+    if "104" in str(err) or "Connection reset" in str(err):
+        return True
+    return getattr(err, "app_code", None) in (1005, 3009, 3010, 3012)
 
 def _try_next_model(err):
     """Should the model chain advance to the next model?
@@ -467,6 +473,14 @@ def call_upstream(payload, email="", timeout=600):
                 time.sleep(5)
                 continue
             e.read = lambda _b=body: _b   # keep body re-readable for the relay
+            try:
+                bj = json.loads(body)
+                if isinstance(bj, dict) and "code" in bj:
+                    e.app_code = bj.get("code")
+                    if "msg" in bj:
+                        e.msg = bj.get("msg")
+            except Exception:
+                pass
             return None, e
         except Exception as e:
             return None, e
