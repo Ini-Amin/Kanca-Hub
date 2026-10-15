@@ -730,36 +730,28 @@ def relay(listen_port: int, upstream: str, *, bind: str = "127.0.0.1") -> None:
                 client.close()
                 return
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-            client.settimeout(None)
-            remote.settimeout(None)
-            a, b = client, remote
-            a.setblocking(False)
-            b.setblocking(False)
-            import select as _select
-            while True:
-                r, _, _ = _select.select([a, b], [], [], 300)
-                if not r:
-                    break
-                if a in r:
+            client.settimeout(300)
+            remote.settimeout(300)
+
+            def pipe(src, dst):
+                try:
+                    while True:
+                        d = src.recv(32768)
+                        if not d:
+                            break
+                        dst.sendall(d)
+                except Exception:
+                    pass
+                finally:
                     try:
-                        d = a.recv(16384)
-                    except (ssl.SSLWantReadError, BlockingIOError):
-                        d = b"__retry__"
-                    if d == b"":
-                        break
-                    if d != b"__retry__":
-                        b.sendall(d)
-                if b in r:
-                    try:
-                        d = b.recv(16384)
-                    except (ssl.SSLWantReadError, BlockingIOError):
-                        d = b"__retry__"
-                    if d == b"":
-                        break
-                    if d != b"__retry__":
-                        a.sendall(d)
-        except Exception:  # noqa: BLE001
-            pass
+                        dst.shutdown(socket.SHUT_WR)
+                    except Exception:
+                        pass
+
+            t = threading.Thread(target=pipe, args=(client, remote), daemon=True)
+            t.start()
+            pipe(remote, client)
+            t.join(timeout=300)
         finally:
             try:
                 client.close()
