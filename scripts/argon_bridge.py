@@ -78,9 +78,16 @@ def _to_gemini(messages, tools):
         if role == "tool":
             nm = names.get(m.get("tool_call_id", ""), "")
             out = m.get("content")
-            contents.append({"role": "user", "parts": [
-                {"functionResponse": {"name": nm, "response": {
-                    "output": out if isinstance(out, str) else json.dumps(out)}}}]})
+            txt = out if isinstance(out, str) else json.dumps(out)
+            if nm:
+                contents.append({"role": "user", "parts": [
+                    {"functionResponse": {"name": nm, "response": {"output": txt}}}]})
+            else:
+                # unknown id (history from another model/bridge): a nameless
+                # functionResponse makes Google 400 the WHOLE request, so
+                # degrade to plain text instead of failing everything.
+                contents.append({"role": "user", "parts": [
+                    {"text": "[tool result (unlinked)]: " + txt}]})
             continue
         c = m.get("content")
         if isinstance(c, list):  # content blocks: keep text, note images
@@ -92,9 +99,18 @@ def _to_gemini(messages, tools):
     decls = []
     for t in tools or []:
         fn = (t.get("function") or {}) if isinstance(t, dict) else {}
-        if fn.get("name"):
-            decls.append({"name": fn["name"], "description": fn.get("description", "")[:500],
-                          "parameters": fn.get("parameters") or {"type": "object", "properties": {}}})
+        if not fn.get("name"):
+            continue
+        params = fn.get("parameters") or {}
+        if not isinstance(params, dict):
+            params = {}
+        # strip OpenAI-isms Google rejects; guarantee object root
+        params = {k: v for k, v in params.items()
+                  if k in ("type", "properties", "required", "description", "enum", "items")}
+        params.setdefault("type", "object")
+        params.setdefault("properties", {})
+        decls.append({"name": fn["name"], "description": fn.get("description", "")[:500],
+                      "parameters": params})
     return system, contents, decls
 
 
@@ -184,7 +200,11 @@ class H(BaseHTTPRequestHandler):
             text, calls, model = upstream(body.get("messages") or [], tier,
                                           body.get("tools"))
         except urllib.error.HTTPError as e:
-            return self._send({"error": "upstream HTTP %s" % e.code}, 502)
+            try:
+                detail = e.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                detail = ""
+            return self._send({"error": "upstream HTTP %s %s" % (e.code, detail)}, 502)
         except Exception as e:
             return self._send({"error": str(e)[:120]}, 500)
         msg = {"role": "assistant", "content": text or None}
