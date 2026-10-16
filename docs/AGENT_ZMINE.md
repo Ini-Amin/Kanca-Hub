@@ -19,8 +19,9 @@ or human docs. CLI: `kancahub zmine <sub>` (parser + dispatch in
 - `zmine.py autopilot --target N` counts ONLY `not disabled` toward the target.
 - Disabled = login 401 `"this account is disabled"` → stamped `disabled=True`.
 - **2026-10-16: 93/95 local accounts 401-disabled, including batch `10-14`
-  (59), `10-15` (25), `10-16` (9).** Per-account egress (`ZMINE_EGRESS=pool`)
-  did NOT save them (69/70 pool accounts disabled vs 24/25 direct).
+  (59), `10-15` (25), `10-16` (9).** Old pool was Proxyma (69/70 dead) —
+  replaced same-day with the Windscribe fleet (`windscribe_candidates`,
+  totallyacdn, never used by the farm). `ZMINE_EGRESS_SOURCE=proxyma` reverts.
 - Usable survivors: `amenkanca` (main, ref None), `sora_hana_wang60`,
   `kavya_kumar` (both ref RCFZ9GA7). All session-active, 12/12 tasks cap.
 - Dashboard's 98 mining refs are the SAME displayNames as local disabled
