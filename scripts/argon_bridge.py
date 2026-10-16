@@ -44,13 +44,70 @@ def token():
     return json.loads(row[0]).get("accessToken", "")
 
 
-def upstream(messages, tier):
+def _to_gemini(messages, tools):
+    """OpenAI messages+tools -> Gemini contents+declarations+systemInstruction."""
+    system = None
+    contents = []
+    names = {}  # tool_call_id -> function name (same-request mapping)
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        if role == "system":
+            c = m.get("content")
+            system = {"role": "user", "parts": [{"text": c if isinstance(c, str) else ""}]}
+            continue
+        if role == "assistant" and m.get("tool_calls"):
+            parts = []
+            txt = m.get("content")
+            if isinstance(txt, str) and txt:
+                parts.append({"text": txt})
+            for tc in m["tool_calls"]:
+                fn = (tc.get("function") or {})
+                tid = tc.get("id") or ("tc-" + uuid.uuid4().hex[:8])
+                names[tid] = fn.get("name", "")
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except Exception:
+                    args = {}
+                # thoughtSignature left OUTSIDE functionCall: upstream rejects
+                # unknown fields inside it; the id lives only in names[].
+                parts.append({"functionCall": {"name": fn.get("name", ""), "args": args}})
+            contents.append({"role": "model", "parts": parts})
+            continue
+        if role == "tool":
+            nm = names.get(m.get("tool_call_id", ""), "")
+            out = m.get("content")
+            contents.append({"role": "user", "parts": [
+                {"functionResponse": {"name": nm, "response": {
+                    "output": out if isinstance(out, str) else json.dumps(out)}}}]})
+            continue
+        c = m.get("content")
+        if isinstance(c, list):  # content blocks: keep text, note images
+            txts = [b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") != "image_url"]
+            imgs = sum(1 for b in c if isinstance(b, dict) and b.get("type") == "image_url")
+            c = "".join(txts) + (" [image omitted]" if imgs else "")
+        contents.append({"role": ("model" if role == "assistant" else "user"),
+                         "parts": [{"text": str(c or "")}]})
+    decls = []
+    for t in tools or []:
+        fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+        if fn.get("name"):
+            decls.append({"name": fn["name"], "description": fn.get("description", "")[:500],
+                          "parameters": fn.get("parameters") or {"type": "object", "properties": {}}})
+    return system, contents, decls
+
+
+def upstream(messages, tier, tools=None):
     model = TIERS.get((tier or "medium").lower(), TIERS["medium"])
-    contents = [{"role": ("model" if m.get("role") == "assistant" else "user"),
-                 "parts": [{"text": str(m.get("content") or "")}]}
-                for m in messages if isinstance(m, dict)]
+    system, contents, decls = _to_gemini(messages, tools)
+    req_body = {"contents": contents}
+    if system:
+        req_body["systemInstruction"] = system
+    if decls:
+        req_body["tools"] = [{"functionDeclarations": decls}]
     body = {"project": "aicode-consumers", "requestId": "checkpoint/" + str(uuid.uuid4()),
-            "request": {"contents": contents}, "model": model,
+            "request": req_body, "model": model,
             "userAgent": "antigravity", "requestType": "checkpoint"}
     req = urllib.request.Request(ENDPOINT, data=json.dumps(body).encode(),
                                  headers={"Authorization": "Bearer " + token(),
@@ -58,19 +115,36 @@ def upstream(messages, tier):
                                           "User-Agent": UA})
     with _lock:
         raw = urllib.request.urlopen(req, timeout=300).read().decode("utf-8", "replace")
-    out = []
+    out, calls, saw_finish = [], [], []
     for line in raw.splitlines():
         line = line.strip()
         if line.startswith("data: ") and line != "data: [DONE]":
             try:
                 d = json.loads(line[6:])
-                for cand in ((d.get("response") or {}).get("candidates") or []):
-                    for p in (((cand.get("content") or {}).get("parts")) or []):
-                        if isinstance(p, dict) and "text" in p and "thought" not in p:
-                            out.append(p["text"])
             except Exception:
-                pass
-    return "".join(out), model
+                continue
+            for cand in ((d.get("response") or {}).get("candidates") or []):
+                if cand.get("finishReason"):
+                    saw_finish.append(cand["finishReason"])
+                for p in (((cand.get("content") or {}).get("parts")) or []):
+                    if not isinstance(p, dict):
+                        continue
+                    if "text" in p and "thought" not in p:
+                        out.append(p["text"])
+                    elif "functionCall" in p:
+                        fc = p["functionCall"] or {}
+                        calls.append({"id": "tc-" + uuid.uuid4().hex[:8], "type": "function",
+                                      "function": {"name": fc.get("name", ""),
+                                                   "arguments": json.dumps(fc.get("args") or {})}})
+    if not "".join(out) and not calls:
+        try:
+            with open("/tmp/opencode/argon_empty.log", "a") as f:
+                f.write("=== %s model=%s finish=%s bytes=%d\n%s\n" % (
+                    __import__("time").strftime("%H:%M:%S"), model,
+                    saw_finish, len(raw), raw[:1500]))
+        except Exception:
+            pass
+    return "".join(out), calls, model
 
 
 class H(BaseHTTPRequestHandler):
@@ -107,15 +181,19 @@ class H(BaseHTTPRequestHandler):
         if isinstance(body.get("model"), str) and body["model"].startswith("argon-"):
             tier = body["model"].split("-", 1)[1]
         try:
-            text, model = upstream(body.get("messages") or [], tier)
+            text, calls, model = upstream(body.get("messages") or [], tier,
+                                          body.get("tools"))
         except urllib.error.HTTPError as e:
             return self._send({"error": "upstream HTTP %s" % e.code}, 502)
         except Exception as e:
             return self._send({"error": str(e)[:120]}, 500)
+        msg = {"role": "assistant", "content": text or None}
+        if calls:
+            msg["tool_calls"] = calls
         self._send({"id": "argon-" + uuid.uuid4().hex[:8], "object": "chat.completion",
                     "model": model, "choices": [
-                        {"index": 0, "message": {"role": "assistant", "content": text},
-                         "finish_reason": "stop"}]})
+                        {"index": 0, "message": msg,
+                         "finish_reason": "tool_calls" if calls else "stop"}]})
 
 
 if __name__ == "__main__":
