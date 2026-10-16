@@ -248,14 +248,20 @@ def _rate_gate(seconds: float, why: str = "rate limit") -> None:
 def egress_pool(target: str = ORIGIN, *, limit: int = 8, verbose: bool = False) -> list[str]:
     """Verified proxy exits, best-latency first, for giving each account its own IP.
 
-    Opt-in via `ZMINE_EGRESS=pool` (or `--egress pool`). Uses the SAME free
-    keyless Proxyma relay the rest of the pipeline uses (scripts/egress.py), so
-    there is no new egress path to maintain. Returns [] on any failure, and
+    Opt-in via `ZMINE_EGRESS=pool` (or `--egress pool`). Uses the Windscribe
+    free fleet (scripts/egress.py `windscribe_candidates`), NOT Proxyma:
+    measured 2026-10-16, every Proxyma exit (nl1/de1/uk1/us1.cloud147,
+    api.cloud347) is burned into disabled local accounts (69/70 dead),
+    while Windscribe (totallyacdn) was never used by the farm. Override with
+    ZMINE_EGRESS_SOURCE=proxyma to go back. Returns [] on any failure, and
     callers fall back to the direct/WARP connection."""
     try:
         sys.path.insert(0, str(SCRIPTS))
         import egress as _eg  # noqa: PLC0415
-        return _eg.proxyma_candidates(target, limit=limit)
+        source = os.environ.get("ZMINE_EGRESS_SOURCE", "windscribe").strip().lower()
+        if source == "proxyma":
+            return _eg.proxyma_candidates(target, limit=limit)
+        return _eg.windscribe_candidates(target, limit=limit)
     except Exception as e:  # noqa: BLE001
         if verbose:
             log(f"    [egress] pool unavailable: {type(e).__name__}: {e}")
