@@ -73,6 +73,12 @@ def _clean_schema(node):
     if isinstance(props, dict):
         out["properties"] = {k: (v if isinstance(v, dict) else {"type": "string"})
                              for k, v in props.items()}
+    # required must name EXISTING properties: a single dangling entry makes
+    # Google 400 the whole request (measured 2026-10-16, omp schemas).
+    req = out.get("required")
+    if isinstance(req, list):
+        have = set(out.get("properties", {}).keys()) if isinstance(out.get("properties"), dict) else set()
+        out["required"] = [r for r in req if r in have]
     return out
 
 
