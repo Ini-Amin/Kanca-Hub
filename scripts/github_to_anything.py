@@ -900,9 +900,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--domain",
-        choices=["bizid", "myid"],
         default="bizid",
-        help="Temp-mail domain for fallback signup (default: bizid -> kancalabs.biz.id)",
+        metavar="DOMAIN",
+        help="Temp-mail domain: bizid/myid shortcut or your own domain via the relay (default: bizid -> kancalabs.biz.id)",
     )
     ap.add_argument(
         "--proxy",

@@ -253,7 +253,8 @@ def resolve_email_domain(domain_choice: str = "binus") -> str:
 def resolve_domain_and_inbox(email_domain: str = "binus", inbox: str = "binus") -> tuple[str, str]:
     """
     Resolve effective domain choice and inbox provider.
-    Defaults to ('binus', 'binus').
+    Defaults to ('binus', 'binus'). Any non-binus domain is only readable
+    via the relay (BYOD: your domain must be in your relay's MAIL_DOMAINS).
     """
     dom = (email_domain or "binus").strip().lower()
     ib = (inbox or "binus").strip().lower()
@@ -261,6 +262,8 @@ def resolve_domain_and_inbox(email_domain: str = "binus", inbox: str = "binus") 
         ib = "relay"
     elif ib == "relay" and dom == "binus":
         dom = "bizid"
+    elif dom not in ("binus", "binus.ac.id") and ib == "binus":
+        ib = "relay"
     return dom, ib
 
 
@@ -1402,9 +1405,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="force direct connection (bypass auto clean egress gateway)")
     ap.add_argument("--dry-run", action="store_true",
                     help="walk the signup flow, screenshot, but do not submit/create")
-    ap.add_argument("--email-domain", choices=["binus", "bizid", "myid"], default="binus",
-                    help="email domain choice: binus (default, school mailbox), "
-                         "bizid (kancalabs.biz.id via relay), myid (kancalabs.my.id via relay)")
+    ap.add_argument("--email-domain", default="binus", metavar="DOMAIN",
+                    help="email domain: binus (default, school mailbox), bizid/myid shortcut, "
+                         "or your own domain via the relay (kancalabs.biz.id via relay)")
     ap.add_argument("--inbox", choices=["binus", "relay"], default="binus",
                     help="inbox source: binus (default, Outlook school mailbox) or relay (KancaHub mail relay)")
     ap.add_argument("--delay-min", type=float, default=20.0, metavar="SEC",

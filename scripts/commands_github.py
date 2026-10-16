@@ -123,9 +123,9 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
     gf.add_argument("--index", type=int, default=1, help="starting N for account address (default: 1)")
     gf.add_argument(
         "--domain",
-        choices=["binus", "bizid", "myid"],
         default="binus",
-        help="email domain choice: binus (default, school mailbox), bizid (kancalabs.biz.id), myid (kancalabs.my.id)",
+        metavar="DOMAIN",
+        help="email domain: binus (default, school mailbox), bizid/myid shortcut, or your own domain via the relay",
     )
     gf.add_argument(
         "--inbox",
@@ -161,9 +161,9 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
     )
     gc.add_argument(
         "--domain",
-        choices=["binus", "bizid", "myid"],
         default="binus",
-        help="domain to check: binus (school mailbox) or bizid/myid (mail relay)",
+        metavar="DOMAIN",
+        help="domain to check: binus (school mailbox), bizid/myid shortcut, or your own domain via the relay",
     )
     gc.add_argument(
         "--inbox",

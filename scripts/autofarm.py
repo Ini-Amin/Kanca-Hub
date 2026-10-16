@@ -1321,8 +1321,8 @@ if __name__ == "__main__":
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="KancaHub AutoFarm — adapt website to existing pipelines")
     ap.add_argument("url", nargs="?", default=None, help="Target website signup/login URL")
-    ap.add_argument("--domain", choices=["kancalabs.biz.id", "kancalabs.my.id", "biz.id", "my.id"], default="kancalabs.biz.id",
-                    help="Disposable email domain (default: kancalabs.biz.id)")
+    ap.add_argument("--domain", default="kancalabs.biz.id", metavar="DOMAIN",
+                    help="Disposable email domain: bizid/myid shortcut or your own domain via the relay (default: kancalabs.biz.id)")
     ap.add_argument("--inject-9router", action="store_true", help="Inject credentials into 9Router SQLite DB")
     ap.add_argument("--out", default=None, help="Output JSON path (default: results/autofarm_accounts.json)")
     ap.add_argument("--headless", action="store_true", help="run headless without browser UI")
@@ -1357,9 +1357,22 @@ def main() -> int:
         print("    [2] KancaHub relay kancalabs.biz.id")
         print("    [3] Litensi paid activation (needs API keys/balance)")
         print("    [4] Static address (no inbox — nothing to read)")
-        c_dom = input("  Select [1/2/3/4] (default 1): ").strip()
-        mail_provider = {"2": "relay", "3": "litensi", "4": "static"}.get(c_dom, "tempik")
-        domain = "kancalabs.biz.id" if mail_provider == "relay" else "kancalabs.my.id"
+        print("    [5] My own domain (via your relay — see docs/BYOD_MAIL.md)")
+        c_dom = input("  Select [1/2/3/4/5] or type your domain (default 1): ").strip()
+        if c_dom == "5" or ("@" in c_dom or "." in c_dom and c_dom not in ("1", "2", "3", "4")):
+            custom = "" if c_dom == "5" else c_dom
+            if not custom:
+                custom = input("  Your domain (e.g. mail.example.com): ").strip().lower().lstrip("@")
+            else:
+                custom = custom.strip().lower().lstrip("@")
+            if custom and "." in custom:
+                mail_provider, domain = "relay", custom
+            else:
+                print("  No valid domain — falling back to kancalabs.my.id.")
+                mail_provider, domain = "tempik", "kancalabs.my.id"
+        else:
+            mail_provider = {"2": "relay", "3": "litensi", "4": "static"}.get(c_dom, "tempik")
+            domain = "kancalabs.biz.id" if mail_provider == "relay" else "kancalabs.my.id"
 
         c_inj = input("  Inject credentials into 9Router? [y/N]: ").strip().lower()
         inject = c_inj in ("y", "yes", "true", "1")

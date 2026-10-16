@@ -320,6 +320,7 @@ def wizard_autofarm() -> int:
     print(f"   {c('green', '3')}  Litensi paid activation (cheap; needs balance)")
     print(f"   {c('green', '4')}  Static address (no inbox)")
     print(f"   {c('green', '5')}  Real @gmail.com inbox" + c("dim", " (emailmux→emailnator→mail.tm)"))
+    print(f"   {c('green', '6')}  My own domain" + c("dim", " (via your relay — see BYOD mail guide)"))
     d_choice = ask("Pick mailbox", "1")
     if d_choice == "2":
         domain, mail = "kancalabs.biz.id", "auto"
@@ -329,6 +330,13 @@ def wizard_autofarm() -> int:
         domain, mail = "kancalabs.my.id", "static"
     elif d_choice == "5":
         domain, mail = "kancalabs.my.id", "gmail"
+    elif d_choice == "6":
+        domain = ask("Your domain (e.g. mail.example.com)").strip().lower().lstrip("@")
+        if not domain or "." not in domain:
+            print(c("yellow", "  No valid domain given — falling back to kancalabs.my.id."))
+            domain, mail = "kancalabs.my.id", "auto"
+        else:
+            mail = "relay"
     else:
         domain, mail = "kancalabs.my.id", "auto"
 

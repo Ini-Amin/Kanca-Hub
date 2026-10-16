@@ -396,7 +396,7 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
                 continue
             if not url:
                 continue
-            dom = input(f" {kancahub.C['bold']}Mailbox [1=my.id, 2=biz.id, 3=litensi, 4=static, 5=real gmail]: {kancahub.C['reset']}").strip()
+            dom = input(f" {kancahub.C['bold']}Mailbox [1=my.id, 2=biz.id, 3=litensi, 4=static, 5=real gmail, or type your own domain]: {kancahub.C['reset']}").strip()
             if dom == "2":
                 domain, mail = "kancalabs.biz.id", "auto"
             elif dom == "3":
@@ -405,6 +405,9 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
                 domain, mail = "kancalabs.my.id", "static"
             elif dom == "5":
                 domain, mail = "kancalabs.my.id", "gmail"
+            elif "@" in dom or "." in dom:
+                domain = dom.lstrip("@").strip().lower()
+                mail = "relay"
             else:
                 domain, mail = "kancalabs.my.id", "auto"
             cmd_args = ["autofarm", url, "--domain", domain, "--mail", mail]

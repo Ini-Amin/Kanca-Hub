@@ -55,6 +55,14 @@ kancahub stack signup -n 3 --warp
 kancahub stack sync --prune
 ```
 
+> **What you get:** the free Workers AI tier serves small open models
+> (llama-3.1-8b default, gpt-oss-120b, llama-3.3-70b-fp8) — good for drafts
+> and fallback volume, not frontier quality. Farm it for quantity, bring
+> your own keys for flagship models.
+>
+> **Fresh domains:** `--domain mail.example.com` works anywhere a domain
+> flag exists (relay backend) — see [docs/BYOD_MAIL.md](docs/BYOD_MAIL.md).
+
 ---
 
 ## Command reference
