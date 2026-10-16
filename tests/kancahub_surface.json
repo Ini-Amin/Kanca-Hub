@@ -793,5 +793,21 @@
 "extra",
 "help",
 "mode"
+],
+"zmine": [
+"help",
+"zmine_cmd"
+],
+"zmine keepalive": [
+"help",
+"model",
+"pace",
+"want"
+],
+"zmine refs": [
+"help"
+],
+"zmine status": [
+"help"
 ]
 }

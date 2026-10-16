@@ -65,11 +65,6 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
     ("25", "VPN pool: status + flag cooldowns", "vpn status", ["vpn", "status"]),
     ("26", "VPN pool: list entries", "vpn list", ["vpn", "list"]),
     ("27", "VPN pool: farm Windscribe accounts", "vpn farm", ["vpn", "farm"]),
-
-    # Group 11: Shared agent memory (Supabase pgvector)
-    ("28", "Memory: search what we already know", "memory search", ["memory", "search", "how do we avoid duplicate scripts"]),
-    ("29", "Memory: ask (search + LLM answer)", "memory ask", ["memory", "ask", "where is the zmine farm script"]),
-    ("30", "Memory: reindex AGENTS.md + docs + scripts", "memory index", ["memory", "index"]),
 ]
 
 MENU_STAGE_HEADERS: dict[str, str] = {
@@ -83,7 +78,6 @@ MENU_STAGE_HEADERS: dict[str, str] = {
     "21": "[8] OTP Mailboxes (Litensi)",
     "22": "[9] Vendor Farms (abliteration · ZCode · AutoClaw)",
     "25": "[10] Free VPN-fleet egress",
-    "28": "[11] Shared Agent Memory (Supabase pgvector)",
 }
 
 # Menu keys that are account farms -> the menu asks for count/pace/egress in-CLI.
