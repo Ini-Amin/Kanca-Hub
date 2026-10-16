@@ -1,0 +1,13 @@
+[Unit]
+Description=Argon direct bridge (Gemini 4 Argon via lithium7b, :8788)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Auto-FreeCF
+ExecStart=%h/Auto-FreeCF/scripts/argon_bridge.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

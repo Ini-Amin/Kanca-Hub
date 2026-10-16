@@ -503,6 +503,67 @@ def call_upstream(payload, email="", timeout=600):
     return None, Exception("upstream retries exhausted")
 
 
+# Backstop, not a ceiling. The client (opencode) auto-compacts on its own near
+# the model's advertised context: abliterated 200k -> ~720 KB, GLM-5.3 1M -> 3.6 M.
+# This guard must sit ABOVE those triggers, or it fires first and the user is
+# told to compact by hand (measured 2026-10-15: 512 KB blocked a session that
+# opencode would have compacted itself). 900 KB clears the 200k-model case;
+# the 1,4 MB dumps that die upstream are still rejected, just later.
+MAX_BODY_BYTES = 900 * 1024
+
+
+class UpstreamBusy(Exception):
+    """Bridge-side backpressure: too many concurrent upstream calls. Carries
+    .code/.msg/.read()/.headers like UpstreamAppError so _relay_error relays it
+    as its own 429 — and its app_code is deliberately in NO failover list, so a
+    busy bridge sheds load instead of multiplying it across accounts/models."""
+    code = 429
+    app_code = "busy"
+
+    def __init__(self, msg="bridge busy: too many concurrent upstream calls, retry in a few seconds"):
+        super().__init__(msg)
+        self.msg = msg
+        self.headers = {"content-type": "application/json"}
+
+    def read(self, *args):
+        return json.dumps({"code": 429, "msg": self.msg}).encode()
+
+
+_UPSTREAM_SLOT = threading.Semaphore(1)   # one upstream SETUP at a time
+_UPSTREAM_GUARD = threading.Lock()
+_UPSTREAM_INFLIGHT = 0
+UPSTREAM_MAX_WAITING = 2   # 1 running + 2 queued; the rest get 429 immediately
+UPSTREAM_MIN_GAP = 3.0     # seconds between upstream call setups
+_UPSTREAM_LAST_TS = 0.0
+
+
+def gated_call_upstream(payload, email="", timeout=600):
+    """Serialize upstream access and shed overload instead of amplifying it.
+
+    Without this, N concurrent clients each walk the 4-account failover chain,
+    so one client's retry storm becomes 4N upstream hits and every exit gets
+    WAF/reset-burned. With it: 1 call runs, 2 wait, the rest get an immediate
+    429 the caller can back off on — no z.ai traffic spent on them at all."""
+    global _UPSTREAM_INFLIGHT, _UPSTREAM_LAST_TS
+    with _UPSTREAM_GUARD:
+        if _UPSTREAM_INFLIGHT >= 1 + UPSTREAM_MAX_WAITING:
+            raise UpstreamBusy()
+        _UPSTREAM_INFLIGHT += 1
+    try:
+        _UPSTREAM_SLOT.acquire()
+        try:
+            gap = UPSTREAM_MIN_GAP - (time.time() - _UPSTREAM_LAST_TS)
+            if gap > 0:
+                time.sleep(gap)
+            return call_upstream(payload, email, timeout)
+        finally:
+            _UPSTREAM_LAST_TS = time.time()
+            _UPSTREAM_SLOT.release()
+    finally:
+        with _UPSTREAM_GUARD:
+            _UPSTREAM_INFLIGHT -= 1
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     account = ""
@@ -511,6 +572,27 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[bridge] %s\n" % (fmt % args))
 
     # ---------- auth ----------
+    def _check_body_size(self):
+        """Refuse absurd payloads BEFORE any upstream traffic. A 1.4 MB session
+        dump dies upstream (WAF reset) AFTER burning quota on every failover
+        account — fail fast with 413 so the client compacts instead."""
+        try:
+            n = int(self.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n <= MAX_BODY_BYTES:
+            return True
+        try:  # drain so a keep-alive connection stays in sync
+            self.rfile.read(n)
+        except Exception:  # noqa: BLE001
+            pass
+        bridge_event("reject", "payload %dKB > %dKB on %s: 413, nothing sent upstream"
+                     % (n // 1024, MAX_BODY_BYTES // 1024, self.path.split("?")[0]))
+        self._send(413, {"error": {"type": "invalid_request_error", "code": "payload_too_large",
+                                   "message": "request body %dKB exceeds bridge limit %dKB — compact the session or split the work; nothing was sent upstream"
+                                   % (n // 1024, MAX_BODY_BYTES // 1024)}})
+        return False
+
     def _client_key(self):
         got = (self.headers.get("authorization") or "").strip()
         if got.lower().startswith("bearer "):
@@ -586,6 +668,8 @@ class Handler(BaseHTTPRequestHandler):
             self.account = self._auth_account()
             if self.account is None:
                 return self._unauthorized()
+            if not self._check_body_size():
+                return
             if path.endswith("/messages"):
                 return self._anthropic_messages()
             if path.endswith("/chat/completions"):
@@ -629,7 +713,10 @@ class Handler(BaseHTTPRequestHandler):
             if email is None or email in tried:
                 break
             tried.append(email)
-            resp, err = call_upstream(payload, email)
+            try:
+                resp, err = gated_call_upstream(payload, email)
+            except UpstreamBusy as e:
+                return None, e
             if err is None:
                 if email != self.account:
                     bridge_event("failover", "dead JWT on %s -> using %s" % (self.account, email))
