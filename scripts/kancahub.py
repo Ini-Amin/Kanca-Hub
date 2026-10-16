@@ -855,8 +855,8 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- autofarm ----
     af = sub.add_parser("autofarm", help="paste any website URL to adapt and autofarm with clean proxies")
     af.add_argument("url", nargs="?", default=None, help="website signup/login URL")
-    af.add_argument("--domain", choices=["kancalabs.biz.id", "kancalabs.my.id", "biz.id", "my.id"], default="kancalabs.my.id",
-                    help="disposable email domain (default: kancalabs.my.id — Tempik, readable)")
+    af.add_argument("--domain", default="kancalabs.my.id", metavar="DOMAIN",
+                    help="disposable email domain: bizid/myid shortcut or your own domain via the relay (default: kancalabs.my.id — Tempik, readable)")
     af.add_argument("--mail", choices=["auto", "tempik", "relay", "litensi", "static", "gmail", "emailmux", "emailnator", "mailtm"], default="auto",
                     help="mailbox provider (default: auto by domain)")
     af.add_argument("--inject-9router", action="store_true", help="inject credentials into 9Router SQLite DB")

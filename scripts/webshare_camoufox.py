@@ -874,8 +874,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--domain", "-d",
         default="kancalabs.biz.id",
-        choices=["kancalabs.biz.id", "kancalabs.my.id", "bizid", "myid"],
-        help="Email domain for registration (default: kancalabs.biz.id)",
+        metavar="DOMAIN",
+        help="Email domain: bizid/myid shortcut or your own domain via the relay (default: kancalabs.biz.id)",
     )
     ap.add_argument(
         "--out", "-o",

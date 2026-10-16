@@ -34,6 +34,15 @@ opens the interactive menu. Add `--help` to any group/command for options.
 
 Key `signup` flags: `-n N` accounts · `--warp` (clean egress first) · `--proxy URL` · `--proxy-pool FILE` · `--gateway [URL]` · `--headless` · `--fast` · `--workers N` · `--delay S` · `--retry N` · `--no-inject` · `--export-txt FILE` · `--output FILE`.
 
+> **Model honesty:** the free Workers AI tier serves small open models
+> (`@cf/meta/llama-3.1-8b-instruct` default, `@cf/openai/gpt-oss-120b`,
+> `@cf/meta/llama-3.3-70b-instruct-fp8-fast` for probes). Fine for drafts,
+> classification, and router fallback — not a replacement for a flagship
+> model (GLM-5.3 / GPT / Claude class). Farm it for volume and fallback,
+> not for frontier quality.
+>
+> relay — see [BYOD_MAIL.md](BYOD_MAIL.md) for the 15-minute self-host.
+
 ## `warp` — Cloudflare WARP tunnel
 
 | Command | What it does | Example |

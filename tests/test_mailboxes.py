@@ -70,6 +70,14 @@ class TestDomainRouting(unittest.TestCase):
     def test_unknown_domain_routes_to_relay(self):
         self.assertEqual(M.route_for("some.other.domain"), "relay")
 
+    def test_byod_domain_routes_to_relay_not_tempik(self):
+        self.assertEqual(M.route_for("mail.example.com"), "relay")
+        self.assertNotEqual(M.route_for("mail.example.com"), "tempik")
+
+    def test_explicit_tempik_with_byod_domain_falls_back_offline(self):
+        # No network/keys here: _relay raises -> static fallback keeps the domain.
+        mb = M.open_mailbox("tempik", domain="mail.example.com", log=lambda *a: None)
+        self.assertTrue(mb.address.endswith("@mail.example.com"))
 
 if __name__ == "__main__":
     unittest.main()

@@ -363,8 +363,8 @@ def open_mailbox(provider: str = "auto", *, domain: str = "", local_part: str = 
         return _static(domain, local_part, log)
     try:
         if provider == "tempik":
-            if domain.lower().endswith("biz.id"):
-                log("  [mail] Tempik only serves kancalabs.my.id — routing biz.id via the relay")
+            if not domain.lower().endswith("kancalabs.my.id"):
+                log(f"  [mail] Tempik only serves kancalabs.my.id — routing {domain} via the relay (BYOD: point your domain at your own relay, see docs/BYOD_MAIL.md)")
                 provider = "relay"
             else:
                 return _tempik(domain, local_part, log)

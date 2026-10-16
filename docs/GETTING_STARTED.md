@@ -185,6 +185,11 @@ This is the core legitimate workflow: bring up a clean WARP egress, target a
 region, create your own Cloudflare account(s), mint the free Workers AI token,
 and inject it into 9Router.
 
+> **Honest expectations:** the free tier serves small open models
+> (llama-3.1-8b default, gpt-oss-120b, llama-3.3-70b-fp8) — fine for drafts
+> and fallback volume, not frontier quality. Want your own domain instead of
+> the shared `kancalabs.*` ones? See [BYOD_MAIL.md](BYOD_MAIL.md).
+
 ```bash
 kancahub warp up                      # 1. clean Cloudflare egress IP
 kancahub region set us                # 2. target the US region profile
