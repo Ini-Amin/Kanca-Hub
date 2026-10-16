@@ -89,14 +89,17 @@ class TestUnifiedMenuStructure(unittest.TestCase):
         self.assertTrue(old_union.issubset(current_commands))
 
         # Total items: 16 old commands + 1 end-to-end + 1 mitm + 1 autofarm + 1 otp
-        # + 3 vendor farms (abliteration, ZCode, AutoClaw) + 3 VPN pool + 3 memory = 29
-        self.assertEqual(len(UNIFIED_MENU), 29)
+        # + 3 vendor farms (abliteration, ZCode, AutoClaw) + 3 VPN pool = 26.
+        # Memory (search/ask/index) is agents-only now (docs/AGENT_MEMORY.md) —
+        # deliberately NOT in the human menu.
+        self.assertEqual(len(UNIFIED_MENU), 26)
         self.assertIn("autofarm", current_commands)
         self.assertIn("otp", current_commands)
         self.assertIn("autoclaw claim", current_commands)
+        self.assertNotIn("memory search", current_commands)
 
-        # Keys run "0".."30" minus the two removed menu entries ("10", "17")
-        expected_keys = [str(i) for i in range(31) if i not in (10, 17)]
+        # Keys run "0".."27" minus the two removed menu entries ("10", "17")
+        expected_keys = [str(i) for i in range(28) if i not in (10, 17)]
         actual_keys = [item[0] for item in UNIFIED_MENU]
         self.assertEqual(actual_keys, expected_keys)
 
