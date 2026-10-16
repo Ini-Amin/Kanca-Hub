@@ -82,6 +82,16 @@ def _clean_schema(node):
     return out
 
 
+_SIG = {}
+
+def _sig_put(tid, sig):
+    if tid and isinstance(sig, str) and sig:
+        if len(_SIG) >= 1000:
+            _SIG.pop(next(iter(_SIG)))
+        _SIG[tid] = sig
+  # tool_call_id -> thoughtSignature (in-process, cap 1000)
+
+
 def _to_gemini(messages, tools):
     """OpenAI messages+tools -> Gemini contents+declarations+systemInstruction."""
     system = None
@@ -110,7 +120,10 @@ def _to_gemini(messages, tools):
                     args = {}
                 # thoughtSignature left OUTSIDE functionCall: upstream rejects
                 # unknown fields inside it; the id lives only in names[].
-                parts.append({"functionCall": {"name": fn.get("name", ""), "args": args}})
+                part = {"functionCall": {"name": fn.get("name", ""), "args": args}}
+                if tid in _SIG:
+                    part["thoughtSignature"] = _SIG[tid]
+                parts.append(part)
             contents.append({"role": "model", "parts": parts})
             continue
         if role == "tool":
@@ -188,7 +201,9 @@ def upstream(messages, tier, tools=None):
                         out.append(p["text"])
                     elif "functionCall" in p:
                         fc = p["functionCall"] or {}
-                        calls.append({"id": "tc-" + uuid.uuid4().hex[:8], "type": "function",
+                        tcid = "tc-" + uuid.uuid4().hex[:8]
+                        _sig_put(tcid, p.get("thoughtSignature") or p.get("thought_signature"))
+                        calls.append({"id": tcid, "type": "function",
                                       "function": {"name": fc.get("name", ""),
                                                    "arguments": json.dumps(fc.get("args") or {})}})
     if not "".join(out) and not calls:
