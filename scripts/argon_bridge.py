@@ -249,10 +249,33 @@ class H(BaseHTTPRequestHandler):
         msg = {"role": "assistant", "content": text or None}
         if calls:
             msg["tool_calls"] = calls
+        finish = "tool_calls" if calls else "stop"
+        if body.get("stream"):
+            # real SSE: omp's streaming parser drops non-chunked bodies,
+            # which turns pure tool-call answers into "empty stop".
+            cid = "argon-" + uuid.uuid4().hex[:8]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            def emit(obj):
+                self.wfile.write(("data: %s\n\n" % json.dumps(obj)).encode())
+            emit({"id": cid, "object": "chat.completion.chunk", "model": model,
+                  "choices": [{"index": 0, "delta": {"role": "assistant",
+                                                     "content": text or None},
+                               "finish_reason": None}]})
+            for i, tc in enumerate(calls):
+                emit({"id": cid, "object": "chat.completion.chunk", "model": model,
+                      "choices": [{"index": 0, "delta": {"tool_calls": [{
+                          "index": i, "id": tc["id"], "type": "function",
+                          "function": tc["function"]}]}, "finish_reason": None}]})
+            emit({"id": cid, "object": "chat.completion.chunk", "model": model,
+                  "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]})
+            self.wfile.write(b"data: [DONE]\n\n")
+            return
         self._send({"id": "argon-" + uuid.uuid4().hex[:8], "object": "chat.completion",
                     "model": model, "choices": [
-                        {"index": 0, "message": msg,
-                         "finish_reason": "tool_calls" if calls else "stop"}]})
+                        {"index": 0, "message": msg, "finish_reason": finish}]})
 
 
 if __name__ == "__main__":
