@@ -44,6 +44,38 @@ def token():
     return json.loads(row[0]).get("accessToken", "")
 
 
+_SCHEMA_KEYS = {"type", "properties", "required", "description", "enum",
+                "items", "format", "nullable"}
+
+
+def _clean_schema(node):
+    """Recursively force an OpenAI-ish schema into Gemini's proto dialect.
+
+    Killer case (measured 2026-10-16): "type": ["string", "null"] (JSON-Schema
+    nullable form). Gemini's proto field is not repeating -> whole request
+    400s with 'Unknown name "type" ... cannot start list'. Collapse arrays
+    to the first non-null type.
+    """
+    if isinstance(node, list):
+        return [_clean_schema(x) for x in node]
+    if not isinstance(node, dict):
+        return node
+    out = {}
+    for k, v in node.items():
+        if k not in _SCHEMA_KEYS:
+            continue
+        out[k] = _clean_schema(v)
+    t = out.get("type")
+    if isinstance(t, list):
+        non_null = [x for x in t if x != "null"]
+        out["type"] = non_null[0] if non_null else "string"
+    props = out.get("properties")
+    if isinstance(props, dict):
+        out["properties"] = {k: (v if isinstance(v, dict) else {"type": "string"})
+                             for k, v in props.items()}
+    return out
+
+
 def _to_gemini(messages, tools):
     """OpenAI messages+tools -> Gemini contents+declarations+systemInstruction."""
     system = None
@@ -104,9 +136,10 @@ def _to_gemini(messages, tools):
         params = fn.get("parameters") or {}
         if not isinstance(params, dict):
             params = {}
-        # strip OpenAI-isms Google rejects; guarantee object root
-        params = {k: v for k, v in params.items()
-                  if k in ("type", "properties", "required", "description", "enum", "items")}
+        # strip OpenAI-isms + collapse nullable type-arrays (see _clean_schema)
+        params = _clean_schema(params)
+        if not isinstance(params, dict):
+            params = {"type": "object", "properties": {}}
         params.setdefault("type", "object")
         params.setdefault("properties", {})
         decls.append({"name": fn["name"], "description": fn.get("description", "")[:500],
