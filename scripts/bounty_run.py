@@ -31,10 +31,10 @@ import urllib.error
 from pathlib import Path
 
 HOME = Path.home()
-JOBS = HOME / ".config" / "auto-freecf" / "bounty"
+JOBS = Path(os.environ.get("BOUNTY_JOBS", str(HOME / ".config" / "auto-freecf" / "bounty")))
 CveDB = HOME / ".config" / "auto-freecf" / "cve.db"
-R9 = "http://127.0.0.1:20128/v1"
-BOX = "blu"
+R9 = os.environ.get("BOUNTY_R9_BASE", "http://127.0.0.1:20128/v1")
+BOX = os.environ.get("BOUNTY_BOX", "blu")
 
 PLANNER = "nr/step-5-preview"
 DRAFTER = "Zcode/GLM-5.3"
@@ -42,6 +42,8 @@ CHALLENGERS = ["ocz/step-5-preview-free", "THK/deepseek-v4.1-flash:free"]
 
 
 def r9_key():
+    if os.environ.get("BOUNTY_R9_KEY"):
+        return os.environ["BOUNTY_R9_KEY"]
     d = json.load(open(HOME / ".config/opencode/opencode.json"))
     return d["provider"]["9router"]["options"]["apiKey"]
 
@@ -109,10 +111,15 @@ def cmd_dispatch(a):
     d = job_dir(a.id)
     job = json.loads((d / "job.json").read_text())
     if a.dry_run:
-        rc, out, err = ssh(BOX, "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\"; "
-                               "for t in subfinder httpx nuclei opengrep katana; do "
-                               "command -v $t >/dev/null && echo -n \"$t \"; done; echo")
-        print("blu tools:", out.strip() or ("ERR " + err.strip()))
+        toolcheck = ("export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\"; "
+                     "for t in subfinder httpx nuclei opengrep katana; do "
+                     "command -v $t >/dev/null && echo -n \"$t \"; done; echo")
+        if os.environ.get("BOUNTY_REMOTE"):
+            r = subprocess.run(["sh", "-c", toolcheck], capture_output=True, text=True, timeout=120)
+            print("box tools:", (r.stdout or "").strip())
+        else:
+            rc, out, err = ssh(BOX, toolcheck)
+            print("blu tools:", out.strip() or ("ERR " + err.strip()))
         return
     # Gate 1: ONLY in-scope targets reach the tools. Anything else is rejected.
     targets = [t for t in job["targets"] if any(t.rstrip("/").endswith(s) or s in t for s in job["in_scope"])]
@@ -122,13 +129,18 @@ def cmd_dispatch(a):
     if not targets:
         sys.exit("gate 1: nothing in scope to scan")
     roots = " ".join(sorted({t.split("/")[2] if "://" in t else t.split("/")[0] for t in targets}))
-    remote = ("export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\"; cd /tmp && rm -rf bj && mkdir bj && cd bj; "
+    script = ("export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\"; cd /tmp && rm -rf bj && mkdir bj && cd bj; "
               "for h in %s; do echo \"== $h\"; "
               "subfinder -silent -d \"$h\" 2>/dev/null | head -40; done > subs.txt 2>&1; "
               "cat subs.txt | httpx -silent -mc 200,201,301,302,403 2>/dev/null | head -60 > live.txt; "
               "nuclei -silent -l live.txt -severity high,critical 2>/dev/null | head -40 > nuclei.txt; "
               "echo DONE; wc -l subs.txt live.txt nuclei.txt" % roots)
-    rc, out, err = ssh(BOX, remote, timeout=1500)
+    if os.environ.get("BOUNTY_REMOTE"):
+        # running ON the box already: execute directly, no ssh loop
+        r = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=1500)
+        out = (r.stdout or "")[-6000:]
+    else:
+        rc, out, err = ssh(BOX, script, timeout=1500)
     (d / "recon" / "subs.txt").write_text(out)
     print(out[-1500:] if len(out) > 1500 else out)
     job["status"] = "recon-done"
@@ -176,6 +188,45 @@ def cmd_report(a):
     print("telegram:", ids)
 
 
+def cmd_remote(a):
+    """Run a stage ON blu: ship script+job, execute via tunnel models, pull back.
+
+    Models resolve through blu-tunnel (:20128 -> laptop 9Router); artifacts
+    return to the laptop, which stays the state owner + Telegram sender.
+    """
+    d = job_dir(a.id)
+    key = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", BOX,
+         "python3 -c \"import json;print(json.load(open('.config/opencode/opencode.json'))"
+         "['provider']['9router']['options']['apiKey'])\""],
+        capture_output=True, text=True, timeout=60).stdout.strip()
+    if len(key) < 20:
+        sys.exit("cannot read router key on %s" % BOX)
+    subprocess.run(["scp", "-q", str(Path(__file__).resolve()),
+                    "%s:/tmp/bounty_run.py" % BOX], check=True, timeout=120)
+    subprocess.run(["ssh", "-o", "BatchMode=yes", BOX, "mkdir -p /tmp/bounty"],
+                   check=True, timeout=60)
+    # no trailing slash: scp -r DIR remote:/tmp/bounty/ creates /tmp/bounty/<id>/
+    subprocess.run(["scp", "-q", "-r", str(d), "%s:/tmp/bounty/" % BOX],
+                   check=True, timeout=300)
+    env = "BOUNTY_R9_BASE=http://127.0.0.1:20128/v1 BOUNTY_R9_KEY=%s BOUNTY_JOBS=/tmp/bounty BOUNTY_REMOTE=1" % key
+    r = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", BOX,
+         "%s python3 /tmp/bounty_run.py %s %s" % (env, a.stage, a.id)],
+        capture_output=True, text=True, timeout=2400)
+    print(r.stdout[-2000:] if r.stdout else "")
+    print(r.stderr[-500:] if r.returncode else "", file=sys.stderr)
+    if r.returncode:
+        sys.exit("remote stage failed rc=%d" % r.returncode)
+    # pull back via tar (exact paths, no scp -r nesting surprises)
+    r2 = subprocess.run(
+        "ssh -o BatchMode=yes %s 'tar -C /tmp/bounty -cf - %s' | tar -C %s -xf -"
+        % (BOX, a.id, JOBS), shell=True, capture_output=True, text=True, timeout=300)
+    if r2.returncode:
+        sys.exit("pull-back failed: %s" % r2.stderr.strip()[:200])
+    print("pulled back", a.id)
+
+
 def main():
     ap = argparse.ArgumentParser(prog="bounty_run.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -192,9 +243,12 @@ def main():
     tr.add_argument("id")
     rp = sub.add_parser("report")
     rp.add_argument("id")
+    rm = sub.add_parser("remote")
+    rm.add_argument("stage", choices=["dispatch", "triage"])
+    rm.add_argument("id")
     a = ap.parse_args()
     {"new": cmd_new, "dispatch": cmd_dispatch, "triage": cmd_triage,
-     "report": cmd_report}[a.cmd](a)
+     "report": cmd_report, "remote": cmd_remote}[a.cmd](a)
 
 
 if __name__ == "__main__":
