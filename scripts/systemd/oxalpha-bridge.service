@@ -1,0 +1,16 @@
+[Unit]
+Description=OxAlpha chat bridge (OpenAI-compatible, :8788 via relay :25346)
+After=network-online.target zcode-main-egress.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OXALPHA_UPSTREAM_PROXY=http://127.0.0.1:25346
+ExecStart=%h/.local/share/auto-freecf/venv/bin/python %h/Auto-FreeCF/scripts/oxalpha_bridge_server.py --port 8788
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
