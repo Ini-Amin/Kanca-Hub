@@ -197,12 +197,36 @@ class AutoClawClient:
 
     def interactive_claim(self, bind_code: str | None = None, port: int = 18432,
                           navigate_uri: str | None = None, provider: str = "zai",
-                          timeout: float = 180.0, open_browser: bool = True) -> dict:
-        """Full interactive 1-click OAuth claim:
-        1. Serves local captcha verification page on http://localhost:port/
-        2. On slider completion, fetches OAuth URL and redirects browser to z.ai
-        3. Catches callback on /auth/callback-zai, exchanges tokens & binds referral bonus (+800)
+                          timeout: float = 180.0, open_browser: bool = True,
+                          browser: str = "auto") -> dict:
+        """Full interactive 1-click OAuth claim.
+
+        Two modes, because the Aliyun proof is origin/device bound:
+
+        ``browser="camoufox"`` (default when the venv is present)
+            Drives a real Camoufox browser on the REAL origin ``chat.z.ai``:
+            inject the captcha there, solve it, call ``zai-oauth-url``, then
+            follow the URL in the same session. This is the pattern already
+            proven in ``zcode_claim_native.py`` and is the only mode that can
+            pass Aliyun's behavioural check.
+
+        ``browser="local"``
+            The old localhost page. Kept for debugging the widget only: a proof
+            minted on ``localhost`` is rejected by the OAuth API with
+            ``630014 Verification failed`` even when the widget itself shows
+            ``验证通过``.
         """
+        # The appless Camoufox path (mint our own captcha proof on chat.z.ai, then
+        # ask for the OAuth URL) is measured-dead: AutoClaw answers 630014 for any
+        # proof we mint ourselves. The working path is the app's own auth URL —
+        # use claim_from_auth_url() for that. `browser="local"` remains for
+        # inspecting the widget.
+        if browser == "camoufox":
+            return {"code": 1,
+                    "msg": "a self-minted captcha proof is rejected (630014); "
+                           "run the AutoClaw app and pass its auth URL to "
+                           "claim_from_auth_url() instead"}
+
         from http.server import BaseHTTPRequestHandler, HTTPServer
         import urllib.parse
         import webbrowser
@@ -457,6 +481,55 @@ p {{ color: #94a3b8; font-size: 0.95rem; line-height: 1.5; }}
         if state_box["error"]:
             return {"code": 1, "msg": f"Authorization error: {state_box['error']}"}
         return {"code": 1, "msg": f"OAuth claim timed out after {int(timeout)}s"}
+
+    def claim_from_auth_url(self, auth_url: str, email: str, password: str,
+                            bind_code: str | None = None, port: int = 18432,
+                            navigate_uri: str | None = None, provider: str = "zai",
+                            puzzles: int = 25, log=print) -> dict:
+        """Finish AutoClaw sign-in using an auth URL produced by the app.
+
+        The app's own Aliyun captcha is the only one AutoClaw accepts: a proof
+        we mint ourselves (on chat.z.ai, or on localhost) comes back as
+        ``630014 Verification failed`` — measured, both origins. So the app is
+        driven normally, it hands us ``chat.z.ai/api/oauth/authorize?...``, and
+        this method only does the z.ai half: email sign-in, Aliyun slider,
+        consent — all via the shared ``consent_hard`` helpers that
+        ``zcode_bridge.py`` already uses.
+
+        ``port`` must match the ``redirect_uri`` the app registered (18432 by
+        default); the app's own loopback listener catches the code and performs
+        the exchange itself, so no exchange happens here.
+        """
+        import asyncio
+        from camoufox.async_api import AsyncCamoufox
+        from consent_hard import accept_consent, signin_zai_email
+
+        nav = navigate_uri or f"http://localhost:{port}/auth/callback-{provider}"
+
+        async def drive() -> dict:
+            async with AsyncCamoufox(headless=False, humanize=True, os="windows",
+                                     locale="en-US") as br:
+                ctx = await br.new_context()
+                page = await ctx.new_page()
+                await page.goto(auth_url, wait_until="domcontentloaded", timeout=90000)
+                await page.wait_for_timeout(5000)
+
+                if not await signin_zai_email(page, email, password,
+                                              puzzles=puzzles, log=log):
+                    return {"code": 1, "msg": "z.ai sign-in failed"}
+
+                if "/auth/oauth/authorize" in page.url and "code=" not in page.url:
+                    if not await accept_consent(page):
+                        return {"code": 1, "msg": "consent not completed"}
+
+                for _ in range(30):
+                    if "localhost" in page.url and "code=" in page.url:
+                        return {"code": 0, "redirected": True, "url": page.url[:160]}
+                    await page.wait_for_timeout(1000)
+                return {"code": 1, "msg": "no redirect back to the app",
+                        "url": page.url[:160]}
+
+        return asyncio.run(drive())
 
     @staticmethod
     def listen_oauth_callback(port: int = 18432, path: str = "/auth/callback-zai", timeout: float = 120.0) -> dict[str, str]:
