@@ -831,13 +831,134 @@ async def _get_oracle(page):
     return orc
 
 
+async def _wait_variant(page, tries: int = 20) -> bool:
+    """Wait until the SDK has rendered either surface, so the variant is known.
+
+    `solve_aliyun` is called the instant the popup opens, when the DOM is still
+    empty; probing then says "not a checkbox" and the slider path waits forever
+    for images that will never exist.
+    """
+    for _ in range(tries):
+        try:
+            st = await page.evaluate(
+                """() => {
+                    const cb = document.getElementById('aliyunCaptcha-checkbox-icon');
+                    const img = document.getElementById('aliyunCaptcha-img');
+                    return {cb: !!cb, img: !!img};
+                }""")
+        except Exception:  # noqa: BLE001
+            return False
+        if st.get("cb") or st.get("img"):
+            return True
+        try:
+            await page.wait_for_timeout(1000)
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
+async def _checkbox_present(page) -> bool:
+    """True when the widget is the checkbox variant (no puzzle image at all).
+
+    Presence only — the icon is 0x0 for the first second or two while the SDK
+    lays the popup out, so a size test here would fall through to the slider
+    path and wait forever for images that never exist.
+    """
+    try:
+        return bool(await page.evaluate(
+            """() => {
+                const i = document.getElementById('aliyunCaptcha-checkbox-icon');
+                const img = document.getElementById('aliyunCaptcha-img');
+                return !!i && !img;
+            }"""))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def solve_checkbox(page, *, log=print, tries: int = 20) -> bool:
+    """Tick the 'Confirm you are not a robot' checkbox.
+
+    Two measured traps:
+      * the icon has zero size for the first second or two while the SDK lays
+        the popup out — a click then lands on nothing, and AutoClaw's page reads
+        the disappearance as a *dismissal* and cancels the attempt;
+      * the click must be a real pointer sequence (move → down → up), not a DOM
+        `.click()`, or the SDK's behavioural check ignores it.
+    """
+    for i in range(tries):
+        try:
+            await page.wait_for_timeout(1500)
+        except Exception:  # noqa: BLE001 — window closed = the tick landed
+            log("  [checkbox] window closed")
+            return True
+        try:
+            box = await page.evaluate(
+                """() => {
+                    const el = document.getElementById('aliyunCaptcha-checkbox-icon');
+                    if (!el) return null;
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 2 || r.height < 2) return null;
+                    return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+                }""")
+        except Exception:  # noqa: BLE001 — window closed = the tick landed
+            log("  [checkbox] window closed")
+            return True
+        if not box:
+            continue
+        await page.wait_for_timeout(700)
+        try:
+            await page.mouse.move(box["x"], box["y"], steps=12)
+            await page.wait_for_timeout(300)
+            await page.mouse.down()
+            await page.wait_for_timeout(90)
+            await page.mouse.up()
+        except Exception:  # noqa: BLE001
+            log("  [checkbox] click failed (window closed)")
+            return True
+        log(f"  [checkbox] ticked at {box} (attempt {i})")
+        # success = the popup goes away; a miss leaves it up for a retry
+        for _ in range(6):
+            await page.wait_for_timeout(700)
+            try:
+                gone = await page.evaluate(
+                    """() => {
+                        const w = document.getElementById('aliyunCaptcha-window-popup');
+                        const i = document.getElementById('aliyunCaptcha-checkbox-icon');
+                        return !w || !i || w.getBoundingClientRect().width === 0;
+                    }""")
+            except Exception:  # noqa: BLE001
+                return True
+            if gone:
+                log("  [checkbox] solved ✓")
+                return True
+    log("  [checkbox] not solved")
+    return False
+
+
 async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
                        puzzles: int = 20, jitter: int = 16) -> bool:
-    """Solve via MEASURE-AND-CORRECT: the piece moves at a small random fraction
-    of the slider, so we learn the ratio mid-drag and land the piece on the target.
-    Targets = invert() of the gaps our labels show (165-245). One accurate drag per
-    fresh puzzle; refresh between attempts (a mouse-up submits).
+    """Solve whichever Aliyun widget the page shows.
+
+    Aliyun Captcha 2.0 renders one of two surfaces for the same SceneId:
+
+    * **slider** — `aliyunCaptcha-img` + `aliyunCaptcha-puzzle` + a drag handle.
+      Solved by measure-and-correct below.
+    * **checkbox** — just `aliyunCaptcha-checkbox-icon` ("Confirm you are not a
+      robot"), no image at all. AutoClaw's app uses this one, which is why
+      `solve_aliyun` used to report "widget would not open" against it: there
+      are no images to diff, so the slider path can never start.
+
+    The checkbox path needs one *trusted* click on the icon, and only after the
+    widget has laid out — clicking early lands on nothing and the app treats the
+    attempt as dismissed.
     """
+    try:
+        if await _wait_variant(page) and await _checkbox_present(page):
+            return await solve_checkbox(page, log=log)
+    except Exception:  # noqa: BLE001 — the popup closed under us
+        log("  [captcha] window closed")
+        return True
+
     # target = where the piece's LEFT should end up. Order: detector guess first
     # (blur/smear metric is right ~25% and exact when right), then a data-driven
     # sweep of the observed range. The 41 user labels span 15..240 (7 below
