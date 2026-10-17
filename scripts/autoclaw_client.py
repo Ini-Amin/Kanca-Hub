@@ -226,6 +226,11 @@ class AutoClawClient:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoClaw 2.0.3 — z.ai Authorization</title>
+  <!-- AliyunCaptchaConfig MUST be set BEFORE the SDK script executes: the SDK
+       reads window.AliyunCaptchaConfig at load time and caches it. A plain
+       <script src> followed by an inline assignment gives prefix=undefined and
+       the widget never opens ("widget would not open" in every headless run). -->
+  <script>window.AliyunCaptchaConfig = {{region: "{region}", prefix: "{prefix}"}};</script>
   <script src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
   <style>
     body {{
@@ -285,11 +290,6 @@ class AutoClawClient:
     <div id="status">Loading security verification…</div>
   </div>
   <script>
-    window.AliyunCaptchaConfig = {{
-      region: "{region}",
-      prefix: "{prefix}"
-    }};
-
     function init() {{
       if (typeof window.initAliyunCaptcha !== "function") {{
         setTimeout(init, 200);
@@ -304,7 +304,13 @@ class AutoClawClient:
           button: "#captcha-trigger",
           captchaVerifyCallback: function(proof) {{
             document.getElementById("status").innerText = "✓ Verified! Requesting z.ai OAuth URL…";
-            fetch("/api/solve-callback", {{
+            // The SDK REQUIRES this callback to return a Promise that resolves to
+            // {{captchaResult, bizResult}}. Returning undefined makes the SDK treat
+            // the business step as failed and silently refresh the puzzle forever
+            // (the checkbox ticks, then nothing happens). This mirrors AutoClaw's own
+            // buildAliyunCaptchaDocument(), which stores the resolver in
+            // window.__zworkCompleteCaptcha and calls it after the OAuth API answers.
+            return fetch("/api/solve-callback", {{
               method: "POST",
               headers: {{"Content-Type": "application/json"}},
               body: JSON.stringify({{captcha_verify_param: proof}})
@@ -314,12 +320,14 @@ class AutoClawClient:
               if (data.oauth_url) {{
                 document.getElementById("status").innerText = "Redirecting to z.ai authorization…";
                 window.location.href = data.oauth_url;
-              }} else {{
-                document.getElementById("status").innerText = "✗ Error: " + (data.msg || data.error || "Failed to get OAuth URL");
+                return {{captchaResult: true, bizResult: true}};
               }}
+              document.getElementById("status").innerText = "✗ Error: " + (data.msg || data.error || "Failed to get OAuth URL");
+              return {{captchaResult: true, bizResult: false}};
             }})
             .catch(err => {{
               document.getElementById("status").innerText = "✗ Error: " + err;
+              return {{captchaResult: true, bizResult: false}};
             }});
           }},
           onBizResultCallback: function() {{}},
