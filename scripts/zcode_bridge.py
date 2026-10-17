@@ -5,8 +5,7 @@ Generate the OAuth URL (zcode_oauth_url pattern) -> sign in -> consent -> code -
 POST /api/v1/oauth/token -> ZCode JWT. Verified live (code 0, token minted)."""
 import asyncio, os, sys, json, secrets, urllib.request, urllib.parse
 sys.path.insert(0,'/home/amen/Auto-FreeCF/scripts')
-import captcha_slider as CS
-from consent_hard import accept_consent
+from consent_hard import accept_consent, signin_zai_email
 from playwright.async_api import async_playwright
 CDP="http://127.0.0.1:9222"
 CLIENT_ID="client_P8X5CMWmlaRO9gyO-KSqtg"
@@ -22,7 +21,6 @@ def _zacct():
 EMAIL=(sys.argv[1] if len(sys.argv)>1 else '') or _zacct()[0]
 PW=(sys.argv[2] if len(sys.argv)>2 else '') or _zacct()[1]
 OUT=os.environ.get("ZB_OUT") or os.path.expanduser("~/.zcode-bridge/zc_jwt.txt")
-JS="(t)=>{const e=[...document.querySelectorAll('button,a,div,span')].filter(x=>(x.innerText||'').trim()===t&&x.children.length===0);if(e.length){e[e.length-1].click();return true}return false}"
 # The final OAuth hop lands on zcode.z.ai/app/oauth/login?code=... — a page whose
 # only job is to bounce to the zcode:// desktop app ("Open ZCode"). We never need
 # to render it: intercept the navigation, read `code` off the URL and answer with
@@ -61,23 +59,9 @@ async def main():
         await _grab_code(page, store)
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000); await page.wait_for_timeout(4000)
-            cap = False
-            try:
-                await page.get_by_text("Continue with Email").first.click(timeout=6000); await page.wait_for_timeout(2000)
-                await page.fill('input[type="email"]', EMAIL); await page.fill('input[type="password"]', PW)
-                cap = await CS.solve_aliyun(page, puzzles=25)
-                print("captcha:", cap, flush=True)
-                # Only submit once the captcha passed: with a failed captcha "Sign in"
-                # does not log in, and the page drifts onto the GitHub login chooser
-                # (the old github detour). A REAL mouse click is required anyway -- a
-                # DOM .click() does not submit this React form.
-                if cap:
-                    try:
-                        await page.get_by_text("Sign in", exact=True).last.click(timeout=6000)
-                    except Exception:
-                        await page.evaluate(JS, "Sign in")
-                    await page.wait_for_timeout(6000)
-            except Exception as e: print("signin skip:", str(e)[:40], flush=True)
+            # email + Aliyun slider + submit: shared with autoclaw_client.py
+            cap = await signin_zai_email(page, EMAIL, PW, puzzles=25, log=print)
+            print("captcha:", cap, flush=True)
             if not cap:
                 print("captcha failed -> not submitting (no code)", flush=True)
             # consent_hard clicks any "Continue" leaf -- on the login chooser that is

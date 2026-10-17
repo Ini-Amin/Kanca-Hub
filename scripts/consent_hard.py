@@ -79,3 +79,47 @@ async def accept_consent(page, timeout_ms: int = 20000) -> bool:
             return True
         await page.wait_for_timeout(1000)
     return bool(_code_of(page.url))
+
+
+async def signin_zai_email(page, email: str, password: str, *, puzzles: int = 25,
+                           log=print) -> bool:
+    """Sign in to z.ai with an email/password pair on an open authorize page.
+
+    Shared by zcode_bridge.py (ZCode) and autoclaw_client.py (AutoClaw): both
+    drive chat.z.ai's OAuth screen, and both hit the same two traps.
+
+    1. The Aliyun slider is rendered INSIDE the email form and must be solved
+       BEFORE submitting — `Sign in` is a no-op until the widget reports a pass.
+       This is the step that was missing when the flow was copied from the app
+       side: click-through without a solve leaves the button inert and the page
+       silently sits on the login chooser.
+    2. The submit is a React form, so a synthetic .click() does not post it; a
+       real mouse click (or Enter) is required.
+
+    Returns True once the page left the email form (consent screen or redirect).
+    """
+    import captcha_slider as CS
+
+    try:
+        await page.get_by_text("Continue with Email", exact=False).first.click(timeout=8000)
+        await page.wait_for_timeout(2500)
+    except Exception as e:  # noqa: BLE001 — already on the consent screen
+        log(f"  no email form ({str(e)[:40]}) — assuming an existing z.ai session")
+        return True
+
+    await page.fill('input[type="email"]', email, timeout=8000)
+    await page.fill('input[type="password"]', password, timeout=8000)
+    await page.wait_for_timeout(1500)
+    log("  solving z.ai Aliyun slider…")
+    if not await CS.solve_aliyun(page, puzzles=puzzles, log=log):
+        log("  slider not solved — not submitting")
+        return False
+
+    try:
+        await page.get_by_text("Sign in", exact=True).last.click(timeout=8000)
+    except Exception:  # noqa: BLE001 — React form ignores synthetic clicks
+        await page.evaluate(_CLICK_JS, "Sign in")
+    await page.wait_for_timeout(8000)
+
+    body = await page.evaluate("() => document.body.innerText || ''")
+    return "access your Z.ai account" in body or "code=" in page.url
