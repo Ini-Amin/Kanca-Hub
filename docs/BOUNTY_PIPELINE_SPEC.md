@@ -270,6 +270,45 @@ mirror fetch failure reading as "empty", not as an exception.
 ssh blu 'curl -s http://127.0.0.1:8795/gigs/abh/sessions | jq .'
 ```
 
+**Status: COMPLETE.** Verified live on `blu`: `{"count": 12, "abh_dir": "/root/Agentic-Bug-Hunter", ...}`
+returning real sessions (`jointhemoment.net` 13 steps / 3 findings, `app.launchdarkly.com`, …).
+
+| Surface | Behaviour | Evidence |
+|---|---|---|
+| `GET /gigs/abh/sessions` | newest-first listing of `recon/*/sessions/*`; `steps` from `agent_session.json` falling back to the trace, `findings` from `findings_log`, `last_tool` from `agent_trace.jsonl`, `running`/`bump_pending`/`age_s` | `tests/test_gigs_api.py` 41 checks ALL PASS on laptop **and blu**; live `?limit=3` → `count=3`, live `?target=../../etc` → 400 |
+| `POST /gigs/abh/hunt` | 202 + `status_url`, spawns `abh_hunt.py` detached, 900s cooldown, `--program`/`--target` passthrough | live 202 on `yeswehack --dry-run`, then `rc=0` on `GET /gigs/abh/hunt`; second tap → 429 |
+| `POST /gigs/abh/bump` | writes `agent_bump.txt` for the running target's newest session; 409 when nothing is running | live 409 when idle; e2e node test asserts the file lands in the **newest** session of the alive target |
+| `grokbot-shim/proxy.js` | `/gigs status\|jobs`, `discover [platform]`, `hunt <slug> [platform]`, `bump <text>`, `findings <id>` answered from the API — a control command costs **zero tokens** and never reaches the model | 22 assertions against the **shipped** block (sliced out of `proxy.js`, no `proto.cjs` needed) ALL PASS; `node --check` OK on blu |
+| services | both restarted and `active` | `systemctl is-active` → `active active` |
+
+**Two defects found and fixed while building this — one of them pre-existing and load-bearing:**
+
+1. **The rate limiter had never worked.** `_deny()` did `return self._json(429, …)`, and `_json()`
+   writes the response and returns **None** — so every `if (d := self._deny(...))` was falsy. The
+   client was told *"cooldown, retry in 900s"* while the throttled action ran anyway. For `dispatch`
+   (900s) that meant duplicate scans all along; for `hunt` it would have been duplicate model spend.
+   Confirmed against the committed version, so this predates Task 4. `_deny()` now writes the 429 and
+   returns a truthy stop-signal, and `tests/test_gigs_api.py` pins the return value.
+2. **Validation burned the cooldown.** `_deny()` stamped the window before validation ran, so a typo —
+   bad platform, bad slug, a 400 that did no work — locked the operator out of `hunt` for the full
+   15 minutes. Validation now runs first on both new endpoints; proven live by a valid 202 landing
+   after four rejected requests.
+
+Two smaller ones, both in Task 4 code: `summarize_session()` truncated `mtime` to `int()`, tying
+sessions created inside one second so "newest first" silently fell back to *alphabetical* and a bump
+could steer the wrong run (now kept at sub-second precision); and `/gigs/findings/<id>` answers 200
+with an empty list for an id that does not exist, so the shim checks `/gigs/jobs/<id>` first rather
+than reporting *"no findings yet"* for a typo.
+
+**Deployed to `blu` by `scp`** (not `abh_deploy.sh`): `scripts/gigs_api.py`, `scripts/abh_hunt.py`,
+`scripts/bounty_run.py`, `tests/test_gigs_api.py`, `tests/test_bounty_scope.py`, `tests/test_cli_surface.py`
++ `tests/kancahub_surface.json` (the latter two were **missing on blu entirely** — the argparse guard
+had never run there), and `grokbot-shim/proxy.js` → **`/root/grokbot/9router-shim/proxy.js`**, which is
+where `grokbot-shim.service` actually executes it from (`/root/Auto-FreeCF/grokbot-shim/` does not
+exist on blu). blu's copy was byte-identical to repo HEAD before the swap, so no box-local edits were
+overwritten. ABH patch regenerated (`111106 → 113331` bytes) and `git apply --reverse --check` returns
+rc=0 on blu, confirming file + patch agree.
+
 ---
 
 ### TASK 5: End-to-End Persistence & Backup Sync Check

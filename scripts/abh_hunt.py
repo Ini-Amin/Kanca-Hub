@@ -812,6 +812,9 @@ def main() -> int:
     ap.add_argument("--hours", type=float, default=0.5, help="ABH time budget per program")
     ap.add_argument("--steps", type=int, default=10, help="ABH max ReAct steps per program")
     ap.add_argument("--dry-run", action="store_true", help="print commands, send no traffic")
+    ap.add_argument("--program", help="hunt only this program slug (as discovery reports it)")
+    ap.add_argument("--target", help="hunt this in-scope host instead of the first seed; "
+                                     "refused (and the run stops) if it is not in scope")
     a = ap.parse_args()
 
     if not AGENT.is_file():
@@ -828,9 +831,30 @@ def main() -> int:
             return int("".join(ch for ch in str(v) if ch.isdigit()) or 0)
         cands = [c for c in cands if money(c["max"]) >= a.min_reward]
 
+    if a.program:
+        # Match the slug discovery reports, falling back to the URL tail the way
+        # the loop below does, plus the name so "Okta" works from a phone.
+        want = a.program.strip().lower().rstrip("/")
+        def _slug_of(c):
+            return (c.get("slug") or c["brief"].rstrip("/").split("/")[-1]).lower()
+        matched = [c for c in cands if _slug_of(c) == want
+                   or (c.get("name") or "").strip().lower() == want]
+        say("abh: --program %r matched %d of %d candidates" % (want, len(matched), len(cands)))
+        if not matched:
+            # Returning 0 (not 2): the request was understood and answered, there
+            # is simply nothing by that name on this platform. A nonzero exit
+            # would make the caller treat a typo as a pipeline failure.
+            say("no program named %r on platform %s" % (a.program, a.platform))
+            return 0
+        cands = matched
+
     picked, skipped = [], []
     for c in cands:
-        slug = c["brief"].rstrip("/").split("/")[-1].lower()
+        # Prefer the candidate's own slug. URL-derived slugs are wrong for
+        # Intigriti: every detail URL ends in "/detail", so all 140 programs
+        # collapsed to one identity -- one shared scope and one shared
+        # _mark_attempted bucket, so hunting any one of them marked all done.
+        slug = (c.get("slug") or c["brief"].rstrip("/").split("/")[-1]).lower()
         if slug in worked:
             skipped.append(slug)
             continue
@@ -888,6 +912,30 @@ def main() -> int:
                 continue
 
             seeds.sort(key=lambda h: (0 if h.count(".") == 1 else (1 if h.startswith("www.") else 2), h))
+
+            if a.target:
+                # Checked against the program's OWN scope, including the deny
+                # list, via host_in_scope() -- which returns an (ok, reason)
+                # tuple, so it must be unpacked rather than truth-tested: the
+                # tuple is always truthy and `if not host_in_scope(...)` would
+                # accept every target including out-of-scope ones.
+                # A wildcard in `ins` (api.x.com vs *.x.com) has to pass, so
+                # exact membership in `ins` is the wrong test here.
+                want_t = a.target.strip().lower().rstrip("/")
+                ok_t, why_t = B.host_in_scope(want_t, ins, outs)
+                if not ok_t:
+                    line.update(status="target-not-in-scope",
+                                note="--target %s refused: %s" % (want_t, why_t))
+                    say("  " + line["note"])
+                    summary.append(line)
+                    # Stop rather than fall through to the next program: the
+                    # operator asked for THIS host, and quietly hunting a
+                    # different one is exactly the kind of surprise that makes
+                    # an unattended console untrustworthy. The program is not
+                    # marked attempted, so a later tick retries it normally.
+                    break
+                seeds = [want_t] + [x for x in seeds if x.lower() != want_t]
+
             target = seeds[0]
 
             # Stage 1: persist the whole in-scope seed set where this target's
