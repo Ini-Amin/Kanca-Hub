@@ -321,3 +321,91 @@ rc=0 on blu, confirming file + patch agree.
 **Implementation Steps:**
 1. Ensure `scripts/blu_bootstrap.sh` calls `scripts/abh_deploy.sh` and installs `blu-bounty.{service,timer}` and `blu-r9-farm.{service,timer}` automatically on a fresh box.
 2. Ensure the `asus` pull-backup includes `/root/Agentic-Bug-Hunter/bughunter/recon/*/findings/` and `/root/.config/auto-freecf/bounty/`.
+
+**Status: COMPLETE.** Both steps shipped, and the durability check found **three reasons a rebuilt
+box could not have run the pipeline at all**, plus a wrong backup path.
+
+**Step 1 — the bootstrap now provisions the pipeline.** New sections `4a`/`4b`/`4c` in
+`scripts/blu_bootstrap.sh`, run verbatim against `blu` twice (second run proves idempotency):
+
+| Section | What it does | Evidence |
+|---|---|---|
+| `4a` code sync | tars `scripts patches tests grokbot-shim` (excluding `__pycache__`) to `/root/Auto-FreeCF` over ssh | `code 14M (scripts patches tests grokbot-shim)`; only the pipeline subtrees cross — the repo root is a 1.5 GB farm/scraper tree with its own credentials, and a throwaway box must not receive those |
+| `4b` units | installs `blu-bounty.{service,timer}`, `blu-r9-farm.{service,timer}`, `blu-gigs-api.service`; `grokbot-shim.service` only if `/root/grokbot/9router-shim/proxy.js` exists | `bounty active active active`, `shim active`; the shim's ExecStart is outside this repo, so enabling it otherwise would start a unit that can only fail-loop |
+| `4c` engine | calls `abh_deploy.sh`, preflighting the two hard requirements it dies on (`router.key`, 9router on `:20128`) | on `blu` it reported `SKIP (9router not answering on :20128)` — a correct refusal, not a crash |
+
+**Three flaws the check found — one of which would have destroyed the deployed tree:**
+
+1. **Nothing placed the repo on the box.** The old bootstrap never cloned or copied `Auto-FreeCF`,
+   so a fresh box had no `gigs_api.py`, no patch, no unit files. `blu`'s copy is a scp'd tree, not a
+   git repo. This is why a rebuilt box could not run the pipeline even with every unit fixed.
+2. **`abh_deploy.sh` would have `rm -rf`'d the deployed ABH tree.** Its `[ -d "$ABH_DIR/.git" ]`
+   test is false on `blu` (also a scp'd tree, no `.git`), so it takes the **clone** branch: delete
+   `$ABH_DIR`, clone upstream, then apply a patch derived from a commit upstream has since
+   force-pushed away. The tree is gone whether or not the apply succeeds after. `4c` therefore
+   checks the patch **reverse-applies cleanly** first — the honest signal that our edits are in
+   place, and it needs no git repo — and skips the deploy when it does. Proven on `blu`: the guard
+   fires, and the tree is untouched afterwards (`patch still applied: rc=0`,
+   `_classify_obs` marker still present, `test_tool_integrity.py` survives).
+   *The patch path in that check must be **absolute**:* `git -C <dir> apply` resolves a relative
+   one against `<dir>`, so a relative path silently checks the wrong place and returns 128.
+3. **Two Task-4 units were never versioned.** `blu-gigs-api.service` and `grokbot-shim.service`
+   existed only on the box. Both are now in `scripts/systemd/`, byte-identical to live
+   (`md5` MATCH on both).
+
+**Step 2 — the backup did not exist.** The spec promised an `asus` pull into `~/.blu-backup/` and
+there was nothing behind it: no script anywhere, no cron entry, no push on `blu`, and not even
+`rsync` installed there. `scripts/blu_backup_pull.sh` is that missing half (tar over ssh, because
+installing packages on a box that gets thrown away is how a backup stops running).
+
+It also corrects the **path**: `recon/*/findings/` does not exist on `blu` — a hunt records its
+findings in `recon/<target>/sessions/<run>/agent_session.json` (`findings_log` + trace) and
+`recon/<target>/nuclei/findings.jsonl`. Backing up the documented path would have archived nothing
+and reported success. The real locations are in the list; the documented glob is kept so it still
+works if ABH ever creates that layout.
+
+Verified against live `blu` data, both paths:
+
+```
+  sessions     3 agent_session.json (findings_log + trace)
+  nuclei       4 findings.jsonl
+  jobs         10 job.json
+  patches      1 patch file(s)
+[backup] OK  20261019T024449  (kept 5 snapshots)
+```
+
+**The design decisions that matter, each learned from a test that failed first:**
+
+- **Staging + verification, not trust.** It extracts to `.incoming-*`, counts the session records
+  and jobs, and only then publishes and rotates. A glob matching nothing still produces a
+  "successful" tar — exactly the failure this script exists to prevent. Against an unreachable box
+  it exits non-zero with the previous good backup untouched.
+- **Absolute paths in the remote tar.** The first version ran `tar -C /` with paths relative to
+  `/`, but the **globs are expanded by the remote shell, whose cwd is `/root`** — so
+  `recon/*/sessions` looked for `/root/root/...`, matched nothing, and was left as a literal tar
+  could not stat. With `--ignore-failed-read` the pull then "succeeded" carrying the two non-glob
+  paths and **zero** session records. The verification caught it (`sessions=0`); absolute paths
+  make the glob independent of the remote cwd, and tar strips the leading `/` on its own.
+- **`trap 'rm -rf "$INCOMING"' EXIT`.** `set -e` aborts on a broken tar stream before the counts
+  check ever runs, so a per-check cleanup leaked one staging dir per failed pull. The trap covers
+  every failure path; on success the tree has already been moved out.
+- **Snapshot rotation, not overwrite.** A bad rebuild needs the state that preceded it, so the
+  previously live tree becomes a dated snapshot and `KEEP` (default 5) are retained oldest-first.
+  Proven: 4 pulls with `KEEP=2` leaves 2 snapshots and an intact live tree.
+
+**Deployed on `blu` by running the shipped `4a`/`4b`/`4c` blocks verbatim** (extracted by line
+range, so the tested code is the shipped code): the repo tree is synced, all pipeline units report
+`active`, and `4c` refuses to touch the working ABH tree.
+
+**Not covered — remaining risks, out of Task 5's scope:**
+- The `asus` half could not be installed. `root@100.104.217.54` rejects my key
+  (`Permission denied (publickey,password)`), so `blu_backup_pull.sh` was verified by running the
+  same code path from the laptop against `blu`. **It must still be installed and scheduled on
+  `asus`** (cron/systemd timer) — that step is manual and blocked on credentials.
+- `blu-9router.service`, `blu-egress.service`, `blu-argon-bridge.service`, `blu-zcode-bridge.service`
+  and the `grokbot-{gateway,coordinator}` units exist only on the box. They are model-farm plumbing
+  outside this pipeline, and `4c` degrades loudly (SKIP with the reason) when 9router is absent
+  rather than failing the provision.
+- 9router was **not answering on `:20128`** at the time of this check even though
+  `blu-9router.service` reports `active`, so `abh_deploy.sh` cannot currently run on `blu` — which
+  is precisely why `4c` refuses instead of resetting the tree.

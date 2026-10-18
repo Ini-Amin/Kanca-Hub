@@ -1,0 +1,12 @@
+[Unit]
+Description=Gigs Control HTTP API on blu :8795
+After=network.target blu-9router.service
+
+[Service]
+WorkingDirectory=/root/Auto-FreeCF
+ExecStart=/usr/bin/python3 /root/Auto-FreeCF/scripts/gigs_api.py --host 127.0.0.1 --port 8795
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
