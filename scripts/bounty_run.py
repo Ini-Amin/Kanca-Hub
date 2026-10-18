@@ -523,8 +523,12 @@ def _is_placeholder_host(host):
     # template (e.g. "bugcrowd-pam-") rather than a registrable domain.
     if "." not in host or host.endswith(("-", "_")):
         return True
-    # Needs a plausible TLD: last label at least two alphabetic chars.
+    # Needs a plausible TLD: last label at least two alphabetic chars, and not a
+    # common source/package file extension (e.g. "moment.js" in Vinted's brief).
     tld = host.rsplit(".", 1)[-1]
+    if tld in {"js", "ts", "py", "rb", "go", "rs", "apk", "ipa", "json", "html",
+               "css", "xml", "yml", "yaml", "txt", "pdf", "zip", "gz", "tar"}:
+        return True
     return not (len(tld) >= 2 and tld.isalpha())
 
 

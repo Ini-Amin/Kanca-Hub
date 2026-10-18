@@ -1,8 +1,8 @@
 diff --git a/bughunter/agent.py b/bughunter/agent.py
-index 20b5f36..9e284ce 100644
+index 20b5f36..550d014 100644
 --- a/bughunter/agent.py
 +++ b/bughunter/agent.py
-@@ -78,6 +78,92 @@ except ImportError:
+@@ -78,6 +78,106 @@ except ImportError:
      _ollama_lib = None
      _OLLAMA_OK = False
  
@@ -44,32 +44,46 @@ index 20b5f36..9e284ce 100644
 +            return _L([])
 +
 +    def chat(self, *, model, messages, tools=None, options=None):
-+        """Ollama-shaped chat. Returns {"message": {"content", "tool_calls"}}."""
-+        body = {"model": model, "messages": messages, "temperature": 0.1}
-+        if options:
-+            if options.get("num_predict"):
-+                body["max_tokens"] = options["num_predict"]
-+            if options.get("temperature") is not None:
-+                body["temperature"] = options["temperature"]
-+        if tools:
-+            body["tools"] = tools
-+            body["tool_choice"] = "auto"
-+        r = self._http.post(f"{self.base_url}/chat/completions",
-+                            data=json.dumps(body), timeout=self.timeout)
-+        r.raise_for_status()
-+        payload = _decode_json(r.text)
-+        if "choices" not in payload and isinstance(payload.get("data"), dict):
-+            payload = payload["data"]
-+        if "choices" not in payload:
-+            raise RuntimeError(
-+                "no 'choices' in response (keys: %s)" % sorted(payload)[:10])
-+        msg = payload["choices"][0].get("message") or {}
-+        return {
-+            "message": {
-+                "content": msg.get("content") or "",
-+                "tool_calls": msg.get("tool_calls") or [],
-+            }
-+        }
++        """Ollama-shaped chat with BOUNTY_MODEL_FALLBACKS failover."""
++        raw_fb = os.environ.get(
++            "BOUNTY_MODEL_FALLBACKS",
++            "Zcode/GLM-5.3,THK/deepseek-v4.1-flash:free",
++        )
++        chain = [model] + [m.strip() for m in raw_fb.split(",") if m.strip() and m.strip() != model]
++        last_err = None
++        for attempt, m in enumerate(chain):
++            try:
++                body = {"model": m, "messages": messages, "temperature": 0.1}
++                if options:
++                    if options.get("num_predict"):
++                        body["max_tokens"] = options["num_predict"]
++                    if options.get("temperature") is not None:
++                        body["temperature"] = options["temperature"]
++                if tools:
++                    body["tools"] = tools
++                    body["tool_choice"] = "auto"
++                r = self._http.post(f"{self.base_url}/chat/completions",
++                                    data=json.dumps(body), timeout=self.timeout)
++                r.raise_for_status()
++                payload = _decode_json(r.text)
++                if "choices" not in payload and isinstance(payload.get("data"), dict):
++                    payload = payload["data"]
++                if "choices" not in payload:
++                    raise RuntimeError(
++                        "no 'choices' in response (keys: %s)" % sorted(payload)[:10])
++                msg = payload["choices"][0].get("message") or {}
++                if attempt:
++                    print(f"[Agent] failed over to {m}", file=sys.stderr, flush=True)
++                return {
++                    "message": {
++                        "content": msg.get("content") or "",
++                        "tool_calls": msg.get("tool_calls") or [],
++                    }
++                }
++            except Exception as e:
++                last_err = e
++                continue
++        raise last_err or RuntimeError("all models failed")
 +
 +
 +def _decode_json(text: str) -> dict:
@@ -95,7 +109,7 @@ index 20b5f36..9e284ce 100644
  # ── hunt.py lazy imports (avoids running main()) ───────────────────────────────
  _hunt = None
  def _h():
-@@ -649,10 +735,14 @@ class ToolDispatcher:
+@@ -649,10 +749,14 @@ class ToolDispatcher:
  
          try:
              if name == "run_recon":
@@ -111,7 +125,7 @@ index 20b5f36..9e284ce 100644
                  )
                  obs = self._summarize_recon(domain, ok)
  
-@@ -1219,15 +1309,34 @@ class ReActAgent:
+@@ -1219,15 +1323,34 @@ class ReActAgent:
          self._race_models: list[str] = []
  
          if not _OLLAMA_OK:
@@ -152,10 +166,89 @@ index 20b5f36..9e284ce 100644
              if requested_model not in available:
                  raise RuntimeError(
 diff --git a/bughunter/brain.py b/bughunter/brain.py
-index 3795c1b..7f3ec83 100644
+index 3795c1b..d567a13 100644
 --- a/bughunter/brain.py
 +++ b/bughunter/brain.py
-@@ -646,11 +646,38 @@ class LLMClient:
+@@ -521,31 +521,55 @@ class LLMClient:
+ 
+     def chat(self, model: str | None, system: str, user: str,
+              max_tokens: int = 4000, temperature: float = 0.1) -> str:
+-        """Send a chat request; return the assistant reply as a string."""
++        """Send a chat request; return the assistant reply as a string.
++
++        Fails over across `BOUNTY_MODEL_FALLBACKS` when the requested model is
++        unavailable. Without this, one dead model silently empties the whole
++        brain: every call returns "" and callers see a confident-looking but
++        content-free verdict (the 7-Question Gate printed `DECISION: UNKNOWN`).
++        That is the worst failure shape for a 24/7 loop, because a run that
++        produced nothing is indistinguishable from a run that found nothing.
++
++        Observed: `cbai/deepseek-v4.1-flash` (the designated worker model) went
++        hard-down with upstream 502s on all three codebuddy-intl accounts. The
++        gateway kept answering, just never for that model, so the failure was
++        invisible at the HTTP layer.
++        """
+         if not self.available:
+             return ""
+-        model = model or self.model
+-        try:
+-            if self.provider == "ollama":
+-                return self._chat_ollama(model, system, user, max_tokens, temperature)
+-            elif self.provider == "claude":
+-                return self._chat_claude(model, system, user, max_tokens, temperature)
+-            elif self.provider == "litellm":
+-                return self._chat_litellm(model, system, user, max_tokens, temperature)
+-            elif self.provider in (
+-                "openai", "grok", "groq", "deepseek",
+-                "gemini", "kimi", "mistral", "together", "cerebras", "perplexity",
+-                "openrouter", "orcarouter", "fluxion",
+-            ):
+-                return self._chat_openai_compat(model, system, user, max_tokens, temperature)
+-        except Exception as e:
+-            print(
+-                f"{YELLOW}[Brain/{self.provider}] chat error "
+-                f"({type(e).__name__}): {e}{NC}",
+-                file=sys.stderr,
+-                flush=True,
+-            )
+-            return ""
++        chain = [model or self.model] + [
++            m for m in _model_fallbacks() if m != (model or self.model)
++        ]
++        last_err = ""
++        for attempt, m in enumerate(chain):
++            try:
++                if self.provider == "ollama":
++                    return self._chat_ollama(m, system, user, max_tokens, temperature)
++                elif self.provider == "claude":
++                    return self._chat_claude(m, system, user, max_tokens, temperature)
++                elif self.provider == "litellm":
++                    return self._chat_litellm(m, system, user, max_tokens, temperature)
++                elif self.provider in (
++                    "openai", "grok", "groq", "deepseek",
++                    "gemini", "kimi", "mistral", "together", "cerebras", "perplexity",
++                    "openrouter", "orcarouter", "fluxion",
++                ):
++                    out = self._chat_openai_compat(m, system, user, max_tokens, temperature)
++                    if (out or "").strip():
++                        if attempt:
++                            print(f"{YELLOW}[Brain] failed over to {m}{NC}", file=sys.stderr,
++                                  flush=True)
++                        return out
++                    last_err = f"{m} returned empty content"
++            except Exception as e:
++                last_err = f"{m}: {type(e).__name__}: {e}"
++                if attempt + 1 < len(chain):
++                    print(f"{YELLOW}[Brain] {m} unavailable ({type(e).__name__}); "
++                          f"trying next model{NC}", file=sys.stderr, flush=True)
++                continue
++        if last_err:
++            print(f"{RED}[Brain] all models failed, last error: {last_err}{NC}",
++                  file=sys.stderr, flush=True)
+         return ""
+ 
+     def _chat_ollama(self, model, system, user, max_tokens, temperature) -> str:
+@@ -646,11 +670,38 @@ class LLMClient:
                  f"to a supported one."
              )
          r.raise_for_status()
@@ -195,6 +288,28 @@ index 3795c1b..7f3ec83 100644
          return payload["choices"][0]["message"]["content"].strip()
  
      def list_models(self) -> list[str]:
+@@ -794,6 +845,21 @@ MAX_CTX   = 32768   # context window to send (32K — safe for most phases)
+ MAX_RESP  = 6000    # max tokens to generate for analysis
+ MAX_RESP_REPORT = 10000  # full context for report writing
+ 
++
++def _model_fallbacks() -> list[str]:
++    """Models to try after the primary fails, in order.
++
++    Comma-separated via BOUNTY_MODEL_FALLBACKS, defaulting to the two models
++    known healthy behind 9router on blu. Kept as a function (not a module
++    constant) so an operator can change it per run without re-importing.
++    """
++    raw = os.environ.get(
++        "BOUNTY_MODEL_FALLBACKS",
++        "Zcode/GLM-5.3,THK/deepseek-v4.1-flash:free",
++    )
++    return [m.strip() for m in raw.split(",") if m.strip()]
++
++
+ GREEN   = "\033[0;32m"
+ CYAN    = "\033[0;36m"
+ YELLOW  = "\033[1;33m"
 diff --git a/bughunter/tools/recon_engine.sh b/bughunter/tools/recon_engine.sh
 index acd7d8a..bd7c532 100755
 --- a/bughunter/tools/recon_engine.sh
