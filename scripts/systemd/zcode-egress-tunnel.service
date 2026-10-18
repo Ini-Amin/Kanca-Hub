@@ -4,12 +4,28 @@ Description=ZCode egress tunnel: laptop:25344 -> LightVela WARP wireproxy
 # always-on and runs a userland Cloudflare WARP wireproxy on 127.0.0.1:25344;
 # this forwards that port here so the bridge (scripts/zcode_bridge_server.py,
 # config.json egress.proxy) can send its upstream through a clean IP.
-After=network-online.target
-StartLimitIntervalSec=0
+#
+# WHY THERE IS NO `After=network-online.target`:
+# this is a USER unit, and network-online.target only exists in the SYSTEM
+# manager. A user unit cannot order against it; the name just resolves to
+# not-found. ssh already retries with Restart=on-failure below, so the ordering
+# bought nothing.
+#
+# WHY THE RATE LIMIT IS BACK:
+# this unit previously had StartLimitIntervalSec=0 (limiter DISABLED) together
+# with Restart=always. When the LightVela link dropped it respawned every 20 s
+# forever — it reached 1,524 restarts, and the churn of failed start jobs is what
+# left the user manager wedged and spinning at ~94% of a core. That presents to
+# the user as "everything I open hangs", because app starts queue behind it.
+# With a limit the unit lands in `failed` and releases the queue instead.
+StartLimitIntervalSec=300
+StartLimitBurst=6
 
 [Service]
-ExecStart=/usr/bin/ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -N -L 127.0.0.1:25344:127.0.0.1:25344 lightvela
-Restart=always
+ExecStart=/usr/bin/ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ConnectTimeout=15 -N -L 127.0.0.1:25344:127.0.0.1:25344 lightvela
+# on-failure, not always: a clean exit means the link closed normally and should
+# not respawn hot. A crash retries with backoff and then trips the rate limit.
+Restart=on-failure
 RestartSec=20
 
 [Install]

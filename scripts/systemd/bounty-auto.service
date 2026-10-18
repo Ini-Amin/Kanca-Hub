@@ -1,0 +1,24 @@
+[Unit]
+Description=Bounty autopilot: discover -> scope -> recon -> triage -> Telegram
+# Zero human-in-the-loop. Each pass picks the highest-paying Bugcrowd programs it
+# has NOT already worked, pulls the live scope, runs passive enumeration, filters
+# every discovered host through gate 1, then actively scans ONLY the survivors.
+# Findings are challenged by a different model family before anything is sent.
+#
+# SAFETY: this touches third-party infrastructure. Gate 1 (scripts/bounty_run.py
+# host_in_scope / filter_hosts, tested in tests/test_bounty_scope.py) is what
+# keeps it inside program scope. Do not weaken it to "make recon find more".
+# Nothing is ever submitted to a platform: reports go to Telegram for a human.
+#
+# Cost: ~3 programs/pass, a few hundred model tokens each. No paid keys needed
+# (planner cbai/, drafter Zcode/, challengers THK-free + ag/).
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Cheap by default. Raise --max-programs / --min-reward to hunt harder.
+ExecStart=/usr/bin/python3 %h/Auto-FreeCF/scripts/bounty_run.py auto --platform bugcrowd --limit 12 --max-programs 3 --min-reward 1000 --sleep 45
+TimeoutStartSec=10800
+Nice=15
+IOSchedulingClass=idle

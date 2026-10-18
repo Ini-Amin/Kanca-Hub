@@ -166,11 +166,25 @@ SOURCES = {
 
 
 # ─────────────────────────────────────────────────────────────── db helpers
+def keep_db_backups(db: Path, keep: int = 3) -> None:
+    """Drop the oldest .bak snapshots, keeping the `keep` newest.
+
+    ponytail: count-based, no size cap. Each snapshot is ~46 MB and a run happens
+    up to 48x/day, so unbounded growth is real — 67 runs once left 3.0 GB while the
+    live DB is 46 MB. Raise `keep` if a wider rollback history is ever wanted.
+    """
+    baks = sorted(db.parent.glob(f"{db.name}.*.bak"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in baks[keep:]:
+        old.unlink(missing_ok=True)
+
+
 def backup_db(db: Path, tag: str) -> Path | None:
     if not db.exists():
         return None
     dest = db.with_suffix(f".sqlite.{tag}-{time.strftime('%Y%m%d-%H%M%S')}.bak")
     shutil.copy2(db, dest)
+    keep_db_backups(db)
     return dest
 
 

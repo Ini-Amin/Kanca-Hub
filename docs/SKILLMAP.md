@@ -30,6 +30,18 @@ NEVER use anything in the FORBIDDEN column — it is a worse twin, not a choice.
 | Client-side signing blocks replay | `client-reverse` | — | — |
 | Password spray decision | `credential-attack` | — | spraying without reading it first (legal guardrails inside) |
 
+## Pre-submit gates (ALL FOUR block submit — measured 2026-10-16: skipping
+them cost -10 reputation: duplicates + excluded-scope work + untested PoC)
+
+| # | Gate | What kills the finding | Tool |
+|---|---|---|---|
+| 1 | SCOPE | target in program's excluded list, or outside scope.yaml | `sync` scope first, then match; excluded = instant kill, no appeal |
+| 2 | DUPCHECK | same/similar vuln already in hacktivity or local findings | `dupcheck` + `cve.db` FTS; weak-model drafts (deepseek-class) are dup-prone — never submit one without this gate |
+| 3 | VM-PoC | no working proof-of-concept in a disposable VM | `blu` sandbox (ephemeral by design); untested = not a finding |
+| 4 | CHALLENGER | different-family model can't break it | planner/drafter/challenger split (see AGENTS.md bounty roles) |
+
+Only after 4/4 pass: `report` → `report-writing` → `quality` → Telegram draft → human submits. No gate may be skipped "because the model is confident".
+
 ## Website gigs
 
 | Task | PRIMARY | BACKUP | FORBIDDEN (why) |

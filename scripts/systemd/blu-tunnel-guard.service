@@ -1,0 +1,12 @@
+[Unit]
+Description=Clear blu-tunnel.service's start-limit latch once blu answers again
+After=blu-tunnel.service
+# Type=oneshot with no RemainAfterExit: each timer tick runs the script once and
+# exits, so a stuck script cannot itself become a stuck unit.
+
+[Service]
+Type=oneshot
+ExecStart=%h/Auto-FreeCF/scripts/blu_tunnel_guard.sh
+Nice=10
+IOSchedulingClass=idle
+Environment=HOME=%h

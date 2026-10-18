@@ -1,0 +1,15 @@
+[Unit]
+Description=Keep the box awake: light CPU+network heartbeat (idle-suspend killer)
+After=blu-tunnel.service
+
+[Service]
+# Manus sandboxes pause after ~30 min idle; a tiny periodic heartbeat keeps the
+# box alive indefinitely (user-measured: survives while given activity).
+# Every 45 s: timestamp a capped log, spin CPU briefly, TCP-touch the 9Router
+# tunnel (keeps the tunnel warm too). Near-zero cost; never touches z.ai.
+ExecStart=/bin/bash -c 'mkdir -p ~/.config/auto-freecf && while true; do date +"%%Y-%%m-%%d %%H:%%M:%%S" >> ~/.config/auto-freecf/idle.log; tail -n 200 ~/.config/auto-freecf/idle.log > ~/.config/auto-freecf/idle.tmp && mv ~/.config/auto-freecf/idle.tmp ~/.config/auto-freecf/idle.log; n=0; while [ $n -lt 20000 ]; do n=$((n+1)); done; timeout 5 bash -c "</dev/tcp/127.0.0.1/20128" 2>/dev/null; sleep 45; done'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

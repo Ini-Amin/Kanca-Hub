@@ -48,10 +48,10 @@ def ssh_base(name, proxy=None):
         host, port, auth = proxy
         # --auth FIRST: argparse drops trailing positionals after an interspersed
         # optional (ssh appends %h %p at the end, so option-first is required).
-        tun = [sys.executable, str(Path(__file__).resolve()), "_tunnel"]
+        tun = [sys.executable, str(Path(__file__).resolve())]
         if auth:
             tun += ["--auth", auth]
-        tun += [host, str(port)]
+        tun += ["_tunnel", host, str(port)]
         cmd += ["-o", "ProxyCommand=" + shlex.join(tun) + " %h %p"]
     return cmd + ["railway.new"]
 

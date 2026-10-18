@@ -1,0 +1,12 @@
+[Unit]
+Description=Un-jam blu-tunnel.service after a start-limit-hit latch (blu idle-pause recovery)
+# Deliberately NOT ordered before default.target and NOT WantedBy it: this must
+# never be able to hold the user manager's job queue open. It is timer-driven.
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

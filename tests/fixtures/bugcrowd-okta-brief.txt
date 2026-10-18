@@ -1,0 +1,193 @@
+Bugcrowd (US)
+Dashboard
+Engagements
+Invites
+Work
+Leaderboard
+CrowdStream
+EngagementsOkta
+Bug Bounty
+Okta
+
+Cloud Identity and Mobility Management Service
+
+Expedited triage
+Submissions to this Engagement will receive expedited triage by Bugcrowd.
+CloudSafe harbor
+Scope rating
+4 out of 4
+Testing period
+Ongoing
+Started at Nov 16, 2016
+Status
+In progress
+16 Nov 2016 14:00:00 GMT+0
+Submit report
+
+Do you like this engagement?
+
+Follow
+Share
+Hide
+Details
+Changelog
+Submissions
+Announcements
+31
+CrowdStream
+Hall of Fame
+
+Last Updated :22 May 2026 16:13:07 GMT+0View changes
+
+On this page
+Overview
+Description
+Targets
+Credentials
+What’s new
+Recent activity
+Crowd highlights
+Additional information
+Things to know
+Vulnerabilities rewarded
+479
+Validation within
+17 days
+75% of submissions are accepted or rejected within 17 days in last 3 months
+Average payout
+$843.75
+last 3 months
+
+We believe community researcher participation and building a secure foundation plays an integral role in protecting our customers and their data. We appreciate all security submissions and strive to respond in an expedient manner.
+
+Okta is a cloud-based identity service that connects people to their applications from any device, anywhere, anytime. The Okta Identity Cloud provides directory services, single sign-on, strong authentication, provisioning, mobile device management and API access management. It comes with built-in reporting, and integrates deeply with cloud, mobile and on-premises applications, directories and identity management systems.
+
+Targets 
+4 out of 4
+Bugcrowd calculates scope ratings based on the depth and breadth of in-scope targets.
+Okta Personal
+Out of scope
+Register for Okta Personal
+Go to https://personal.trexcloud.com and sign up for an account. You MUST use your @bugcrowdninja.com email address.
+Instructions
+For iOS
+
+Once you register an Okta Personal account, you must install the Okta Personal application through the App Store. Once you open the application, you will need to activate debug mode.
+
+From the main start page:
+
+Tap on "Okta Personal" 3 times
+Tap on the shield logo in the center 2 times
+At this point, "Let us secure what's important to you" should be underlined
+Long press "Let us secure what's important to you"
+Select "Trex" as your Base URL
+
+If the debug mode doesn't show up, completely close out the application and retry.
+
+For Android
+Go to the link here https://appdistribution.firebase.dev/i/4116040c826cc62f
+If the link above doesn't work, try https://appdistribution.firebase.dev/i/2f6eccc30f6a70eb
+Enter your email address to receive the app download link.
+Follow the instructions in the download link to install the app on an Android device.
+Recovery Key
+
+During the mobile application enrollment, a Recovery Key will be provided. Make sure to save the Recovery Key to access the dashboard with the browser.
+
+Push Notifications
+
+The push notification functionality for the mobile applications are not working with the "Trex" env. Make sure to copy your Recovery Key to access your dashboard.
+
+References
+
+Okta Personal Documentation
+Okta Personal Whitepaper
+
+Show more
+Name / Location	Tags	Known issues
+personal.trexcloud.com
+	
+API Testing
+Website Testing
+Okta Privileged Access
+In scope
+Payment reward chart
+P1
+$7000 – $35000
+P2
+$3000 – $7000
+P3
+$1000 – $3000
+P4
+$100 – $1000
+Redeem Credentials
+At the bottom of the program brief, click on "Get Credentials" to retrieve 2 sets of credentials.
+DO THIS FIRST!
+Change the email address associated with the provided users so that you can handle your own password resets
+Create at least 2 other Super Admins in each ORG for resetting locked accounts and handling account problems.
+Follow the steps to setup and enforce MFA on each Login under "Required MFA Configuration"
+Accessing Okta Privileged Access
+Go to the Admin Dashboard and Applications
+Go to Browse App Catalog and search for Okta Privileged Access. You will be asked to provide a team name which you should put your org name so bugcrowd-pam-###
+After creating the application, go to assignments and assign yourself to the application
+The Okta Privileged Access chiclet should appear on your Enduser Dashboard. Click the application and you'll be redirected
+For full functionality, go to Groups, create group, and assign all team roles and assign a user to the group
+Documentation
+Overview: https://help.okta.com/en-us/content/topics/privileged-access/pam-overview.htm
+Set up Okta Privileged Access: https://help.okta.com/en-us/content/topics/privileged-access/pam-setup.htm
+Show more
+Name / Location	Tags	Known issues
+bugcrowd-pam-###.oktapreview.com
+	
+
+bugcrowd-pam-###.pam.oktapreview.com
+	
+Okta Workflows
+In scope
+Payment reward chart
+P1
+$7000 – $35000
+P2
+$3000 – $7000
+P3
+$1000 – $3000
+P4
+$100 – $1000
+Redeem Credentials
+
+At the bottom of the program brief, click on "Get Credentials" to retrieve 2 sets of credentials.
+
+Access
+
+To access Okta Workflows, go to the Okta Admin Dashboard -> Workflow -> Workflows Console
+
+Focus Areas
+Focus Areas for Okta Workflows
+Ability to perform SSRF with Flo cards
+Ability to provision and deprovision Workflow orgs
+Performing Flo actions across orgs
+Viewing sensitive information across orgs
+Out of Scope
+
+Testing for Denial of Service issues and testing with any sort of automation is STRICTLY out of scope. This will result in an immediate removal from Okta Workflows and in some cases, the Okta bug bounty program.
+
+Name / Location	Tags	Known issues
+https://bugcrowd-pam-###.workflows.oktapreview.com
+	
+API Testing
+Website Testing
+Okta Device Access
+In scope
+Payment reward chart
+P1
+$10000 – $75000
+P2
+$4000 – $10000
+P3
+$1000 – $4000
+P4
+$100 – $1000
+Redeem Credentials
+At the bottom of the program brief, click on "Get Credentials" to retrieve 2 sets of credentials.
+
+Okta Device Access extends IAM (Identity and Access Management) capabilities across devices and applications, increasing your org's security posture and protecting you from phishing attacks. Local device data is protected by the same
+

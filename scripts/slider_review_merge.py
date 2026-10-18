@@ -146,20 +146,20 @@ def main() -> int:
     print(f"merged {len(rows)} puzzles -> {src/'merged.json'}  "
           f"(labeled={n_lab} verify={n_ver} failed={n_fail})")
 
-    # ---- windscribe table (separate provider, separate images/labels) ----
     ws_meta = _json(src / "ws.json")
-    ws_truth = {i: int(_x_of(v)) for i, v in _json(src / "ws_verified.json").items()
+    ws_truth = {i: (int(_x_of(v)), v.get("top") if isinstance(v, dict) else None)
+                for i, v in _json(src / "ws_verified.json").items()
                 if _x_of(v) is not None}
     ws_rows = []
     for i, m in sorted(ws_meta.items()):
         if not (src / "ws_img" / f"{i}_bg.png").exists():
             continue
-        t = ws_truth.get(i)
+        t, t_top = ws_truth.get(i, (None, None))
         ws_rows.append(dict(id=i, bg=f"{i}_bg.png", piece=f"{i}_piece.png",
                             detector=None, flat_dark=None, vision=None, conf=None,
                             truth=t, source="verified" if t is not None else "",
                             status="labeled" if t is not None else "windscribe",
-                            attempts=0, fails=0, top=m.get("top")))
+                            attempts=0, fails=0, top=t_top if t_top is not None else m.get("top")))
     (src / "ws_merged.json").write_text(json.dumps(ws_rows, indent=1))
     n_ws_lab = sum(1 for r in ws_rows if r["truth"] is not None)
     print(f"windscribe {len(ws_rows)} puzzles -> {src/'ws_merged.json'}  "
