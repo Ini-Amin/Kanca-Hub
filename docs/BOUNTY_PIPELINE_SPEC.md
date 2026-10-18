@@ -59,7 +59,8 @@ Execute these tasks **in order**. Remember: **run subagents serially (1 at a tim
 **Goal:** Right now `abh_hunt.py` only runs `bughunter/agent.py` for 10 steps (`--hours 0.5 --steps 10`), and `run_recon` alone takes 10–20 minutes on large scopes. Upgrade the per-program flow in `/home/amen/Auto-FreeCF/scripts/abh_hunt.py` to execute the 5-stage pipeline defined in `docs/SKILLMAP.md` and `bughunter/agents/`:
 
 1. **Stage 1 — Multi-Seed Recon (`recon_engine.sh --quick`):**
-   - Write all in-scope enumerable seeds (`seeds = B._scannable(ins, ins, outs)`) to `/root/Agentic-Bug-Hunter/bughunter/recon/<slug>/seeds.txt`.
+   - Write all in-scope enumerable seeds (`seeds = B._scannable(ins, ins, outs)`) to `/root/Agentic-Bug-Hunter/bughunter/recon/<target>/seeds.txt`.
+     *Corrected from `<slug>`:* every recon tool resolves paths through the target (`hunt._resolve_recon_dir(domain)` → `bughunter/recon/<domain>/`), so a slug-keyed file would be written and never read. The seed list has to sit next to the recon output it feeds for a resumed tick to find it.
    - Pass `--quick` on the initial automated tick (caps nuclei timeout at 600s instead of 1800s so recon finishes within 8–10 minutes and leaves time for hunting).
    - Expose a `quick: bool = True` parameter in `bughunter/agent.py`'s `run_recon` dispatch (`agent.py:743`) or pass `ABH_QUICK_RECON=1` via environment.
 2. **Stage 2 — Surface Ranking (`recon-ranker`):**
@@ -88,6 +89,21 @@ Execute these tasks **in order**. Remember: **run subagents serially (1 at a tim
 python3 scripts/abh_hunt.py --platform bugcrowd --max-programs 1 --hours 0.5 --steps 8
 ```
 Confirm `steps > 0` in stdout and `agent_trace.jsonl` shows tool calls completing without `[Errno 2]`.
+
+**Status: COMPLETE** — all five stages implemented and verified on `blu`:
+
+| Stage | Implementation | Evidence |
+|---|---|---|
+| 1 Multi-seed recon | `quick: bool = True` on the `run_recon` dispatch + `recon_engine.sh --quick`; seeds written to `recon/<target>/seeds.txt` before the engine starts | `tests/test_tool_integrity.py` ALL PASS on `blu` |
+| 2 Surface ranking | `SURFACE_WEIGHTS` + pure `rank_surface()` / `format_surface_rank()`, injected into `working_memory` and the observation right after `run_recon` (replaces the previous block, never duplicates) | `tests/test_surface_rank.py` ALL PASS on `blu` |
+| 3 Class scanners | 9 registered: `run_cors_check`, `run_jwt_audit`, `run_crlf_scan`, `run_nosqli_scan`, `run_graphql_audit`, `run_takeover_scan`, `run_403_bypass`, `run_cve_hunt`, `run_eol_check`; new `_live_url_file` / `_run_script` / `_run_py` wrappers in `tools/hunt.py` | 17 TOOLS entries live on `blu`; dispatcher test 9 passed |
+| 4 Four gates | `run_four_gates()` in `scripts/abh_hunt.py`: SCOPE → DUPCHECK → VM-PoC → CHALLENGER, cheapest-first **and** safety-ordered (SCOPE before the gate that sends traffic), each short-circuiting on failure | `tests/test_four_gates.py` ALL PASS locally and on `blu` |
+| 5 Report + Telegram | `stage5_report()` writes `~/.config/auto-freecf/bounty/<job>/report.md`, appends `_ledger.json`, alerts via `notify.send()`; refuses to run without a 4/4 gate log | same test file |
+
+**Remaining risks (out of Task 1 scope, logged not fixed):**
+- Upstream `awarexone/Agentic-Bug-Hunter` **force-pushed** (`cd58a40` → `40b03ee`, 16 commits). `scripts/abh_deploy.sh` clones upstream then `git apply`s the patch, so on a *fresh* box it may now fail with "Re-derive it". `blu` is deployed by `scp` of the individual files instead, which is verified working; the patch is regenerated from the local tree as the reviewable artifact.
+- `blu` had no `pytest`, so the dispatcher gate could not run there. Installed to `~/.local` only (`pip3 install --user --break-system-packages pytest`) — system site-packages untouched.
+- `tests/test_hackerone_server.py` has 2 pre-existing failures from an uncommitted `server.py` change dated 2026-10-07 (`hacktivity_items` → `reports`) that the tests were not updated for, and `test_safe_http_redirects.py::test_redirect_to_public_host_is_followed` hangs under the tailnet resolver. Both are unrelated to Task 1; the suite runs with that test deselected (858 passed, 2 pre-existing failures).
 
 ---
 

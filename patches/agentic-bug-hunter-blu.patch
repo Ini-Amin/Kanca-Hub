@@ -1,5 +1,9 @@
+# Agentic-Bug-Hunter patches applied on blu.
+# Regenerate: cd Agentic-Bug-Hunter && git diff HEAD -- <files> + git diff --no-index /dev/null <new files>
+# NOTE: upstream awarexone/Agentic-Bug-Hunter force-pushed (cd58a40 -> 40b03ee).
+# blu is deployed by scp of the individual files; this patch is the reviewable diff.
 diff --git a/bughunter/agent.py b/bughunter/agent.py
-index 20b5f36..550d014 100644
+index 20b5f36..9d46ddb 100644
 --- a/bughunter/agent.py
 +++ b/bughunter/agent.py
 @@ -78,6 +78,106 @@ except ImportError:
@@ -109,7 +113,414 @@ index 20b5f36..550d014 100644
  # ── hunt.py lazy imports (avoids running main()) ───────────────────────────────
  _hunt = None
  def _h():
-@@ -649,10 +749,14 @@ class ToolDispatcher:
+@@ -136,13 +236,21 @@ TOOLS: list[dict] = [
+         "function": {
+             "name": "run_recon",
+             "description": (
+-                "Run full subdomain enumeration + live host discovery on the target domain. "
++                "Run subdomain enumeration + live host discovery on the target domain. "
+                 "This MUST be the first step if recon data does not exist. "
+-                "Returns: number of live hosts found, key tech stacks detected."
++                "Set quick=true for the first automated pass: it caps nuclei and "
++                "skips amass/directory fuzzing so recon fits inside a short time "
++                "budget and leaves room for active testing. Returns: number of "
++                "live hosts found, key tech stacks detected."
+             ),
+             "parameters": {
+                 "type": "object",
+                 "properties": {
++                    "quick": {
++                        "type": "boolean",
++                        "description": "Fast recon (skip amass + cap nuclei), first automated pass.",
++                        "default": True,
++                    },
+                     "scope_lock": {
+                         "type": "boolean",
+                         "description": "If true, skip subdomain enum and only probe the exact target given.",
+@@ -185,18 +293,6 @@ TOOLS: list[dict] = [
+             },
+         },
+     },
+-    {
+-        "type": "function",
+-        "function": {
+-            "name": "run_js_analysis",
+-            "description": (
+-                "Download and analyse all JavaScript files found during recon. "
+-                "Extracts: API keys, secrets, hardcoded tokens, internal endpoints, "
+-                "GraphQL schemas, and auth-bypass hints. Use when JS files were discovered."
+-            ),
+-            "parameters": {"type": "object", "properties": {}, "required": []},
+-        },
+-    },
+     {
+         "type": "function",
+         "function": {
+@@ -224,35 +320,23 @@ TOOLS: list[dict] = [
+     {
+         "type": "function",
+         "function": {
+-            "name": "run_post_param_discovery",
++            "name": "run_cors_check",
+             "description": (
+-                "Discover POST form endpoints and their parameter names using lightpanda "
+-                "(JS-rendered HTML) + arjun POST brute-force. "
+-                "Mandatory for JSP/Java/Spring apps, ASP.NET WebForms, any app with login forms. "
+-                "Then runs sqlmap on discovered POST endpoints automatically. "
+-                "Pass cookies if the forms are behind authentication."
++                "Test all live hosts for CORS misconfigurations: null origin, "
++                "wildcard with credentials, trusted subdomain bypass. "
++                "High-priority when authenticated API endpoints are present."
+             ),
+-            "parameters": {
+-                "type": "object",
+-                "properties": {
+-                    "cookies": {
+-                        "type": "string",
+-                        "description": "Session cookie string e.g. 'JSESSIONID=abc; token=xyz'",
+-                        "default": "",
+-                    },
+-                },
+-                "required": [],
+-            },
++            "parameters": {"type": "object", "properties": {}, "required": []},
+         },
+     },
+     {
+         "type": "function",
+         "function": {
+-            "name": "run_api_fuzz",
++            "name": "run_jwt_audit",
+             "description": (
+-                "Fuzz API endpoints for IDOR, auth bypass, privilege escalation, "
+-                "and unauthenticated access. Tests REST + GraphQL + gRPC. "
+-                "Use when API endpoints or numeric IDs were found in recon."
++                "Audit JWT tokens found in recon artifacts: algorithm confusion (alg=none, "
++                "RS256→HS256), weak HMAC secret cracking, forged claims. "
++                "Use when JWT tokens appear in URLs, cookies, or response headers."
+             ),
+             "parameters": {"type": "object", "properties": {}, "required": []},
+         },
+@@ -260,11 +344,9 @@ TOOLS: list[dict] = [
+     {
+         "type": "function",
+         "function": {
+-            "name": "run_cors_check",
++            "name": "run_crlf_scan",
+             "description": (
+-                "Test all live hosts for CORS misconfigurations: null origin, "
+-                "wildcard with credentials, trusted subdomain bypass. "
+-                "High-priority when authenticated API endpoints are present."
++                "CRLF / header-injection probe on the top live URLs: response splitting, Set-Cookie injection, log injection via CRLF in a parameter. Use after recon when URL collection produced live hosts."
+             ),
+             "parameters": {"type": "object", "properties": {}, "required": []},
+         },
+@@ -272,11 +354,9 @@ TOOLS: list[dict] = [
+     {
+         "type": "function",
+         "function": {
+-            "name": "run_cms_exploit",
++            "name": "run_nosqli_scan",
+             "description": (
+-                "Run CMS-specific exploit checks: Drupalgeddon (CVE-2014-3704, CVE-2018-7600), "
+-                "WordPress plugin vulns + user enum, Joomla RCE, Magento SQLi. "
+-                "Use immediately when a CMS is detected — especially Drupal < 8 or WordPress."
++                "NoSQL injection probe against a login endpoint found in recon: operator injection ($ne, $gt, $regex) in the JSON auth body to bypass authentication. Needs a /login or /auth URL in recon output — returns a clean no-data result if absent. Sends a POST — in an unattended session the guard will refuse it pending human approval, so only call it when you have been told approval exists."
+             ),
+             "parameters": {"type": "object", "properties": {}, "required": []},
+         },
+@@ -284,11 +364,9 @@ TOOLS: list[dict] = [
+     {
+         "type": "function",
+         "function": {
+-            "name": "run_rce_scan",
++            "name": "run_graphql_audit",
+             "description": (
+-                "Scan for Remote Code Execution vectors: Log4Shell (JNDI), Tomcat PUT upload, "
+-                "JBoss admin consoles, SSTI (Jinja2/Twig/Freemarker), shellshock, "
+-                "interactsh OOB callbacks. Use when Java/Tomcat/JBoss/Struts is detected."
++                "Audit any GraphQL endpoints found in recon: introspection enabled, field-suggestion enumeration, batching DoS, depth bombs, unauthenticated mutations. Reads recon URL lists for /graphql, /gql, /graphiql paths. Sends POST introspection queries — in an unattended session the guard will refuse it pending human approval, so only call it when approval exists."
+             ),
+             "parameters": {"type": "object", "properties": {}, "required": []},
+         },
+@@ -296,11 +374,9 @@ TOOLS: list[dict] = [
+     {
+         "type": "function",
+         "function": {
+-            "name": "run_sqlmap_targeted",
++            "name": "run_takeover_scan",
+             "description": (
+-                "Run sqlmap against parameterized GET URLs found in recon. "
+-                "Tests error-based, boolean-blind, time-blind, UNION injection. "
+-                "Use when parameterized URLs exist OR nuclei flagged SQL-related findings."
++                "Subdomain takeover check on every discovered subdomain: dangling DNS records pointing at deprovisioned SaaS (GitHub Pages, Heroku, AWS S3, Azure, Shopify). High-impact and usually directly exploitable."
+             ),
+             "parameters": {"type": "object", "properties": {}, "required": []},
+         },
+@@ -308,42 +384,29 @@ TOOLS: list[dict] = [
+     {
+         "type": "function",
+         "function": {
+-            "name": "run_sqlmap_on_file",
++            "name": "run_403_bypass",
+             "description": (
+-                "Run sqlmap against a specific raw HTTP request file (Burp-style). "
+-                "Use when you know a specific endpoint with POST params that needs SQLi testing. "
+-                "Provide the full path to the saved request file."
++                "401/403 authorization-bypass probe on the top live URLs: path traversal, method override, header smuggling, encoding tricks. Run when admin or API paths return 401/403 but look worth reaching. Sends POST/PUT/PATCH method-override probes — in an unattended session the guard will refuse them pending human approval, so only call it when approval exists."
+             ),
+-            "parameters": {
+-                "type": "object",
+-                "properties": {
+-                    "request_file": {
+-                        "type": "string",
+-                        "description": "Absolute path to raw HTTP request file.",
+-                    },
+-                    "level": {
+-                        "type": "integer",
+-                        "description": "sqlmap level 1-5 (default 5).",
+-                        "default": 5,
+-                    },
+-                    "risk": {
+-                        "type": "integer",
+-                        "description": "sqlmap risk 1-3 (default 3).",
+-                        "default": 3,
+-                    },
+-                },
+-                "required": ["request_file"],
+-            },
++            "parameters": {"type": "object", "properties": {}, "required": []},
+         },
+     },
+     {
+         "type": "function",
+         "function": {
+-            "name": "run_jwt_audit",
++            "name": "run_cve_hunt",
+             "description": (
+-                "Audit JWT tokens found in recon artifacts: algorithm confusion (alg=none, "
+-                "RS256→HS256), weak HMAC secret cracking, forged claims. "
+-                "Use when JWT tokens appear in URLs, cookies, or response headers."
++                "Focused nuclei CVE sweep over recon results (cve/ templates only, plus log4j OOB when installed). Higher signal than run_vuln_scan's full severity sweep — prefer it when a product/version fingerprint was found."
++            ),
++            "parameters": {"type": "object", "properties": {}, "required": []},
++        },
++    },
++    {
++        "type": "function",
++        "function": {
++            "name": "run_eol_check",
++            "description": (
++                "Match recon product/version fingerprints against endoflife.date to find end-of-life software still in production. EOL product + network-reachable service is a strong lead for CVE hunting."
+             ),
+             "parameters": {"type": "object", "properties": {}, "required": []},
+         },
+@@ -418,6 +481,98 @@ TOOLS: list[dict] = [
+ 
+ TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
+ 
++# Phase flag name → the tool that sets it. Consumed by both result dicts so
++# print_dashboard shows which stages actually ran. Only tools that exist.
++PHASE_FLAG_TOOLS = {
++    "recon":           "run_recon",
++    "scan":            "run_vuln_scan",
++    "secret_hunt":     "run_secret_hunt",
++    "param_discovery": "run_param_discovery",
++    "cors":            "run_cors_check",
++    "jwt_audit":       "run_jwt_audit",
++}
++
++
++# ── Stage 2: surface ranking ─────────────────────────────────────────────────
++#
++# Recon returns a firehose (hundreds of live hosts/URLs). Without a rank the
++# model picks the first row it sees — usually an apex page with nothing on it —
++# and spends its whole budget there. These weights put auth/API/upload-style
++# endpoints at the top so step 2 starts on something with an attack surface.
++# Pure scoring over files already on disk: no network, no LLM call, so it
++# cannot burn budget or fail open.
++SURFACE_WEIGHTS = (
++    ("graphql",  90, "GraphQL endpoint — introspection/batching/authz"),
++    ("gql",      85, "GraphQL endpoint — introspection/batching/authz"),
++    ("login",    80, "auth entrypoint — credential/lockout/NoSQLi surface"),
++    ("signin",   80, "auth entrypoint — credential/lockout/NoSQLi surface"),
++    ("oauth",    78, "OAuth flow — redirect_uri/state/consent bugs"),
++    ("sso",      78, "SSO flow — SAML/OIDC assertion handling"),
++    ("admin",    75, "admin surface — usually authorization-gated"),
++    ("upload",   72, "file upload — path traversal/AV bypass/RCE"),
++    ("webhook",  70, "webhook/callback — SSRF by design, high impact"),
++    ("callback", 68, "callback endpoint — SSRF by design, high impact"),
++    ("api/",     65, "API endpoint — IDOR/authz mass-assignment surface"),
++    ("/api",     60, "API endpoint — IDOR/authz mass-assignment surface"),
++    ("token",    55, "token endpoint — issuance/validation flaws"),
++    ("session",  55, "session handling — fixation/rotation flaws"),
++    ("user",     45, "user-scoped path — IDOR candidate"),
++    ("account",  45, "account-scoped path — IDOR candidate"),
++    ("search",   35, "search/input surface — injection candidate"),
++    ("report",   35, "reporting path — access-control candidate"),
++)
++
++
++def rank_surface(recon_dir: str, top: int = 5) -> list[dict]:
++    """Rank live URLs from a recon dir by likely attack value.
++
++    Returns [{"url":..., "score":..., "why":...}, ...] highest first. Reads
++    only artifacts recon already wrote (live/urls.txt, urls/all.txt); an empty
++    or missing dir is a clean empty result, never an error — ranking must not
++    be able to fail a hunt that recon succeeded at.
++    """
++    if not recon_dir or not os.path.isdir(recon_dir):
++        return []
++    sources = [
++        os.path.join(recon_dir, "live", "urls.txt"),
++        os.path.join(recon_dir, "urls", "all.txt"),
++        os.path.join(recon_dir, "all-urls.txt"),
++    ]
++    seen: set[str] = set()
++    scored: list[dict] = []
++    for src in sources:
++        if not os.path.isfile(src):
++            continue
++        try:
++            with open(src, encoding="utf-8", errors="replace") as fh:
++                raw = fh.read()
++        except OSError:
++            continue
++        for line in raw.splitlines():
++            url = line.strip().split()[0] if line.strip() else ""
++            if not url.startswith("http") or url in seen:
++                continue
++            seen.add(url)
++            low = url.lower()
++            score, why = 10, "live URL"
++            for token, weight, reason in SURFACE_WEIGHTS:
++                if token in low and weight > score:
++                    score, why = weight, reason
++            scored.append({"url": url, "score": score, "why": why})
++    scored.sort(key=lambda r: (-r["score"], r["url"]))
++    return scored[:top]
++
++
++def format_surface_rank(ranked: list[dict]) -> str:
++    """Render rank_surface() output as the block injected into working memory."""
++    if not ranked:
++        return ""
++    lines = ["[SURFACE RANKING] High-value endpoints for this target (ranked):"]
++    for i, r in enumerate(ranked, 1):
++        lines.append(f"  {i}. {r['url']}  (score {r['score']}) — {r['why']}")
++    lines.append("  Start with rank 1-2 before touching unranked hosts.")
++    return "\n".join(lines)
++
+ 
+ # ──────────────────────────────────────────────────────────────────────────────
+ #  Memory
+@@ -522,31 +677,44 @@ class ToolDispatcher:
+     # before running. Local/bookkeeping tools are excluded — they touch only
+     # session state on disk, never the network.
+     NETWORK_TOOLS = {
+-        "run_recon", "run_vuln_scan", "run_js_analysis", "run_secret_hunt",
+-        "run_param_discovery", "run_post_param_discovery", "run_api_fuzz",
+-        "run_cors_check", "run_cms_exploit", "run_rce_scan",
+-        "run_sqlmap_targeted", "run_sqlmap_on_file", "run_jwt_audit",
++        "run_recon", "run_vuln_scan",
++        "run_param_discovery", "run_cors_check",
++        "run_crlf_scan", "run_takeover_scan", "run_cve_hunt", "run_eol_check",
++        # Declared with their REAL verbs (TOOL_METHODS), so the guard gates
++        # them. An unattended run will get REQUIRES APPROVAL for these three —
++        # that is the intended outcome, not a bug: see SECURITY-REVIEW-2026-08-22
++        # finding #7. Re-labelling them GET to make them runnable would be the
++        # exact flaw that finding was filed against.
++        "run_nosqli_scan",     # POST  (JSON login body)
++        "run_graphql_audit",   # POST  (introspection/mutation probes)
++        "run_403_bypass",      # POST/PUT/PATCH (method-override probes)
+     }
++    # Deliberately absent: run_secret_hunt and run_jwt_audit are offline-only
++    # (they read recon/<domain>/ artifacts from disk and never open a socket).
++    # Listing them here would let a local file-read trip AutopilotGuard's
++    # circuit breaker and lock the agent out of a host it never touched.
+ 
+     # Real HTTP-method semantics per tool, so AutopilotGuard's method policy
+     # (unsafe methods require human approval) actually fires instead of
+     # every call being hardcoded GET. Read/recon-only tools stay GET; tools
+     # that submit data, mutate state, or run active exploitation map to
+     # their real verb. See SECURITY-REVIEW-2026-08-22.md finding #7.
++    # Where a script mixes verbs the entry carries the MOST unsafe one it can
++    # send — understating it would open a hole the policy is meant to close.
+     TOOL_METHODS = {
+         "run_recon": "GET",
+         "run_vuln_scan": "GET",
+-        "run_js_analysis": "GET",
+         "run_secret_hunt": "GET",
+         "run_param_discovery": "GET",
+         "run_cors_check": "GET",
+-        "run_post_param_discovery": "POST",
+-        "run_api_fuzz": "POST",
+-        "run_cms_exploit": "POST",
+-        "run_rce_scan": "POST",
+-        "run_sqlmap_targeted": "POST",
+-        "run_sqlmap_on_file": "POST",
+         "run_jwt_audit": "GET",
++        "run_crlf_scan": "GET",
++        "run_takeover_scan": "GET",
++        "run_cve_hunt": "GET",
++        "run_eol_check": "GET",
++        "run_nosqli_scan": "POST",
++        "run_graphql_audit": "POST",
++        "run_403_bypass": "POST",
+     }
+ 
+     def __init__(self, domain: str, memory: HuntMemory,
+@@ -604,44 +772,17 @@ class ToolDispatcher:
+         # HTTP-method semantics (see TOOL_METHODS) so AutopilotGuard's
+         # method policy can require human approval for state-changing tools
+         # instead of every call being nominally "safe" GET.
+-        # run_sqlmap_on_file's actual target is data-driven from a request
+-        # file, not self.domain — self.domain passing scope says nothing
+-        # about what host the file itself targets. Parse the file's Host:
+-        # header and hard-block on it BEFORE the generic method-policy gate
+-        # below, so an out-of-scope request file can never reach
+-        # "require_approval" (which would only warn, not block) and a human
+-        # approving an in-scope one can see the real target in the message.
+-        # See SECURITY-REVIEW-2026-08-22.md finding #2.
+-        sqlmap_file_host = None
+-        if name == "run_sqlmap_on_file":
+-            req_file = args.get("request_file", "")
+-            if not req_file or not os.path.isfile(req_file):
+-                return f"ERROR: request_file not found: {req_file}"
+-            sqlmap_file_host = self._parse_request_file_host(req_file)
+-            if self._guard._scope_checker is not None:
+-                if sqlmap_file_host is None:
+-                    return ("BLOCKED by scope guard: could not determine target "
+-                             f"host from request_file ({req_file}) — refusing "
+-                             "rather than assuming in-scope")
+-                if not self._guard._scope_checker.is_in_scope(f"https://{sqlmap_file_host}"):
+-                    return (f"BLOCKED by scope guard: Out of scope: "
+-                             f"{sqlmap_file_host} is not on the program "
+-                             f"allowlist (target host parsed from request_file "
+-                             f"{req_file})")
+-
+         if name in self.NETWORK_TOOLS:
+             method = self.TOOL_METHODS.get(name, "GET")
+             gate = self._guard.check_request(method, f"https://{domain}")
+             if gate["decision"] == "block":
+                 return f"BLOCKED by scope guard: {gate['reason']}"
+             if gate["decision"] == "require_approval":
+-                if sqlmap_file_host is not None:
+-                    target_desc = f"targets {sqlmap_file_host} via request_file"
+-                else:
+-                    target_desc = f"issues a state-changing request ({method})"
+-                return (f"REQUIRES APPROVAL: {name} {target_desc} — a human "
+-                         f"must review and run this manually before it "
+-                         f"proceeds. Not executed.")
++                return (f"REQUIRES APPROVAL: {name} issues a state-changing "
++                         f"request ({method}) — a human must review and run "
++                         f"this manually before it proceeds. Not executed. "
++                         f"This is terminal for an unattended session: do NOT "
++                         f"call {name} again, pick a different tool.")
+             # Scope check above only validated the base --target domain;
+             # recon may have discovered subdomains/URLs outside that scope.
+             # Filter recon output in place before any scanner reads it.
+@@ -649,12 +790,39 @@ class ToolDispatcher:
  
          try:
              if name == "run_recon":
@@ -120,12 +531,217 @@ index 20b5f36..550d014 100644
 +                # "Steps executed: 0". Pass only what the function accepts.
                  ok = h.run_recon(
                      domain,
++                    quick=bool(args.get("quick", True)),
                      scope_lock=args.get("scope_lock", self.scope_lock),
 -                    max_urls=int(args.get("max_urls", self.max_urls)),
                  )
                  obs = self._summarize_recon(domain, ok)
++                # Stage 2: rank the surface immediately, while the model is
++                # still deciding what to do next. Injecting here (rather than
++                # waiting for it to ask for a summary) is what stops step 2
++                # from starting on the apex page because it sorted first.
++                ranked = rank_surface(h._resolve_recon_dir(domain))
++                block = format_surface_rank(ranked)
++                if block:
++                    if "[SURFACE RANKING]" not in self.memory.working_memory:
++                        self.memory.working_memory = (
++                            (self.memory.working_memory + "\n\n" if self.memory.working_memory else "")
++                            + block
++                        )
++                    else:
++                        # Re-run of recon: replace the stale ranking in place so
++                        # the model never chases endpoints from an old pass.
++                        self.memory.working_memory = re.sub(
++                            r"\[SURFACE RANKING\].*?(?=\n\n\[|\Z)",
++                            block,
++                            self.memory.working_memory,
++                            flags=re.S,
++                        )
++                    obs += "\n\n" + block
  
-@@ -1219,15 +1323,34 @@ class ReActAgent:
+             elif name == "run_vuln_scan":
+                 ok = h.run_vuln_scan(
+@@ -664,10 +832,6 @@ class ToolDispatcher:
+                 )
+                 obs = self._summarize_findings(domain, "scan", ok)
+ 
+-            elif name == "run_js_analysis":
+-                ok = h.run_js_analysis(domain)
+-                obs = self._summarize_findings(domain, "js", ok)
+-
+             elif name == "run_secret_hunt":
+                 ok = h.run_secret_hunt(domain)
+                 obs = self._summarize_findings(domain, "secrets", ok)
+@@ -676,46 +840,42 @@ class ToolDispatcher:
+                 ok = h.run_param_discovery(domain)
+                 obs = self._summarize_params(domain, ok)
+ 
+-            elif name == "run_post_param_discovery":
+-                cookies = args.get("cookies", self.default_cookies)
+-                ok = h.run_post_param_discovery(domain, cookies=cookies)
+-                obs = self._summarize_post_params(domain, ok)
+-
+-            elif name == "run_api_fuzz":
+-                ok = h.run_api_fuzz(domain)
+-                obs = self._summarize_findings(domain, "api", ok)
+-
+             elif name == "run_cors_check":
+                 ok = h.run_cors_check(domain)
+                 obs = self._summarize_findings(domain, "cors", ok)
+ 
+-            elif name == "run_cms_exploit":
+-                ok = h.run_cms_exploit(domain)
+-                obs = self._summarize_findings(domain, "cms", ok)
+-
+-            elif name == "run_rce_scan":
+-                ok = h.run_rce_scan(domain)
+-                obs = self._summarize_findings(domain, "rce", ok)
+-
+-            elif name == "run_sqlmap_targeted":
+-                ok = h.run_sqlmap_targeted(domain)
+-                obs = self._summarize_findings(domain, "sqlmap", ok)
+-
+-            elif name == "run_sqlmap_on_file":
+-                req_file = args.get("request_file", "")
+-                if not req_file or not os.path.isfile(req_file):
+-                    return f"ERROR: request_file not found: {req_file}"
+-                ok = h.run_sqlmap_request_file(
+-                    req_file, domain=domain,
+-                    level=int(args.get("level", 5)),
+-                    risk=int(args.get("risk", 3)),
+-                )
+-                obs = f"sqlmap (request-file) completed. Injectable: {ok}"
+-
+             elif name == "run_jwt_audit":
+                 ok = h.run_jwt_audit(domain)
+                 obs = self._summarize_findings(domain, "jwt", ok)
+ 
++            elif name == "run_crlf_scan":
++                ok = h.run_crlf_scan(domain)
++                obs = self._summarize_findings(domain, "crlf", ok)
++
++            elif name == "run_nosqli_scan":
++                ok = h.run_nosqli_scan(domain)
++                obs = self._summarize_findings(domain, "nosqli", ok)
++
++            elif name == "run_graphql_audit":
++                ok = h.run_graphql_audit(domain)
++                obs = self._summarize_findings(domain, "graphql", ok)
++
++            elif name == "run_takeover_scan":
++                ok = h.run_takeover_scan(domain)
++                obs = self._summarize_findings(domain, "takeover", ok)
++
++            elif name == "run_403_bypass":
++                ok = h.run_403_bypass(domain)
++                obs = self._summarize_findings(domain, "403", ok)
++
++            elif name == "run_cve_hunt":
++                ok = h.run_cve_hunt(domain)
++                obs = self._summarize_findings(domain, "cve", ok)
++
++            elif name == "run_eol_check":
++                ok = h.run_eol_check(domain)
++                obs = self._summarize_findings(domain, "eol", ok)
++
+             elif name == "read_recon_summary":
+                 obs = self._read_recon_files(domain)
+ 
+@@ -738,7 +898,16 @@ class ToolDispatcher:
+             if name in self.NETWORK_TOOLS:
+                 self._guard.record_failure(domain)
+             tb = traceback.format_exc()
+-            return f"Tool {name} raised exception: {exc}\n{tb[:500]}"
++            err = f"Tool {name} raised exception: {exc}\n{tb[:500]}"
++            # Count the attempt anyway. Before this, an exception returned here
++            # with step_count untouched, so a run whose every call died could
++            # still exit with "Steps executed: 0" — indistinguishable from a
++            # run that never started. The step is also recorded so the model
++            # gets the failure in context instead of retrying it blindly.
++            self.memory.add_observation(name, err)
++            self.memory.step_count += 1
++            self.memory.save()
++            return err
+ 
+         if name in self.NETWORK_TOOLS:
+             self._guard.record_success(domain)
+@@ -771,26 +940,6 @@ class ToolDispatcher:
+         remaining = total_secs - elapsed
+         return max(0.0, remaining / total_secs)
+ 
+-    @staticmethod
+-    def _parse_request_file_host(request_file: str) -> str | None:
+-        """Parse the target host out of a raw HTTP request file (sqlmap/
+-        Burp style) by scanning for a `Host:` header line. Deliberately not
+-        a full HTTP parser — request files for sqlmap are well-formed raw
+-        requests with a `Host:` header, and a simple line scan is
+-        sufficient. Returns the host (with port, if present), or None if
+-        the file couldn't be read or no Host header was found — callers
+-        must treat None as "refuse", not "assume in scope". See
+-        SECURITY-REVIEW-2026-08-22.md finding #2."""
+-        try:
+-            with open(request_file, "r", errors="replace") as f:
+-                for line in f:
+-                    m = re.match(r"^\s*Host:\s*(.+?)\s*$", line, re.IGNORECASE)
+-                    if m:
+-                        return m.group(1).strip()
+-        except OSError:
+-            return None
+-        return None
+-
+     def _filter_recon_urls_to_scope(self, domain: str) -> None:
+         """Drop out-of-scope URLs from recon output files IN PLACE before
+         any scanner reads them. The base-domain check at the top of
+@@ -915,22 +1064,6 @@ class ToolDispatcher:
+                 lines.append(f"  {fn}: {count} lines")
+         return "\n".join(lines)
+ 
+-    def _summarize_post_params(self, domain: str, ok: bool) -> str:
+-        h = _h()
+-        recon_dir  = h._resolve_recon_dir(domain)
+-        params_dir = os.path.join(recon_dir, "params")
+-        lines = [f"run_post_param_discovery: {'found POST params' if ok else 'no POST params found'}"]
+-        fp = os.path.join(params_dir, "post_params.json")
+-        if os.path.isfile(fp):
+-            try:
+-                data = json.loads(Path(fp).read_text())
+-                for url, info in list(data.items())[:8]:
+-                    params = ", ".join(info.get("params", [])[:6])
+-                    lines.append(f"  POST {delimit_untrusted('post param endpoint', f'{url}  →  [{params}]')}")
+-            except Exception:
+-                pass
+-        return "\n".join(lines)
+-
+     def _read_recon_files(self, domain: str) -> str:
+         h = _h()
+         recon_dir = h._resolve_recon_dir(domain)
+@@ -1173,17 +1306,19 @@ You are an elite autonomous bug bounty hunter operating within an authorized bug
+ You have a set of tools that execute real security scans. Use them strategically.
+ 
+ CORE RULES:
+-1. Always start with run_recon if no recon data exists yet.
++1. Always start with run_recon (quick=true) if no recon data exists yet.
+ 2. After recon, read_recon_summary to understand the attack surface before choosing next tool.
+-3. Prioritize by impact: CMS exploits > RCE > SQLi > IDOR > secrets > info.
+-4. If Drupal or WordPress is detected → run_cms_exploit immediately.
+-5. If Java/Tomcat/JBoss/Spring is detected → run_rce_scan + run_post_param_discovery.
+-6. If parameterized URLs found → run_sqlmap_targeted.
+-7. If JWT tokens appear in any recon data → run_jwt_audit.
++3. Prioritize by impact: live/production hosts > exposed admin panels > leaked secrets > CORS/misconfig > parameterised endpoints > informational.
++4. After recon, run run_vuln_scan (quick=true) to get nuclei coverage, then run_cors_check on the live URLs.
++5. If JS bundles were captured, run run_secret_hunt — leaked keys are the highest-confidence finding you can produce offline.
++6. If live URLs carry query parameters, run run_param_discovery.
++7. If JWT tokens appear in any recon data → run_jwt_audit (offline analysis).
+ 8. Maintain your notes via update_working_memory after each significant discovery.
+ 9. Call finish when: all high-priority tools done, time running low, or no new attack surface.
+ 10. DO NOT repeat a tool that already completed in this session unless explicitly justified.
+ 
++Every finding you report must name the exact URL/request that proves it. A finding you cannot point at is not a finding.
++
+ Think step by step. Pick the highest-impact next action given what you know."""
+ 
+ 
+@@ -1219,15 +1354,34 @@ class ReActAgent:
          self._race_models: list[str] = []
  
          if not _OLLAMA_OK:
@@ -165,6 +781,75 @@ index 20b5f36..550d014 100644
              available = [m.model for m in self.client.list().models]
              if requested_model not in available:
                  raise RuntimeError(
+@@ -1247,7 +1401,28 @@ class ReActAgent:
+         except Exception:
+             self._race_models = [self.model]
+ 
++        # Drop any advertised tool whose handler does not exist before we show
++        # it to the model. 11 of 17 tools shipped referencing hunt.py functions
++        # that were never written; picking one raised AttributeError inside
++        # dispatch(), the exception path returned the error text, step_count was
++        # never incremented, and the model retried the same tool forever — which
++        # is exactly how a hunt finished at "Steps executed: 0". A tool the model
++        # can see must be a tool that runs.
++        self.tools = []
++        for spec in TOOLS:
++            fn = spec.get("function", {}).get("name", "")
++            if fn.startswith("run_") and fn in ("run_recon", "run_vuln_scan"):
++                self.tools.append(spec)
++                continue
++            if fn.startswith("run_") and not hasattr(_h(), fn):
++                print(f"{YELLOW}[Agent] dropping tool '{fn}' — no implementation "
++                      f"in tools/hunt.py{NC}", file=sys.stderr, flush=True)
++                continue
++            self.tools.append(spec)
++
+         print(f"{GREEN}[Agent] ReAct loop online — model: {BOLD}{self.model}{NC}", flush=True)
++        print(f"{DIM}[Agent] {len(self.tools)}/{len(TOOLS)} tools available{NC}",
++              flush=True)
+         race_note = f"  race_models={self._race_models}" if len(self._race_models) > 1 else ""
+         print(f"{DIM}[Agent] max_steps={max_steps}  budget={time_budget_hours}h  "
+               f"tool_calling=native{race_note}{NC}", flush=True)
+@@ -1349,7 +1524,7 @@ class ReActAgent:
+                     {"role": "system",    "content": AGENT_SYSTEM},
+                     {"role": "user",      "content": user_msg},
+                 ],
+-                tools=TOOLS,
++                tools=self.tools,
+                 options={
+                     "num_ctx":     16384,
+                     "num_predict": 1024,
+@@ -1529,11 +1704,12 @@ class ReActAgent:
+             "working_memory":   self.memory.working_memory,
+             "verdict":          self.verdict,
+             "session_file":     self.memory.session_file,
+-            # Map completed_steps to phase flags print_dashboard checks
+-            **{step: (step in self.memory.completed_steps)
+-               for step in ("recon", "scan", "js_analysis", "secret_hunt",
+-                            "param_discovery", "api_fuzz", "cors", "cms_exploit",
+-                            "rce_scan", "sqlmap", "jwt_audit")},
++            # Phase flags print_dashboard reads. Keys must map to the real
++            # tool names in completed_steps — checking for "recon" there
++            # always missed, so the dashboard reported "Recon: Skipped" on
++            # hunts that had actually run it.
++            **{flag: (tool in self.memory.completed_steps)
++               for flag, tool in PHASE_FLAG_TOOLS.items()},
+         }
+ 
+ 
+@@ -1717,10 +1893,8 @@ def run_agent_hunt(
+                 "findings":        len(memory.findings_log),
+                 "session_file":    session_file,
+                 "working_memory":  memory.working_memory,
+-                **{step: (step in memory.completed_steps)
+-                   for step in ("recon", "scan", "js_analysis", "secret_hunt",
+-                                "param_discovery", "api_fuzz", "cors", "cms_exploit",
+-                                "rce_scan", "sqlmap", "jwt_audit")},
++                **{flag: (tool in memory.completed_steps)
++                   for flag, tool in PHASE_FLAG_TOOLS.items()},
+             }
+         except Exception as e:
+             print(f"{YELLOW}[Agent] LangGraph error: {e} — falling back to built-in{NC}",
 diff --git a/bughunter/brain.py b/bughunter/brain.py
 index 3795c1b..d567a13 100644
 --- a/bughunter/brain.py
@@ -310,6 +995,269 @@ index 3795c1b..d567a13 100644
  GREEN   = "\033[0;32m"
  CYAN    = "\033[0;36m"
  YELLOW  = "\033[1;33m"
+diff --git a/bughunter/tools/hunt.py b/bughunter/tools/hunt.py
+index 4093c9c..e2507c4 100644
+--- a/bughunter/tools/hunt.py
++++ b/bughunter/tools/hunt.py
+@@ -581,6 +581,258 @@ def run_vuln_scan(domain, quick=False):
+         return False
+ 
+ 
++def run_secret_hunt(domain):
++    """Scan JS bundles already fetched during recon for leaked secrets."""
++    recon_dir = os.path.join(RECON_DIR, domain)
++    js_dir = os.path.join(recon_dir, "js")
++    if not os.path.isdir(recon_dir):
++        log("err", f"No recon data found for {domain}. Run recon first.")
++        return False
++    if not os.path.isdir(js_dir) or not os.listdir(js_dir):
++        log("info", f"No JS bundles captured for {domain} — nothing to scan.")
++        return False
++    log("info", f"Scanning {len(os.listdir(js_dir))} JS bundle(s) for secrets...")
++    child_env = os.environ.copy()
++    if _AUTH_SESSION is not None:
++        _AUTH_SESSION.export_to_env(child_env)
++    cmd = ["bash", os.path.join(TOOLS_DIR, "secrets_hunter.sh"),
++           "--js-bundle", recon_dir]
++    try:
++        proc = subprocess.Popen(cmd, shell=False, cwd=BASE_DIR, env=child_env)
++        proc.wait(timeout=600)
++        return proc.returncode == 0
++    except subprocess.TimeoutExpired:
++        proc.kill()
++        return False
++
++
++def run_param_discovery(domain):
++    """Discover parameters on the live URLs captured during recon."""
++    recon_dir = os.path.join(RECON_DIR, domain)
++    url_file = os.path.join(recon_dir, "live", "urls.txt")
++    if not os.path.isfile(url_file) or os.path.getsize(url_file) == 0:
++        log("err", f"No live URLs for {domain}. Run recon first.")
++        return False
++    child_env = os.environ.copy()
++    if _AUTH_SESSION is not None:
++        _AUTH_SESSION.export_to_env(child_env)
++    cmd = ["bash", os.path.join(TOOLS_DIR, "param_discovery.sh"), "-l", url_file]
++    try:
++        proc = subprocess.Popen(cmd, shell=False, cwd=BASE_DIR, env=child_env)
++        proc.wait(timeout=600)
++        return proc.returncode == 0
++    except subprocess.TimeoutExpired:
++        proc.kill()
++        return False
++
++
++def run_cors_check(domain):
++    """Test every live URL for CORS misconfiguration (origin reflection, etc.)."""
++    recon_dir = os.path.join(RECON_DIR, domain)
++    url_file = os.path.join(recon_dir, "live", "urls.txt")
++    if not os.path.isfile(url_file) or os.path.getsize(url_file) == 0:
++        log("err", f"No live URLs for {domain}. Run recon first.")
++        return False
++    child_env = os.environ.copy()
++    if _AUTH_SESSION is not None:
++        _AUTH_SESSION.export_to_env(child_env)
++    cmd = [sys.executable, os.path.join(TOOLS_DIR, "cors_scanner.py"),
++           "-l", url_file]
++    try:
++        proc = subprocess.Popen(cmd, shell=False, cwd=BASE_DIR, env=child_env)
++        proc.wait(timeout=600)
++        return proc.returncode == 0
++    except subprocess.TimeoutExpired:
++        proc.kill()
++        return False
++
++
++def _live_url_file(domain: str, cap: int = 50) -> str | None:
++    """Return a path to a bounded list of live URLs for `domain`, or None.
++
++    Capped because every consumer here fans out one HTTP request per line:
++    an uncapped live/urls.txt on a big scope is thousands of requests, which
++    is both a budget problem (it alone outlasts --time) and an unfocused one.
++    The capped copy is written next to recon output, not in it, so it can
++    never be mistaken for recon data.
++    """
++    recon_dir = os.path.join(RECON_DIR, domain)
++    src = os.path.join(recon_dir, "live", "urls.txt")
++    if not os.path.isfile(src) or os.path.getsize(src) == 0:
++        return None
++    try:
++        with open(src, encoding="utf-8", errors="replace") as fh:
++            urls = []
++            seen = set()
++            for line in fh:
++                u = line.strip().split()[0] if line.strip() else ""
++                if not u.startswith("http") or u in seen:
++                    continue
++                seen.add(u)
++                urls.append(u)
++                if len(urls) >= cap:
++                    break
++    except OSError:
++        return None
++    if not urls:
++        return None
++    bounded = os.path.join(recon_dir, "live", f"urls_top{cap}.txt")
++    try:
++        Path(bounded).write_text("\n".join(urls) + "\n")
++    except OSError:
++        return None
++    return bounded
++
++
++def _run_script(script: str, args: list[str], timeout: int = 600) -> bool:
++    """Run a tools/ script with argv (never a shell string) and auth env."""
++    child_env = os.environ.copy()
++    if _AUTH_SESSION is not None:
++        _AUTH_SESSION.export_to_env(child_env)
++    try:
++        proc = subprocess.Popen(["bash", os.path.join(TOOLS_DIR, script), *args],
++                                shell=False, cwd=BASE_DIR, env=child_env)
++        proc.wait(timeout=timeout)
++        return proc.returncode == 0
++    except subprocess.TimeoutExpired:
++        proc.kill()
++        return False
++    except OSError:
++        return False
++
++
++def _run_py(script: str, args: list[str], timeout: int = 600) -> bool:
++    child_env = os.environ.copy()
++    if _AUTH_SESSION is not None:
++        _AUTH_SESSION.export_to_env(child_env)
++    try:
++        proc = subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, script), *args],
++                                shell=False, cwd=BASE_DIR, env=child_env)
++        proc.wait(timeout=timeout)
++        return proc.returncode == 0
++    except subprocess.TimeoutExpired:
++        proc.kill()
++        return False
++    except OSError:
++        return False
++
++
++def run_crlf_scan(domain):
++    """CRLF / response-splitting probe on the top live URLs."""
++    url_file = _live_url_file(domain)
++    if not url_file:
++        log("err", f"No live URLs for {domain}. Run recon first.")
++        return False
++    log("info", f"CRLF scan on bounded URL list {url_file}")
++    return _run_py("crlf_scanner.py", ["-l", url_file])
++
++
++def run_403_bypass(domain):
++    """Probe admin/forbidden endpoints for 401/403 bypass."""
++    url_file = _live_url_file(domain)
++    if not url_file:
++        log("err", f"No live URLs for {domain}. Run recon first.")
++        return False
++    log("info", "403/401 bypass probe on bounded URL list")
++    return _run_script("bypass_403.sh", ["-l", url_file], timeout=900)
++
++
++def run_takeover_scan(domain):
++    """Check every discovered subdomain for dangling-takeover candidates."""
++    recon_dir = os.path.join(RECON_DIR, domain)
++    if not os.path.isdir(recon_dir):
++        log("err", f"No recon data found for {domain}. Run recon first.")
++        return False
++    log("info", "Subdomain takeover check")
++    return _run_script("takeover_scanner.sh", ["--recon", recon_dir], timeout=900)
++
++
++def run_nosqli_scan(domain):
++    """NoSQL injection probe against any login endpoint found in recon.
++
++    Needs a login URL: without one there is no JSON auth body to inject into,
++    so this returns a clean no-data result rather than guessing a path and
++    POSTing payloads at an unrelated endpoint.
++    """
++    recon_dir = os.path.join(RECON_DIR, domain)
++    candidates: list[str] = []
++    for rel in ("urls/logins.txt", "urls/auth.txt", "urls/all.txt", "all-urls.txt"):
++        path = os.path.join(recon_dir, rel)
++        if not os.path.isfile(path):
++            continue
++        try:
++            with open(path, encoding="utf-8", errors="replace") as fh:
++                for line in fh:
++                    u = line.strip().split()[0] if line.strip() else ""
++                    if re.search(r"/(login|signin|sign-in|auth|session|token)([/?]|$)", u, re.I):
++                        if u.startswith("http") and u not in candidates:
++                            candidates.append(u)
++        except OSError:
++            continue
++        if candidates:
++            break
++    if not candidates:
++        log("info", f"No login endpoint found in recon for {domain} — nothing to probe.")
++        return False
++    target = candidates[0]
++    log("info", f"NoSQLi login probe: {target}")
++    return _run_py("nosqli_scanner.py", ["--login", target], timeout=300)
++
++
++def run_jwt_audit(domain):
++    """Extract any JWT-shaped tokens captured during recon and analyse them.
++
++    Offline only: jwt_scanner.py --analyze just decodes and audits header
++    claims/alg/key-id, so no request leaves the box. Nothing to do when recon
++    captured no token — a clean no-data result, not a failed run.
++    """
++    recon_dir = os.path.join(RECON_DIR, domain)
++    if not os.path.isdir(recon_dir):
++        log("err", f"No recon data found for {domain}. Run recon first.")
++        return False
++    jwt_re = re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")
++    found: set[str] = set()
++    for root, _dirs, files in os.walk(recon_dir):
++        if "/sessions/" in root + "/":
++            continue          # our own traces, never target data
++        for fn in files:
++            if not fn.endswith((".txt", ".json", ".jsonl")):
++                continue
++            try:
++                with open(os.path.join(root, fn), "r", errors="ignore") as fh:
++                    for _ in range(200):
++                        chunk = fh.read(65536)
++                        if not chunk:
++                            break
++                        for m in jwt_re.findall(chunk):
++                            found.add(m)
++                        if len(found) >= 5:
++                            break
++            except OSError:
++                continue
++        if len(found) >= 5:
++            break
++    if not found:
++        log("info", f"No JWT captured for {domain} — nothing to audit.")
++        return False
++    log("info", f"Auditing {len(found)} JWT(s) offline...")
++    child_env = os.environ.copy()
++    if _AUTH_SESSION is not None:
++        _AUTH_SESSION.export_to_env(child_env)
++    ok = False
++    for tok in sorted(found):
++        cmd = [sys.executable, os.path.join(TOOLS_DIR, "jwt_scanner.py"),
++               tok, "--analyze"]
++        try:
++            proc = subprocess.run(cmd, shell=False, cwd=BASE_DIR, env=child_env,
++                                  timeout=120, capture_output=True, text=True)
++            if proc.returncode == 0:
++                ok = True
++        except (subprocess.TimeoutExpired, OSError):
++            continue
++    return ok
++
++
+ def generate_reports(domain):
+     """Generate reports for findings."""
+     log("warn", "report_generator.py has been removed. Use /report in Claude Code to generate reports.")
 diff --git a/bughunter/tools/recon_engine.sh b/bughunter/tools/recon_engine.sh
 index acd7d8a..bd7c532 100755
 --- a/bughunter/tools/recon_engine.sh
@@ -369,3 +1317,442 @@ index acd7d8a..bd7c532 100755
          > "$RECON_DIR/urls/wayback.txt" 2>/dev/null || true
      log_done "wayback: $(wc -l < "$RECON_DIR/urls/wayback.txt" 2>/dev/null || echo 0) URLs"
  fi
+diff --git a/tests/test_agent_dispatcher_hardening.py b/tests/test_agent_dispatcher_hardening.py
+index ee51be8..0ef09d3 100644
+--- a/tests/test_agent_dispatcher_hardening.py
++++ b/tests/test_agent_dispatcher_hardening.py
+@@ -17,6 +17,12 @@ from agent import HuntMemory, ToolDispatcher
+ from tools.scope_checker import ScopeChecker
+ 
+ 
++# Scripts whose curl/urllib calls were verified to send an unsafe verb.
++# Shared by the declaration test and the end-to-end gating test so the two
++# can never drift apart.
++POST_TOOLS = ("run_nosqli_scan", "run_graphql_audit", "run_403_bypass")
++
++
+ @pytest.fixture
+ def memory(tmp_path):
+     return HuntMemory(str(tmp_path / "agent_session.json"))
+@@ -36,14 +42,6 @@ def fake_hunt(monkeypatch, tmp_path):
+             self.calls.append(("run_vuln_scan", domain, kwargs))
+             return True
+ 
+-        def run_post_param_discovery(self, domain, **kwargs):
+-            self.calls.append(("run_post_param_discovery", domain, kwargs))
+-            return True
+-
+-        def run_sqlmap_request_file(self, request_file, **kwargs):
+-            self.calls.append(("run_sqlmap_request_file", request_file, kwargs))
+-            return True
+-
+         def _resolve_recon_dir(self, domain):
+             recon_dir = tmp_path / "recon" / domain
+             recon_dir.mkdir(parents=True, exist_ok=True)
+@@ -146,70 +144,69 @@ class TestCircuitBreakerRecording:
+ 
+ 
+ class TestMethodPolicyEnforced:
+-    def test_state_changing_tool_requires_approval(self, memory, fake_hunt):
++    """AutopilotGuard's unsafe-method approval gate (SECURITY-REVIEW-2026-08-22
++    finding #7). The POST-capable tools it once exercised through dispatch
++    (run_post_param_discovery, run_sqlmap_*) no longer exist, so the gate is
++    tested at the layer that implements it, plus the invariant that keeps the
++    autonomous loop from ever reaching it: every tool it can actually call is
++    a safe GET."""
++
++    def test_unsafe_method_requires_approval(self, memory, fake_hunt):
+         checker = ScopeChecker(domains=["target.com"])
+         dispatcher = ToolDispatcher("target.com", memory, scope_checker=checker)
+-        result = dispatcher.dispatch("run_post_param_discovery", {})
+-        assert "APPROVAL" in result.upper() or "require_approval" in result.lower()
+-        assert not fake_hunt.calls  # never actually ran without approval
++        gate = dispatcher._guard.check_request("POST", "https://target.com/api")
++        assert gate["decision"] == "require_approval"
++        # ...and dispatch() refuses instead of executing whenever the guard
++        # returns that decision, so nothing reaches fake_hunt.
++        assert dispatcher._guard.check_request("DELETE",
++                                               "https://target.com/api/x"
++                                               )["decision"] == "require_approval"
++        assert not fake_hunt.calls
+ 
+-    def test_safe_tool_does_not_require_approval(self, memory, fake_hunt):
++    def test_safe_method_does_not_require_approval(self, memory, fake_hunt):
+         checker = ScopeChecker(domains=["target.com"])
+         dispatcher = ToolDispatcher("target.com", memory, scope_checker=checker)
+         result = dispatcher.dispatch("run_recon", {})
+         assert "APPROVAL" not in result.upper()
+         assert fake_hunt.calls
+ 
+-
+-class TestSqlmapRequestFileScope:
+-    """run_sqlmap_on_file's actual target is data-driven from a request
+-    file, not self.domain — a --target that's in scope says nothing about
+-    what host the request file itself targets. This is the sharp edge:
+-    self.domain passes scope, but the file smuggles in an out-of-scope
+-    host. See SECURITY-REVIEW-2026-08-22.md finding #2."""
+-
+-    def test_out_of_scope_request_file_host_hard_blocked(self, memory, fake_hunt, tmp_path):
+-        checker = ScopeChecker(domains=["target.com", "*.target.com"])
+-        dispatcher = ToolDispatcher("target.com", memory, scope_checker=checker)
+-        req_file = tmp_path / "request.txt"
+-        req_file.write_text(
+-            "POST /api/login HTTP/1.1\r\n"
+-            "Host: evil.other-corp.com\r\n"
+-            "Content-Type: application/json\r\n"
+-            "\r\n"
+-            '{"user":"a"}'
++    def test_unsafe_tools_declare_their_real_method(self, memory):
++        """Unattended-loop invariant, stated the right way round.
++
++        The old version of this test asserted every advertised network tool was
++        GET — which "fixed" by labelling three POST-probing scanners as GET,
++        exactly the mislabelling SECURITY-REVIEW-2026-08-22 finding #7 was filed
++        against: the guard's method policy would never fire and POST traffic
++        would leave unattended. The scripts really do send POST (nosqli login
++        body, graphql introspection, 403 method-override probes), so the tool
++        entries must say POST and the guard must gate them.
++
++        What must hold is: every network tool declares a method, and any tool
++        known to send an unsafe verb is declared unsafe — never GET.
++        """
++        unsafe_verbs = {"POST", "PUT", "PATCH", "DELETE"}
++        declared_unsafe = set()
++        for name in ToolDispatcher.NETWORK_TOOLS:
++            assert name in ToolDispatcher.TOOL_METHODS, (
++                f"{name} is advertised to an unattended agent with no declared "
++                f"method; the guard would silently assume GET"
++            )
++            if ToolDispatcher.TOOL_METHODS[name] in unsafe_verbs:
++                declared_unsafe.add(name)
++
++        # Scripts verified to send POST (grep of their curl/urllib calls).
++        must_be_unsafe = set(POST_TOOLS)
++        assert must_be_unsafe <= declared_unsafe, (
++            f"{must_be_unsafe - declared_unsafe} send POST but are declared "
++            f"GET — the approval gate would never fire for them"
+         )
+ 
+-        result = dispatcher.dispatch("run_sqlmap_on_file", {"request_file": str(req_file)})
+-
+-        assert result.startswith("BLOCKED by scope guard:")
+-        assert "evil.other-corp.com" in result
+-        assert not fake_hunt.calls  # never actually ran
+-
+-    def test_unparseable_host_blocked_not_bypassed(self, memory, fake_hunt, tmp_path):
++    def test_unsafe_method_requires_approval_at_dispatch(self, memory, fake_hunt):
++        """End-to-end: a POST-declared tool must be refused, not executed."""
+         checker = ScopeChecker(domains=["target.com"])
+         dispatcher = ToolDispatcher("target.com", memory, scope_checker=checker)
+-        req_file = tmp_path / "request.txt"
+-        req_file.write_text("POST /api/login HTTP/1.1\r\n\r\n{}")  # no Host: header
+-
+-        result = dispatcher.dispatch("run_sqlmap_on_file", {"request_file": str(req_file)})
+-
+-        assert result.startswith("BLOCKED by scope guard:")
+-        assert not fake_hunt.calls
+-
+-    def test_in_scope_request_file_host_still_requires_approval_and_names_host(self, memory, fake_hunt, tmp_path):
+-        checker = ScopeChecker(domains=["target.com", "*.target.com"])
+-        dispatcher = ToolDispatcher("target.com", memory, scope_checker=checker)
+-        req_file = tmp_path / "request.txt"
+-        req_file.write_text(
+-            "POST /api/login HTTP/1.1\r\n"
+-            "Host: api.target.com\r\n"
+-            "\r\n"
+-            "{}"
+-        )
+-
+-        result = dispatcher.dispatch("run_sqlmap_on_file", {"request_file": str(req_file)})
+-
+-        assert "APPROVAL" in result.upper()
+-        assert "api.target.com" in result
+-        assert not fake_hunt.calls  # still not executed without approval
++        for name in POST_TOOLS:
++            result = dispatcher.dispatch(name, {})
++            assert "APPROVAL" in result.upper(), f"{name} was not approval-gated"
++            assert not fake_hunt.calls, f"{name} executed without approval"
++            assert "do NOT" in result  # tells the model not to retry it
+diff --git a/tests/test_surface_rank.py b/tests/test_surface_rank.py
+new file mode 100644
+index 0000000..cb614db
+--- /dev/null
++++ b/tests/test_surface_rank.py
+@@ -0,0 +1,157 @@
++#!/usr/bin/env python3
++"""Stage 2 (surface ranking) of the 5-stage pipeline.
++
++Why this exists: recon hands back hundreds of live URLs and the model picks
++whatever sorts first — normally the apex page, which has no attack surface.
++The ranking must (a) put auth/API/upload-style endpoints above static ones,
++(b) never fail a hunt when recon wrote nothing, and (c) replace a stale
++ranking on a re-run instead of leaving both in working memory.
++
++Standalone (no pytest):  python3 tests/test_surface_rank.py
++"""
++import sys
++from pathlib import Path
++
++BUGHUNTER = Path(__file__).resolve().parent.parent / "bughunter"
++sys.path.insert(0, str(BUGHUNTER))
++
++import agent  # noqa: E402
++
++fails = 0
++
++
++def check(cond, label):
++    global fails
++    print(("  ok   " if cond else "  FAIL ") + label)
++    if not cond:
++        fails += 1
++
++
++def make_recon(tmp: Path, urls: list[str], name: str = "recon") -> Path:
++    # name matters: tests build several recon dirs under the same tmp and a
++    # shared "recon" would silently clobber an earlier case's fixtures.
++    d = tmp / name
++    (d / "live").mkdir(parents=True, exist_ok=True)
++    (d / "live" / "urls.txt").write_text("\n".join(urls) + "\n")
++    return d
++
++
++def main() -> int:
++    global fails
++    fails = 0
++    import tempfile
++
++    with tempfile.TemporaryDirectory() as td:
++        tmp = Path(td)
++
++        print("1. auth/API endpoints outrank the apex page")
++        recon = make_recon(tmp, [
++            "https://example.com/",
++            "https://example.com/static/app.js",
++            "https://example.com/graphql",
++            "https://example.com/api/v1/users",
++            "https://example.com/login",
++        ])
++        ranked = agent.rank_surface(str(recon))
++        urls = [r["url"] for r in ranked]
++        check(len(ranked) == 5, f"returned all 5 URLs ({len(ranked)})")
++        check(urls[0].endswith("/graphql"), f"rank 1 is /graphql (got {urls[0]})")
++        check(any("/login" in u for u in urls[:3]), "/login in top 3")
++        # apex and the static asset both score the baseline 10, so they land
++        # in the bottom two — what matters is neither reaches the top 3.
++        apex = "https://example.com/"
++        check(urls.index(apex) >= 3, f"bare apex not in top 3 (position {urls.index(apex)})")
++        check("/static/app.js" not in urls[:3], "static JS not in top 3")
++
++        print("2. duplicate URLs are deduplicated across source files")
++        recon2 = tmp / "recon2"
++        (recon2 / "urls").mkdir(parents=True)
++        (recon2 / "live").mkdir()
++        shared = "https://example.com/api/v1/items"
++        (recon2 / "live" / "urls.txt").write_text(shared + "\n")
++        (recon2 / "urls" / "all.txt").write_text(shared + "\n" + shared + "\n")
++        ranked2 = agent.rank_surface(str(recon2))
++        check(len(ranked2) == 1, f"deduped to 1 ({len(ranked2)})")
++        check(ranked2[0]["score"] >= 60, f"API URL scored >=60 ({ranked2[0]['score']})")
++
++        print("3. missing/empty recon is a clean empty result, not an error")
++        try:
++            check(agent.rank_surface(str(tmp / "nope")) == [], "missing dir -> []")
++            check(agent.rank_surface("") == [], "empty path -> []")
++            check(agent.rank_surface(None) == [], "None -> []")
++            empty = tmp / "emptyrecon"
++            empty.mkdir()
++            check(agent.rank_surface(str(empty)) == [], "recon dir with no urls -> []")
++        except Exception as exc:  # noqa: BLE001
++            check(False, f"raised {type(exc).__name__}: {exc}")
++
++        print("4. top=N is respected")
++        recon3 = make_recon(tmp, [f"https://example.com/api/v{i}" for i in range(20)],
++                                      name="recon3")
++        check(len(agent.rank_surface(str(recon3), top=5)) == 5, "top=5 returns 5")
++        check(len(agent.rank_surface(str(recon3), top=3)) == 3, "top=3 returns 3")
++
++        print("5. every ranked row carries a reason (model can act on it)")
++        check(all(r.get("why") for r in ranked), "each row has a 'why'")
++        check(all(r["score"] >= 10 for r in ranked), "each row has a numeric score")
++
++        print("6. format_surface_rank renders a numbered block, empty on no data")
++        block = agent.format_surface_rank(ranked)
++        check(block.startswith("[SURFACE RANKING]"), "block has the marker header")
++        check("\n  1. " in block and "\n  5. " in block, "numbered 1..5")
++        check(agent.format_surface_rank([]) == "", "no ranked rows -> empty string")
++
++        print("7. recon dispatch injects the ranking into working memory")
++        mem = agent.HuntMemory(str(tmp / "session.json"))
++        # A scope_checker is mandatory: AutopilotGuard fails CLOSED and would
++        # block run_recon (a network tool) before the ranking ever runs. That
++        # is correct behaviour — this test is about stage 2, so give it a
++        # scope that matches the target rather than disabling the guard.
++        from tools.scope_checker import ScopeChecker
++        d = agent.ToolDispatcher(
++            "example.com", mem,
++            scope_checker=ScopeChecker(domains=["example.com"]),
++            time_budget_hours=2.0,
++        )
++
++        class FakeHunt:
++            @staticmethod
++            def _resolve_recon_dir(domain):
++                return str(recon)
++
++            @staticmethod
++            def run_recon(domain, quick=True, scope_lock=False):
++                return True
++
++        import agent as agent_mod
++        real_h = agent_mod._h
++        agent_mod._h = lambda: FakeHunt
++        try:
++            d.dispatch("run_recon", {"quick": True})
++            wm = mem.working_memory
++            check("[SURFACE RANKING]" in wm, "marker present in working_memory")
++            check("/graphql" in wm, "ranked URL present in working_memory")
++
++            # Re-run must REPLACE, not append a second stale block.
++            d.dispatch("run_recon", {"quick": True})
++            check(mem.working_memory.count("[SURFACE RANKING]") == 1,
++                  "re-rank replaces rather than duplicates")
++            # And the observation given to the model carries it too.
++            check(bool(mem.observation_buf) and
++                  "[SURFACE RANKING]" in mem.observation_buf[-1]["text"],
++                  "ranking also returned to the model in the observation")
++        except Exception as exc:  # noqa: BLE001
++            check(False, f"dispatch raised {type(exc).__name__}: {exc}")
++        finally:
++            agent_mod._h = real_h
++
++    print("RESULT:", "ALL PASS" if fails == 0 else "%d FAILURES" % fails)
++    return fails
++
++
++def test_surface_rank():
++    assert main() == 0
++
++
++if __name__ == "__main__":
++    sys.exit(1 if main() else 0)
+diff --git a/tests/test_tool_integrity.py b/tests/test_tool_integrity.py
+new file mode 100644
+index 0000000..49124b3
+--- /dev/null
++++ b/tests/test_tool_integrity.py
+@@ -0,0 +1,114 @@
++#!/usr/bin/env python3
++"""Tool integrity. Run after ANY change to TOOLS, dispatch(), or tools/hunt.py.
++
++Background: the agent once advertised 17 tools while only 6 had
++implementations. Picking a missing one raised AttributeError inside
++dispatch(), which returned the error without bumping step_count, so the model
++retried it forever and the hunt ended as "Steps executed: 0". These checks
++make that failure mode impossible to reintroduce silently.
++
++Standalone (no pytest):  python3 tests/test_tool_integrity.py
++"""
++import sys
++from pathlib import Path
++
++BUGHUNTER = Path(__file__).resolve().parent.parent / "bughunter"
++sys.path.insert(0, str(BUGHUNTER))
++
++import agent  # noqa: E402
++from tools import hunt  # noqa: E402
++
++# agent._h() loads tools/hunt.py a SECOND time under the module name "hunt",
++# so it is a different object than the import above. Always patch through
++# agent._h() or the dispatcher never sees the patch.
++h = agent._h()
++
++fails = 0
++
++
++def check(cond, label):
++    global fails
++    print(("  ok   " if cond else "  FAIL ") + label)
++    if not cond:
++        fails += 1
++
++
++def main():
++    global fails
++    fails = 0
++    print("1. every advertised run_* tool has an implementation")
++    run_tools = [t["function"]["name"] for t in agent.TOOLS
++                 if t["function"]["name"].startswith("run_")]
++    print("     advertised:", ", ".join(run_tools))
++    for name in run_tools:
++        check(hasattr(hunt, name) and callable(getattr(hunt, name)),
++              f"{name} exists in tools/hunt.py")
++
++    print("2. no advertised tool references a function that was never written")
++    for name in run_tools:
++        check(not name.startswith("run_") or hasattr(hunt, name), f"{name} resolvable")
++
++    print("3. NETWORK_TOOLS and TOOL_METHODS only cover real tools")
++    names = agent.TOOL_NAMES
++    for net in agent.ToolDispatcher.NETWORK_TOOLS:
++        check(net in names, f"network tool {net} is advertised")
++        check(net in agent.ToolDispatcher.TOOL_METHODS,
++              f"network tool {net} has a declared HTTP method")
++    for method in agent.ToolDispatcher.TOOL_METHODS:
++        check(method in names, f"method entry {method} is advertised")
++    # Offline tools may carry a method entry without being scope-gated; what must
++    # never happen is the reverse. A network tool with no declared method would be
++    # assumed GET and could slip past AutopilotGuard's method policy.
++    for net in agent.ToolDispatcher.NETWORK_TOOLS:
++        check(net in agent.ToolDispatcher.TOOL_METHODS,
++              f"{net} has a declared method for the guard's policy check")
++
++    print("4. PHASE_FLAG_TOOLS points at tools that exist")
++    for flag, tool in agent.PHASE_FLAG_TOOLS.items():
++        check(tool in names, f"phase flag '{flag}' -> {tool} advertised")
++
++    print("5. an unadvertised tool is refused, not executed")
++    mem = agent.HuntMemory(str(Path(__file__).parent / "_tmp_integrity_session.json"))
++    d = agent.ToolDispatcher("example.com", mem, time_budget_hours=2.0)
++    out = d.dispatch("run_cms_exploit", {})
++    check("Unknown tool" in out, "dropped tool name refused at dispatch")
++
++    print("6. an exception still counts as a step (never a silent 0-step run)")
++    # run_jwt_audit is offline (not in NETWORK_TOOLS), so no scope gate runs
++    # upstream — it lands in the try/except the same way every real failure does.
++    real = h.run_jwt_audit
++    def boom(domain):
++        raise RuntimeError("simulated tool failure")
++    h.run_jwt_audit = boom
++    try:
++        before = mem.step_count
++        out = d.dispatch("run_jwt_audit", {})
++        check("raised exception" in out, "exception surfaced to the model")
++        check(mem.step_count == before + 1,
++              f"step_count incremented ({before} -> {mem.step_count})")
++    finally:
++        h.run_jwt_audit = real
++
++    print("7. a working tool also counts as a step")
++    real_hunt = h.run_secret_hunt
++    h.run_secret_hunt = lambda domain: True
++    try:
++        before = mem.step_count
++        d.dispatch("run_secret_hunt", {})
++        check(mem.step_count == before + 1, "step_count incremented on success")
++    finally:
++        h.run_secret_hunt = real_hunt
++
++    Path(str(Path(__file__).parent / "_tmp_integrity_session.json")).unlink(
++        missing_ok=True)
++    print("RESULT:", "ALL PASS" if fails == 0 else "%d FAILURES" % fails)
++    return fails
++
++
++def test_tool_integrity():
++    """pytest entry point — same checks as the standalone run above."""
++    assert main() == 0
++
++
++if __name__ == "__main__":
++    sys.exit(1 if main() else 0)
