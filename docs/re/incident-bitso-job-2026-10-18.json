@@ -1,0 +1,51 @@
+{
+ "id": "bugcrowd-bitso-mbb-og-56930",
+ "platform": "bugcrowd",
+ "program": "bitso-mbb-og",
+ "in_scope": [
+  "bitso.com",
+  "https://bitso.com",
+  "https://nvio.mx",
+  "https://nvio.ar",
+  "https://apps.apple.com/us/app/bitso-buy-bitcoin-easily/id1292836438",
+  "https://apps.apple.com/us/app/bitso-alpha-crypto-trade-pro/id1539469172",
+  "https://play.google.com/store/apps/details?id=com.bitso.wallet&pcampaignid=web_share",
+  "https://play.google.com/store/apps/details?id=com.bitso.alpha",
+  "onchain.cc",
+  "https://onchain.cc"
+ ],
+ "out_of_scope": [
+  "help.bitso.com",
+  "status.bitso.com",
+  "dev.bitso.com",
+  "blog.bitso.com",
+  "stage.bitso.com",
+  "landing.bitso.com",
+  "devmalta.bitso.com",
+  "edu.bitso.com",
+  "sandbox.bitso.com",
+  "api-dev.bitso.com",
+  "api-stage.bitso.com",
+  "api-sandbox.bitso.com",
+  "stagemalta.bitso.com",
+  "*.otc.bitso.com",
+  "*.efx.bitso.com",
+  "quetzal.bitso.com",
+  "login.bitso.io",
+  "bitsohelp.zendesk.com",
+  "support.bitso.com"
+ ],
+ "targets": [
+  "https://bitso.com",
+  "https://onchain.cc"
+ ],
+ "status": "challenged-killed",
+ "created": "2026-10-18T00:08:50",
+ "recon_counts": {
+  "discovered": 536,
+  "in_scope": 514,
+  "rejected": 22,
+  "live": 17,
+  "nuclei": 0
+ }
+}

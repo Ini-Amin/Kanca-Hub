@@ -59,6 +59,8 @@ __all__ = [
     "find_free_port",
     "country_allowed",
     "lookup_ip_country",
+    "proxyma_candidates",
+    "windscribe_candidates",
 ]
 
 
@@ -243,6 +245,54 @@ def _try_proxyma(target_url: str, verbose: bool, *, timeout: float = 12.0) -> st
                 print(f"  [egress] ✓ Proxyma {n['region']} verified for {target_url} (HTTP {st})", file=sys.stderr)
             return cand
     return None
+def windscribe_candidates(target_url: str = "https://api.ipify.org", *, limit: int = 8,
+                          timeout: float = 12.0, dedupe_ip: bool = True, cc: str | None = None) -> list[str]:
+    """Return verified Windscribe proxy exits (https://user:pass@host:443).
+    Supports country filtering (e.g. cc='US', cc='CA', cc='NL')."""
+    try:
+        import proxy_pool as _pp
+        entries = _pp.windscribe_entries(cc)
+    except Exception:
+        return []
+    out: list[str] = []
+    seen_ips: set[str] = set()
+    for e in entries:
+        p = e.get("proxy") or {}
+        server = p.get("server")
+        if not server or not p.get("username"):
+            continue
+        cand = f"https://{p['username']}:{p['password']}@{server.split('//')[1]}"
+        try:
+            st = probe_status(target_url, proxy=cand, timeout=timeout)
+        except Exception:
+            continue
+        if not (200 <= st < 400 and not is_blocked(st)):
+            continue
+        if dedupe_ip:
+            ip = _exit_ip(cand, timeout=timeout)
+            if ip and ip in seen_ips:
+                continue
+            if ip:
+                seen_ips.add(ip)
+        out.append(cand)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _try_windscribe(target_url: str, verbose: bool, *, country=None, exclude_countries=None, timeout: float = 12.0) -> str | None:
+    """Verified Windscribe proxy exit from free fleet."""
+    norm_country = _normalize_countries(country)
+    cc_arg = next(iter(norm_country), None) if norm_country else None
+    cands = windscribe_candidates(target_url, limit=4, cc=cc_arg, timeout=timeout)
+    if cands:
+        if verbose:
+            print(f"  [egress] ✓ Windscribe exit verified for {target_url}", file=sys.stderr)
+        return cands[0]
+    if verbose:
+        print(f"  [egress] • Windscribe exits unavailable or failed probe for {target_url}", file=sys.stderr)
+    return None
+
 
 def _flag_host(target_url: str) -> str:
     """Host part of a target URL for ip_flag_guard bookkeeping."""
@@ -424,6 +474,22 @@ def auto_egress(
         if verbose:
             print("  [egress] WARP egress selected explicitly", file=sys.stderr)
         return None, None, "warp"
+    if eff_lower == "windscribe":
+        cand = _try_windscribe(target_url, verbose, country=norm_country, exclude_countries=norm_exclude)
+        if cand:
+            return cand, None, "windscribe"
+        if verbose:
+            print("  [egress] ✗ Windscribe exits unavailable or blocked; falling back to direct", file=sys.stderr)
+        return None, None, "direct"
+
+    if eff_lower in ("vpn", "vpn_pool"):
+        vp = _try_vpn_pool(target_url, verbose, country=norm_country, exclude_countries=norm_exclude)
+        if vp:
+            return vp, None, "vpn_pool"
+        if verbose:
+            print("  [egress] ✗ VPN pool exits unavailable or blocked; falling back to direct", file=sys.stderr)
+        return None, None, "direct"
+
 
     # Explicit proxy URL or host:port
     if "://" in eff_mode_clean or re.match(r"^\d{1,3}(?:\.\d{1,3}){3}:\d+$", eff_mode_clean):
@@ -787,6 +853,7 @@ def _cli() -> int:
                     help="run a plaintext CONNECT relay on 127.0.0.1:PORT chaining into --upstream (for urllib clients)")
     ap.add_argument("--upstream", default="",
                     help="TLS proxy URL for --relay (https://[user:pass@]host:port)")
+    ap.add_argument("--windscribe", action="store_true", help="use Windscribe free fleet egress")
     args = ap.parse_args()
 
     if args.relay:
@@ -796,9 +863,10 @@ def _cli() -> int:
         relay(args.relay, args.upstream)
         return 0
 
+    mode = "windscribe" if args.windscribe else args.mode
     gw, proc, source = auto_egress(
         target_url=args.target,
-        mode=args.mode,
+        mode=mode,
         verbose=True,
         prefer_pool=args.prefer_pool,
         country=args.country,

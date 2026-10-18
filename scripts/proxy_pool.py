@@ -31,20 +31,32 @@ def _egress(host, port, auth=None, timeout=14):
         return None
 
 def warp_entry():
-    import warp_manager
-    st=warp_manager.status()
-    if st.get("up"):
-        return {"provider":"warp","proxy":None,"egress_ip":st.get("egress_ip"),
-                "note":"system tunnel active; run WITHOUT proxy"}
+    try:
+        import warp_manager
+        st=warp_manager.status()
+        if st.get("up"):
+            return {"provider":"warp","proxy":None,"egress_ip":st.get("egress_ip"),
+                    "note":"system tunnel active; run WITHOUT proxy"}
+    except Exception:
+        pass
     return None
 
 def windscribe_entries(cc=None):
     try:
         import windscribe_free_proxy as ws
-        hosts=ws.serverlist()
-        if cc: hosts={k:v for k,v in hosts.items() if cc.lower() in k.lower()}
-        return [{"provider":"windscribe","proxy":{"server":f"https://{h}:443"},"region":k}
-                for k,hl in hosts.items() for h in hl[:2]]
+        creds = ws.get_credentials() if hasattr(ws, "get_credentials") else None
+        hosts = ws.serverlist()
+        if cc:
+            hosts = {k: v for k, v in hosts.items() if cc.lower() in k.lower()}
+        entries = []
+        for k, hl in hosts.items():
+            for h in hl[:2]:
+                px = {"server": f"https://{h}:443"}
+                if creds:
+                    px["username"] = creds["username"]
+                    px["password"] = creds["password"]
+                entries.append({"provider": "windscribe", "proxy": px, "region": k})
+        return entries
     except Exception:
         return []
 
@@ -60,10 +72,12 @@ def browsec_entries(cc=None):
 
 def veepn_entries(cc="nl"):
     try:
+        if cc and cc.lower() not in ("nl", "netherlands", "amsterdam"):
+            return []
         d=json.load(open(Path.home()/".cache/auto-freecf/veepn_pool.json")) if (Path.home()/".cache/auto-freecf/veepn_pool.json").exists() else None
         if not d:
             import veepn_free_proxy as vp
-            d=vp.get_servers(cc)
+            d=vp.get_servers("nl")
             (Path.home()/".cache/auto-freecf").mkdir(parents=True,exist_ok=True)
             json.dump(d, open(Path.home()/".cache/auto-freecf/veepn_pool.json","w"))
         return [{"provider":"veepn",
@@ -75,8 +89,8 @@ def veepn_entries(cc="nl"):
         return []
 
 def all_entries(cc=None):
-    return warp_entry() and [warp_entry()] or [] if False else \
-           ([warp_entry()] if warp_entry() else []) + veepn_entries() + windscribe_entries(cc) + browsec_entries(cc)
+    warp = [warp_entry()] if (warp_entry() and not cc) else []
+    return warp + veepn_entries(cc) + windscribe_entries(cc) + browsec_entries(cc)
 
 def best(country=None, include_warp=True):
     """First entry whose tunnel actually reaches ipify (validated, not just listed).

@@ -82,14 +82,97 @@ def _clean_schema(node):
     return out
 
 
+# ---------------------------------------------------------------------------
+# thoughtSignature store
+# ---------------------------------------------------------------------------
+# Gemini 4/3 REQUIRE the `thoughtSignature` that came back with a `functionCall`
+# to be replayed, verbatim, on the same part in the next request. Omit it and
+# the WHOLE request 400s:
+#
+#   Function call is missing a thought_signature in functionCall parts.
+#   ... function call `default_api:shell`, position 40.
+#
+# The old store was keyed ONLY by the `tc-<uuid>` id we mint, and lived only in
+# process memory. Both halves were wrong:
+#
+#   * Callers rewrite ids. 9router's OpenAI-compat layer re-issues `call_*`
+#     ids, so the replay arrives with an id we never minted -> lookup misses ->
+#     signature silently dropped -> 400. (Measured 2026-10-18: same id = 200,
+#     rewritten id = 400, identical conversation.)
+#   * A restart emptied the map, so even an id-preserving caller 400'd on the
+#     first replay after any restart.
+#
+# So we key by BOTH the id and a fingerprint of (tool name + arguments), which
+# survives id rewriting, and persist to disk so restarts do not lose it.
+_SIG_PATH = os.path.expanduser("~/.cache/argon-bridge/sig.json")
+_SIG_MAX = 5000
 _SIG = {}
+_SIG_LOCK = threading.Lock()
+# Holds a signature that arrived on its own chunk, for the functionCall that
+# follows in the same upstream response. Reset per request.
+_last_sig = [None]
 
-def _sig_put(tid, sig):
-    if tid and isinstance(sig, str) and sig:
-        if len(_SIG) >= 1000:
-            _SIG.pop(next(iter(_SIG)))
-        _SIG[tid] = sig
-  # tool_call_id -> thoughtSignature (in-process, cap 1000)
+# Google's documented dummy value for calls that genuinely have no signature
+# (history imported from another model, synthetic seeds). Better than a 400:
+# https://ai.google.dev/gemini-api/docs/thought-signatures
+SKIP_SIG = "skip_thought_signature_validator"
+
+
+def _sig_load():
+    try:
+        with open(_SIG_PATH) as f:
+            d = json.load(f)
+        if isinstance(d, dict):
+            _SIG.update({k: v for k, v in d.items() if isinstance(v, str) and v})
+    except Exception:
+        pass
+
+
+def _sig_save():
+    try:
+        os.makedirs(os.path.dirname(_SIG_PATH), exist_ok=True)
+        tmp = _SIG_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(_SIG, f)
+        os.replace(tmp, _SIG_PATH)
+    except Exception:
+        pass
+
+
+def _sig_key(name, args):
+    """Stable fingerprint of a call, independent of the caller's tool_call id."""
+    try:
+        norm = json.dumps(args, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        norm = str(args)
+    return "fp:" + __import__("hashlib").sha256(
+        ((name or "") + "\x00" + norm).encode()).hexdigest()[:32]
+
+
+def _sig_put(tid, sig, name=None, args=None):
+    if not (isinstance(sig, str) and sig):
+        return
+    with _SIG_LOCK:
+        if len(_SIG) >= _SIG_MAX:
+            for k in list(_SIG)[: _SIG_MAX // 10]:
+                _SIG.pop(k, None)
+        if tid:
+            _SIG[tid] = sig
+        if name is not None:
+            _SIG[_sig_key(name, args)] = sig
+        _sig_save()
+
+
+def _sig_get(tid, name=None, args=None):
+    with _SIG_LOCK:
+        if tid and tid in _SIG:
+            return _SIG[tid]
+        if name is not None:
+            return _SIG.get(_sig_key(name, args))
+    return None
+
+
+_sig_load()
 
 
 def _to_gemini(messages, tools):
@@ -118,11 +201,16 @@ def _to_gemini(messages, tools):
                     args = json.loads(fn.get("arguments") or "{}")
                 except Exception:
                     args = {}
-                # thoughtSignature left OUTSIDE functionCall: upstream rejects
-                # unknown fields inside it; the id lives only in names[].
-                part = {"functionCall": {"name": fn.get("name", ""), "args": args}}
-                if tid in _SIG:
-                    part["thoughtSignature"] = _SIG[tid]
+                # thoughtSignature goes OUTSIDE functionCall: upstream rejects
+                # unknown fields inside it.
+                name = fn.get("name", "")
+                part = {"functionCall": {"name": name, "args": args}}
+                sig = _sig_get(tid, name, args)
+                # Never emit a bare functionCall: that is the 400. If we have no
+                # real signature (id rewritten AND fingerprint miss, or history
+                # imported from another model) fall back to Google's documented
+                # sentinel, which skips validation instead of failing the turn.
+                part["thoughtSignature"] = sig or SKIP_SIG
                 parts.append(part)
             contents.append({"role": "model", "parts": parts})
             continue
@@ -168,6 +256,7 @@ def _to_gemini(messages, tools):
 
 def upstream(messages, tier, tools=None):
     model = TIERS.get((tier or "medium").lower(), TIERS["medium"])
+    _last_sig[0] = None
     system, contents, decls = _to_gemini(messages, tools)
     req_body = {"contents": contents}
     if system:
@@ -202,10 +291,24 @@ def upstream(messages, tier, tools=None):
                     elif "functionCall" in p:
                         fc = p["functionCall"] or {}
                         tcid = "tc-" + uuid.uuid4().hex[:8]
-                        _sig_put(tcid, p.get("thoughtSignature") or p.get("thought_signature"))
+                        name = fc.get("name", "")
+                        args = fc.get("args") or {}
+                        # The signature may ride on the functionCall part OR on a
+                        # sibling `thought` part (both shapes are legal, and the
+                        # thought-part shape is what broke gemini-cli). Grab
+                        # whatever this chunk carries, and remember it under both
+                        # the id and the call fingerprint.
+                        _sig_put(tcid,
+                                 p.get("thoughtSignature") or p.get("thought_signature")
+                                 or _last_sig[0],
+                                 name, args)
                         calls.append({"id": tcid, "type": "function",
-                                      "function": {"name": fc.get("name", ""),
-                                                   "arguments": json.dumps(fc.get("args") or {})}})
+                                      "function": {"name": name,
+                                                   "arguments": json.dumps(args)}})
+                    elif p.get("thoughtSignature") or p.get("thought_signature"):
+                        # Signature-only chunk: hold it for the functionCall that
+                        # follows in this same response.
+                        _last_sig[0] = p.get("thoughtSignature") or p.get("thought_signature")
     if not "".join(out) and not calls:
         try:
             with open("/tmp/opencode/argon_empty.log", "a") as f:
@@ -275,18 +378,25 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             def emit(obj):
                 self.wfile.write(("data: %s\n\n" % json.dumps(obj)).encode())
-            emit({"id": cid, "object": "chat.completion.chunk", "model": model,
-                  "choices": [{"index": 0, "delta": {"role": "assistant",
-                                                     "content": text or None},
-                               "finish_reason": None}]})
-            for i, tc in enumerate(calls):
+            # A client that hangs up mid-stream (omp does this the moment it has
+            # what it needs) raises BrokenPipeError from deep in socketserver and
+            # dumps a full traceback into the journal. That is normal client
+            # behaviour, not a bridge fault, and the noise buries real errors.
+            try:
                 emit({"id": cid, "object": "chat.completion.chunk", "model": model,
-                      "choices": [{"index": 0, "delta": {"tool_calls": [{
-                          "index": i, "id": tc["id"], "type": "function",
-                          "function": tc["function"]}]}, "finish_reason": None}]})
-            emit({"id": cid, "object": "chat.completion.chunk", "model": model,
-                  "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]})
-            self.wfile.write(b"data: [DONE]\n\n")
+                      "choices": [{"index": 0, "delta": {"role": "assistant",
+                                                         "content": text or None},
+                                   "finish_reason": None}]})
+                for i, tc in enumerate(calls):
+                    emit({"id": cid, "object": "chat.completion.chunk", "model": model,
+                          "choices": [{"index": 0, "delta": {"tool_calls": [{
+                              "index": i, "id": tc["id"], "type": "function",
+                              "function": tc["function"]}]}, "finish_reason": None}]})
+                emit({"id": cid, "object": "chat.completion.chunk", "model": model,
+                      "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]})
+                self.wfile.write(b"data: [DONE]\n\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
         self._send({"id": "argon-" + uuid.uuid4().hex[:8], "object": "chat.completion",
                     "model": model, "choices": [

@@ -1,0 +1,14 @@
+[Unit]
+Description=Run a bounty autopilot pass (discover + recon + triage)
+
+[Timer]
+# Bugcrowd is a third party and its engagement feed changes slowly, so there is
+# no value in racing. Three passes a day, at irregular wall-clock times with a
+# wide random delay: a fixed cadence looks like a bot to both the platform and
+# the targets, and a fresh program is not worth a 20-minute poll.
+OnCalendar=*-*-* 03,11,19:41
+Persistent=true
+RandomizedDelaySec=3600
+
+[Install]
+WantedBy=timers.target

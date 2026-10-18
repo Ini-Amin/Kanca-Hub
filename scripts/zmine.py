@@ -56,16 +56,19 @@ ACCOUNTS = STATE_DIR / "zmine_accounts.jsonl"
 LOCKFILE = STATE_DIR / "zmine.lock"
 SCRIPTS = Path(__file__).resolve().parent
 
-TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "Zcode/GLM-5.3-Flash")
+TASK_MODEL = os.environ.get("ZMINE_TASK_MODEL", "nr/step-5-preview")
 # Sequential fallback chain (ONE model at a time per account — never parallel
-# fan-out; that wastes tokens). Measured live 2026-10-14, all correct:
-#   Zcode/GLM-5.3-Flash (medium) -> nr/stepfun-3.7-flash -> kilo laguna free.
-# Notes: model IDs are case-sensitive ("zcode/..." 404s); nr/step-5-preview
-# works but slow (7s); cl/stepfun-3.5 + cl/nemotron:free both 503.
+# fan-out; that wastes tokens). Measured live 2026-10-15, all answering:
+#   nr/step-5-preview (5.4s) -> kilo laguna free (1.1s) -> THK deepseek (3.1s).
+# NO Zcode here on purpose (2026-10-15, user): zmine's SI calls are exactly the
+# request spam that got the shared bridge accounts 3012-flagged. Zcode is for
+# interactive use only. Dropped: atria (token quota 429) and
+# kilo/stepfun/step-5-preview-free (503). Notes: model IDs are case-sensitive
+# ("zcode/..." 404s); step-5-preview is slow (~5-7s); cl/stepfun-3.5 + cl/nemotron 503.
 TASK_MODELS = ([os.environ["ZMINE_TASK_MODEL"]] if os.environ.get("ZMINE_TASK_MODEL")
                else [m.strip() for m in
                      os.environ.get("ZMINE_TASK_MODELS",
-                                    "Zcode/GLM-5.3-Flash,nr/stepfun-3.7-flash,kilo/poolside/laguna-s-2.1:free").split(",") if m.strip()])
+                                    "nr/step-5-preview,kilo/poolside/laguna-s-2.1:free,THK/deepseek-v4.1-flash:free").split(",") if m.strip()])
 # Reason sent with every solver call. GLM-5.3-Flash honours `reasoning_effort`;
 # medium is the sweet spot for the SI bank (cheap, still thinks before answering).
 TASK_REASONING = os.environ.get("ZMINE_TASK_REASONING", "medium")
@@ -679,7 +682,14 @@ def autopilot(target: int = 25, ref: str | None = "RCFZ9GA7", *,
                 log_fn("autopilot: register failed -> stopping this pass")
                 break
             added += 1
-            time.sleep(REG_GAP + random.uniform(2, 8))
+            # Randomised gap, NOT a metronome: a fixed cadence (e.g. a new ref
+            # every 15 min) reads as one farm in the site's referral log.
+            # Defaults 20-50 min; override with ZMINE_REG_GAP_MIN/MAX (seconds).
+            gap = random.uniform(
+                float(os.environ.get("ZMINE_REG_GAP_MIN", "1200")),
+                float(os.environ.get("ZMINE_REG_GAP_MAX", "3000")))
+            log_fn(f"autopilot: +{added} new, next registration in {gap / 60:.0f} min")
+            time.sleep(gap)
     log_fn(f"autopilot: +{added} new account(s)")
     tick(model=model, want=want, pace=15.0, log_fn=log_fn)
     return {"added": added, "total": len(_load_accounts())}

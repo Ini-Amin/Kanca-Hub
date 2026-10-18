@@ -61,6 +61,14 @@ class TestPool(unittest.TestCase):
         first = pool.assign(0)
         self.assertNotEqual(pool.rotate(first), first)
 
+    def test_windscribe_entries_structure(self):
+        entries = P.windscribe_entries("US")
+        self.assertIsInstance(entries, list)
+        if entries:
+            self.assertEqual(entries[0]["provider"], "windscribe")
+            self.assertIn("server", entries[0]["proxy"])
+            self.assertIn("username", entries[0]["proxy"])
+            self.assertIn("password", entries[0]["proxy"])
 
 if __name__ == "__main__":
     unittest.main()

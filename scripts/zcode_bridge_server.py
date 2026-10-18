@@ -194,7 +194,16 @@ def quota_cache():
 
 def quota_exhausted(email, model):
     """429 (so 9router fails over to the next connection) when the watcher's
-    server-side quota cache says this account's bucket for `model` is spent."""
+    server-side quota cache says this account's bucket for `model` is spent.
+
+    Also true when the account has NO bucket for the model at all. That case
+    used to return False ("no evidence of exhaustion"), which read as unlimited
+    and was badly wrong: the farm mints far more accounts than it claims plans
+    for, so plan-less accounts sat at the FRONT of priority order and swallowed
+    every failover slot. Measured 2026-10-18: 111 of 138 accounts had no buckets,
+    and a request burned all 4 attempts on them and returned 429 to the client
+    while 25 accounts still held GLM-5.3 headroom.
+    """
     if not email:
         return False
     cache = quota_cache().get(email)
@@ -207,7 +216,7 @@ def quota_exhausted(email, model):
             seen = True
             if b.get("remaining_units", 1) > 0:
                 return False  # one live bucket (e.g. weekend 300M) = account usable
-    return seen  # exhausted only if every bucket for this model is empty
+    return True  # no live bucket for this model: spent, or never claimed a plan
 
 
 def quota_payload(only=None):
@@ -267,6 +276,29 @@ def pick_account(preferred, model, exclude=()):
         if read_jwt(e) and not quota_exhausted(e, model):
             return e
     return None
+
+
+def usable_accounts(model, exclude=()):
+    """Every account that can actually serve `model`, best first.
+
+    `_call_failover` used to spend its 4 attempts on `pick_account` results in
+    accounts.txt order, which is dominated by plan-less farm accounts. Ordering
+    by remaining headroom means a request reaches a live plan instead of
+    burning all attempts on accounts that were never claimed."""
+    cache = quota_cache()
+    scored = []
+    for e in ordered_accounts():
+        if not e or e in exclude or not read_jwt(e) or quota_exhausted(e, model):
+            continue
+        cap = "model:" + model.lower()
+        head = 0
+        rec = cache.get(e) or {}
+        for b in rec.get("buckets", []):
+            if cap in (b.get("capabilities") or []):
+                head += max(0, b.get("remaining_units") or 0)
+        scored.append((head, e))
+    scored.sort(key=lambda t: -t[0])
+    return [e for _, e in scored]
 
 
 def bridge_event(kind, msg):
@@ -708,8 +740,12 @@ class Handler(BaseHTTPRequestHandler):
         or an application-level quota error (code 1005 / 3009 / 3010) instead of
         failing the client."""
         tried, err = [], None
+        # Ranked by remaining headroom, not accounts.txt order: the farm mints
+        # many more accounts than it claims plans for, and file order put the
+        # plan-less ones first (see usable_accounts()).
+        queue = usable_accounts(model, exclude=tried)
         while len(tried) < 4:
-            email = self.account if not tried else pick_account(None, model, exclude=tried)
+            email = self.account if not tried else (queue.pop(0) if queue else None)
             if email is None or email in tried:
                 break
             tried.append(email)

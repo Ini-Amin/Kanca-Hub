@@ -39,7 +39,36 @@ async def wait_closed(p):
     await p.wait_for_event("close", timeout=0)
 
 
+async def dismiss_cookies(p):
+    """The claim page loads a cookie banner over the content; scripted clicks
+    land on the banner instead of the wizard. Reject (never accept) and move on."""
+    for sel in ("text=/Reject all optional cookies/i", "text=/Reject all/i"):
+        try:
+            btn = p.locator(sel).first
+            if await btn.count():
+                await btn.click(timeout=5000)
+                await p.wait_for_timeout(1500)
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+async def is_logged_in(p):
+    """Header shows the account menu when authenticated, 'Log In' when not.
+    Check BEFORE clicking: an expired session must fail fast with a clear
+    message, not wander through a login wall."""
+    try:
+        txt = (await p.locator("header").first.inner_text(timeout=8000)).lower()
+    except Exception:  # noqa: BLE001
+        return False
+    return "log in" not in txt and "sign up" not in txt
+
+
 async def click_through(p):
+    await dismiss_cookies(p)
+    if not await is_logged_in(p):
+        return "not logged in: run tencent_claim.py add NAME first"
     await p.wait_for_timeout(6000)
     card = p.locator("text=Lighthouse").first.locator("xpath=ancestor::*[.//span][3]")
     await card.locator("text=/Free Trial for 3 months/i").first.click()
@@ -72,10 +101,17 @@ def main():
     elif cmd == "claim":
         if not is_open(poll(11135)): return print("Lighthouse sold out; nothing to do")
         done = load(DONE, {})
+        results = []
         for n in [n for n in load(PICKED, []) if n not in done]:
             res = asyncio.run(browse(n, "virtual", click_through)); print(n, res)
+            results.append("%s: %s" % (n, res))
             if res.startswith("clicked"): done[n] = time.strftime("%Y-%m-%d %H:%M")
             DONE.write_text(json.dumps(done))
+        try:
+            from notify import send as _tg
+            _tg("Tencent Lighthouse claim — stock was OPEN:\n" + ("\n".join(results) or "(no accounts)"))
+        except Exception as e:  # noqa: BLE001
+            print("telegram notify failed:", str(e)[:100])
     else:
         print(__doc__)
 

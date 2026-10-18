@@ -1,0 +1,250 @@
+Bugcrowd (US)
+Dashboard
+Engagements
+Invites
+Work
+Leaderboard
+CrowdStream
+EngagementsBitso Managed Bug Bounty Engagement
+Bug Bounty
+Bitso Managed Bug Bounty Engagement
+
+Bitso is Latin America’s leading Financial Services company powered by crypto.
+
+FinanceSafe harbor
+Scope rating
+2 out of 4
+Testing period
+Ongoing
+Started at Jan 07, 2025
+Status
+In progress
+07 Jan 2025 18:00:00 GMT+0
+Submit report
+
+Do you like this engagement?
+
+Follow
+Share
+Hide
+Details
+Changelog
+Submissions
+Announcements
+4
+CrowdStream
+Hall of Fame
+
+Last Updated :06 Oct 2026 19:56:36 GMT+0View changes
+
+On this page
+Overview
+Description
+Targets
+Known issues
+What’s new
+Recent activity
+Crowd highlights
+Things to know
+Vulnerabilities rewarded
+43
+Validation within
+19 days
+75% of submissions are accepted or rejected within 19 days in last 3 months
+Average payout
+$2,700
+last 3 months
+
+Bitso is Latin America’s leading Financial Services company powered by crypto. With millions of clients, we are leading the financial revolution with borderless, secure, transparent, and accessible financial products. With the mission to unlock the power of borderless, secure, and easy-to-use financial products by making crypto useful, we are committed to empowering the region with universal access to the digital economy of the future and enabling a fairer monetary system.
+
+No technology is perfect and Bitso believes that working with skilled security researchers across the globe is crucial in identifying weaknesses in any technology. We are excited for you to participate as a security researcher to help us identify vulnerabilities in our assets. Good luck, and happy hunting!
+
+Ratings/Rewards:
+
+For the initial prioritization/rating of findings, this program will use the Bugcrowd Vulnerability Rating Taxonomy. However, it is important to note that in some cases a vulnerability priority will be modified due to its likelihood or impact. In any instance where an issue is downgraded, a full, detailed explanation will be provided to the researcher - along with the opportunity to appeal, and make a case for a higher priority.
+
+Good luck, and happy hunting!
+
+Targets 
+2 out of 4
+Bugcrowd calculates scope ratings based on the depth and breadth of in-scope targets.
+In Scope
+In scope
+Payment reward chart
+P1
+$11000 – $15000
+P2
+$5000 – $7000
+P3
+$1500 – $3000
+P4
+$100 – $1000
+Bitso.com - Bitso is a cryptocurrency platform that enables users to invest, trade, and make borderless payments using digital assets. With over 8 million users globally, it offers a range of services tailored to both individuals and businesses. Key Features: Cryptocurrency Trading, Earnings Program, Investment Tools, Bitso Card, Business Solutions.
+Bitso Mobile -
+Currently the applications are being developed natively. Therefore they don't share codebase nor framework so all submissions will be considered unique for both apps on iOS and Android.
+Hackers are encouraged to use the applications version found in the App Stores.
+Apps -
+Bitso Wallet - The Bitso Wallet app allows users to manage their cryptocurrency investments, trade digital assets, and make payments directly from their mobile devices.
+Bitso Alpha - Bitso Alpha is a professional trading platform offered by Bitso, designed for users who require advanced tools and features for cryptocurrency trading.
+Name / Location	Tags	Known issues
+bitso.com
+https://bitso.com
+	
+Docker
+Java
+TypeScript
++3
+	6
+
+
+https://nvio.mx/
+https://nvio.mx/
+	
+AWS
+ReactJS
+Website Testing
+	1
+
+
+https://nvio.ar/
+https://nvio.ar/
+	
+AWS
+ReactNative
+Amazon Cloudfront
++1
+	0
+
+
+Mobile App Bitso Wallet iOS
+https://apps.apple.com/us/app/bitso-buy-bitcoin-easily/id1292836438
+	
+Mobile Application Testing
+iOS
+	1
+
+
+Mobile App Bitso Alpha iOS
+https://apps.apple.com/us/app/bitso-alpha-crypto-trade-pro/id1539469172
+	
+Mobile Application Testing
+iOS
+	0
+
+
+Mobile App Bitso Wallet Android
+https://play.google.com/store/apps/details?id=com.bitso.wallet&pcampaignid=web_share
+	
+Mobile Application Testing
+Android
+	3
+
+
+Mobile App Bitso Alpha Android
+https://play.google.com/store/apps/details?id=com.bitso.alpha
+	
+Mobile Application Testing
+Android
+	0
+
+
+onchain.cc
+https://onchain.cc/
+	
+API Testing
+AWS
+Website Testing
++1
+	4
+Out of Scope
+Out of scope
+Name / Location	Tags	Known issues
+help.bitso.com
+		0
+
+
+status.bitso.com
+		0
+
+
+dev.bitso.com
+		0
+
+
+blog.bitso.com
+		0
+
+
+stage.bitso.com
+		0
+
+
+landing.bitso.com
+		0
+
+
+devmalta.bitso.com
+		0
+
+
+edu.bitso.com
+		0
+
+
+sandbox.bitso.com
+		0
+
+
+api-dev.bitso.com
+		0
+
+
+api-stage.bitso.com
+		0
+
+
+api-sandbox.bitso.com
+		0
+
+
+stagemalta.bitso.com
+		0
+
+
+*.otc.bitso.com
+		0
+
+
+*.efx.bitso.com
+		0
+
+
+quetzal.bitso.com
+		0
+
+
+login.bitso.io
+		0
+
+
+bitsohelp.zendesk.com
+		0
+
+
+support.bitso.com
+		0
+
+Testing is only authorized on the targets listed as in scope. Any domain/property of Bitso not listed in the targets section is out of scope. This includes any/all subdomains not listed above. If you happen to identify a security vulnerability on a target that is not in scope, but it demonstrably belongs to Bitso, you can report it to Bugcrowd Portal. However, be aware that such reports will be ineligible for rewards or points-based compensation.
+
+Focus Areas
+
+We're particularly interested in reports covering:
+
+Access control vulnerabilities — accessing data or functionality that belongs to another user or account (IDOR, broken object-level authorization, etc.).
+Privilege escalation — vertical or horizontal, including moving from a retail account to admin or internal functionality.
+Authentication weaknesses — 2FA bypass, session handling flaws, account takeover vectors, password reset flaws.
+Business logic flaws in financial flows — anything that lets you manipulate balances, trades, deposits, withdrawals, or conversion rates in ways the platform shouldn't allow.
+Race conditions — especially around transactions, transfers, and balance updates.
+KYC/onboarding bypass — skipping or spoofing identity verification steps.
+API vulnerabilities — broken authorization, excessive data exposure
+

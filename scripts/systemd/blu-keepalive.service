@@ -1,0 +1,22 @@
+[Unit]
+Description=blu keepalive: idle heartbeat + reverse-tunnel guard + net watchdog
+After=network-online.target
+Wants=network-online.target
+# Supersedes the old blu-idle.service, which only did the heartbeat and left the
+# tunnel to whatever ad-hoc ssh happened to be running. Disable that one.
+
+[Service]
+Type=simple
+ExecStart=%h/Auto-FreeCF/scripts/blu-keepalive.sh
+Restart=always
+RestartSec=10
+# Keep it cheap: this runs forever on a box we do not own.
+Nice=19
+IOSchedulingClass=idle
+# A user unit needs its environment spelled out; `ssh` must find the key and
+# know the host, and tailscale's CLI is not on the default PATH.
+Environment=PATH=%h/go/bin:%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=%h
+
+[Install]
+WantedBy=default.target

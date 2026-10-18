@@ -1,0 +1,43 @@
+[Unit]
+Description=Reverse tunnel so blu can reach desktop 9router (blu:20128 -> desktop:20128)
+
+# WHY THIS UNIT JAMMED THE WHOLE SESSION (2026-10-18):
+# It was `Restart=always` with a permanent failure (remote port forwarding
+# failed). That keeps the unit in "activating/auto-restart-queued" FOREVER, and
+# because the unit is ordered before default.target, the stuck job held
+# default.target open — so every later start (brave, chrome, gig-finder, timers)
+# sat in the job queue as "start waiting" and never ran. To the user that is
+# "I open the browser and it just hangs loading".
+#
+# The rate limit is the load-bearing fix: after StartLimitBurst failures in
+# StartLimitIntervalSec the unit goes to "failed" and releases the queue, instead
+# of spinning in activating for hours.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# 20128 on BOTH sides: 9router listens on the desktop at 20128, and blu's shim /
+# bounty_run / Agentic-Bug-Hunter all dial 127.0.0.1:20128 on blu. Forwarding to
+# any other blu-side port leaves them dialling a closed port, which looks exactly
+# like "the model is down".
+#
+# ExitOnForwardFailure: without it ssh happily holds a session that forwards
+# nothing, and every model call fails while `ps` looks healthy.
+# ServerAlive*: notice a dead peer instead of holding a zombie tunnel.
+ExecStart=/usr/bin/ssh -o BatchMode=yes \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o ConnectTimeout=15 \
+    -N -R 127.0.0.1:20128:127.0.0.1:20128 blu
+
+# on-failure, not always: a clean exit (blu rebooted, tunnel closed) should not
+# respawn in a hot loop, and a real failure should back off and eventually hit
+# the rate limit above rather than retrying forever.
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
