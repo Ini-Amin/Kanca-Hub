@@ -330,6 +330,32 @@ def parse_scope(text):
 
     A target row never contains whitespace (the page prints descriptions as
     separate wrapped lines), which is what keeps prose out of the list.
+
+    A table ENDS at the first line of running prose. Without that rule the
+    parser stayed "in out-of-scope mode" for the rest of the document, and any
+    bare hostname printed further down — e.g. the ones quoted in the
+    "Vulnerabilities rewarded" and "Known issues" sections, which sit BELOW the
+    Out of Scope table — was appended as an exclusion.
+
+    That is not a cosmetic bug. LaunchDarkly lists app./events./stream./docs.
+    as IN scope and then quotes those same hosts in its known-issues prose; the
+    parser turned all four into exclusions, so every explicit allow was denied
+    by a deny of equal specificity and the program reported "no enumerable
+    in-scope host". A program can be retired on a false negative that way.
+
+    The end-of-table test is deliberately NOT "first line that isn't a target
+    row". Real briefs interleave short metadata cells between the rows:
+
+        app.launchdarkly.com
+        \\tElasticsearch
+        docs.launchdarkly.com
+        \\t\\t0
+
+    Those cells are not hostnames, so under the strict rule the table closed
+    after the first row and every later target in the same table was lost —
+    bitso dropped from 10 in-scope entries to 3, Okta from 3 cards to 0. Prose
+    is the real boundary: a line containing whitespace and long enough to be a
+    sentence. Bare hostnames and one-word cells pass through untouched.
     """
     ins, outs = [], []
     mode = None          # scope declared by the CURRENT card
@@ -345,37 +371,56 @@ def parse_scope(text):
             in_table = True
             continue
 
-        # A scope label only counts OUTSIDE a table; inside a table a line like
-        # "In scope" would be data, not a heading.
-        if not in_table:
-            if IN_SCOPE.match(line) or OUT_SCOPE.match(line):
-                # FIRST label in the card wins. Later "Out of Scope" headings
-                # inside the same card are prose subsections describing what
-                # testing is forbidden (DoS, automation) — not the card's
-                # classification. Taking the LAST label instead flipped Okta's
-                # "Okta Workflows" card (declared In scope) to out-of-scope
-                # because its target table is printed after a "Testing for
-                # Denial of Service ... is STRICTLY out of scope" paragraph.
-                if not mode_locked:
-                    mode = "in" if IN_SCOPE.match(line) else "out"
-                    mode_locked = True
+        is_label = bool(IN_SCOPE.match(line) or OUT_SCOPE.match(line))
+
+        if in_table:
+            # A scope label can only mean the previous card ended without any
+            # prose to close it. Reopen card classification so the new card can
+            # declare its own scope; otherwise the FIRST card's label would
+            # stick for the whole brief and Okta's three in-scope cards would
+            # all be filed under its single out-of-scope one.
+            if is_label:
+                in_table = False
+                mode = None
+                mode_locked = False
+            else:
+                # Prose ends the table. Requiring BOTH whitespace and length
+                # keeps short metadata cells ("Elasticsearch", "0",
+                # "API Testing") from closing it, which is what made a strict
+                # "first non-target line" rule drop 7 of bitso's 10 targets and
+                # every one of Okta's cards.
+                if re.search(r"\s", line) and len(line) > 40:
+                    in_table = False
+                    continue
+                if mode is None or not URLISH.match(line) or len(line) > 200:
+                    continue
+                if line.startswith("http"):
+                    line = line.rstrip("/")
+                (ins if mode == "in" else outs).append(line)
                 continue
+
+        if is_label:
+            # FIRST label in a card wins. A later "Out of Scope" heading inside
+            # the same card is a prose subsection describing what testing is
+            # forbidden (DoS, automation) — not the card's classification.
+            # Taking the LAST label instead flipped Okta's "Okta Workflows" card
+            # (declared In scope) to out-of-scope because its target table is
+            # printed after a "Testing for Denial of Service ... is STRICTLY out
+            # of scope" paragraph.
+            if not mode_locked:
+                mode = "in" if IN_SCOPE.match(line) else "out"
+                mode_locked = True
             continue
 
-        # ---- inside a table ----
-        if IN_SCOPE.match(line) or OUT_SCOPE.match(line):
-            # the previous card ended; this label opens the next one
-            in_table = False
-            mode = "in" if IN_SCOPE.match(line) else "out"
-            mode_locked = True
-            continue
-        if not URLISH.match(line) or re.search(r"\s", line) or len(line) > 200:
-            continue
-        if mode is None:
-            continue
-        if line.startswith("http"):
-            line = line.rstrip("/")
-        (ins if mode == "in" else outs).append(line)
+        # Prose outside a table does NOT reopen the card. Okta's "Okta Workflows"
+        # card declares "In scope", then runs several paragraphs of Focus Areas,
+        # and only THEN prints a prose subsection headed "Out of Scope"
+        # ("Testing for Denial of Service ... is STRICTLY out of scope"). Clearing
+        # the lock on prose let that heading reclassify the card, and the
+        # workflows target — genuinely in scope — was filed as an exclusion.
+        # A card is closed only by a scope label met while its table is still
+        # open, which is how bitso and LaunchDarkly separate their cards.
+        continue
 
     def dedupe(seq):
         out, seen = [], set()
