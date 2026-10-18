@@ -123,7 +123,50 @@ Confirm `steps > 0` in stdout and `agent_trace.jsonl` shows tool calls completin
 **Verification Command:**
 ```bash
 ssh blu 'docker ps --filter name=drost-ai --format "{{.Status}}"'
+python3 tests/test_drost_bridge.py            # offline, no container needed
+ssh blu 'python3 /tmp/drost_live_smoke.py'    # live, real container
 ```
+
+**Status: COMPLETE.**
+
+`call_drost_mcp()` + `run_drost_tool` in `bughunter/agent.py`. The MCP server is
+`Drost AI v1.22.0`, exposing **159 tools**. Probing it first changed the design in
+two ways that guessing would have got wrong:
+
+- **Schemas are not uniform.** The exec-style tools (`drost_nmap`, `drost_ffuf`,
+  `drost_httpx`, ...) take `{engagement_id, arguments}`. But `drost_cve_lookup`
+  takes `cve_id` and `drost_engagement_create` takes `name`/`targets` — passing
+  an unexpected `engagement_id` to those is a pydantic validation error, not a
+  harmless extra key. So `engagement_id` is injected **only** when that tool's
+  own schema declares it.
+- **`engagement_id` must be server-generated.** A hand-made id is rejected
+  outright (`"must be a server-generated identifier such as eng_2026…"`). One
+  engagement is created per target on first use and cached in
+  `_DROST_ENGAGEMENTS`, so a scan does not create one per call.
+
+Three restrictions, all for the same reason — the agent is unattended **and** it
+reads attacker-controlled pages, so any string the model parses from a target is
+a place an attacker can put instructions:
+
+| Restriction | Why | Enforced where |
+|---|---|---|
+| `DROST_DENIED` (`drost_bash`, `drost_execute`) | They run an arbitrary command line. After the model has read a target's HTML, one injected string becomes container code execution. Refused by name, **and again inside `call_drost_mcp`** so calling the bridge directly cannot reach them. | `_run_drost_tool`, `call_drost_mcp` |
+| `DROST_ACTIVE` (sqlmap, dalfox, xsser, zap, attack_chain, exploit_search, evil_winrm, dotdotpwn, aircrack/aireplay/airodump) | They attack rather than enumerate. An unattended run asks first, exactly like the POST-declared tools (SECURITY-REVIEW-2026-08-22 #7). | `_run_drost_tool` |
+| Per-host scope check | The model can aim a scanner at *anything* by putting the host in an argument instead of the target, so every host-shaped value in the argument tree is checked — not just `--target`. Dotted filenames (`moment.js`, `report.pdf`) are excluded so they do not cause false blocks, the same false positive `bounty_run._is_placeholder_host()` exists for. | `_drost_scope_violations` |
+
+`run_drost_tool` carries `TOOL_METHODS = "GET"` because it is a router, not a
+single scanner, so no one verb describes it. That label is deliberately **not**
+the whole policy: the subset that actively attacks is refused by name before any
+container call is made.
+
+**Verified:** `tests/test_drost_bridge.py` ALL PASS locally and on `blu`
+(13 sections, fully offline — the container is faked). Live on `blu`:
+`drost_cve_lookup` returned real NVD data, `drost_nmap` actually executed
+(`"available": true`, argv `["/usr/bin/nmap","-Pn","-p","22,80","127.0.0.1"]`),
+the engagement was reused across calls, and an unknown tool name was reported
+rather than crashing. `test_tool_integrity.py` now also proves that an
+agent-implemented tool is *routed from* `dispatch()`, so the allowlist cannot be
+used to advertise a tool nobody calls.
 
 ---
 
