@@ -36,12 +36,17 @@ the behaviour we want: a bug here fails closed, not open.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -140,6 +145,663 @@ def parse_abh_output(text: str) -> dict:
     return out
 
 
+# ── Stage 4 — the four pre-submit gates ─────────────────────────────────────
+#
+# Spec stage 4: every finding must clear SCOPE, DUPCHECK, VM-PoC and
+# CHALLENGER before anything is written or sent. Two properties are load-
+# bearing and easy to break:
+#
+#   1. Order is cheapest-first AND safety-correct. SCOPE is a pure string
+#      check; VM-PoC replays a live request; CHALLENGER spends a model call.
+#      Running VM-PoC before SCOPE would replay a PoC against a host nobody
+#      approved — an out-of-scope scan performed by the gate meant to prevent
+#      exactly that. So the first failure short-circuits the rest.
+#   2. Every expensive dependency is an injectable callable (h1=, poc=,
+#      challenge=), so tests can drive each gate with a synthetic finding and
+#      no network, and a caller can swap in another scope DB or model without
+#      forking this module.
+
+GATE_NAMES = ("SCOPE", "DUPCHECK", "VM-PoC", "CHALLENGER")
+GATE_PASSED = "GATE RESULT: 4/4 PASS"
+
+
+def model_family(model: str) -> str:
+    """Underlying model family, ignoring the routing prefix and any tag.
+
+        'Zcode/GLM-5.3'            -> 'glm'
+        'THK/deepseek-v4.1-flash:free' -> 'deepseek'
+        'ocz/space-bunny-free'     -> 'space'
+
+    The prefix (Zcode/THK/ocz/ag/nr) is *who proxies the call*, not what model
+    answers. Judging sameness on it would happily pair one GLM with itself
+    behind two providers and call that an independent second opinion.
+    """
+    core = (model or "").split("/")[-1].split(":")[0].lower()
+    m = re.match(r"[a-z]+", core)
+    return m.group(0) if m else ""
+
+
+def model_chain(env: dict) -> list[str]:
+    """BRAIN_MODEL followed by BOUNTY_MODEL_FALLBACKS, flattened and deduped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for blob in (env.get("BRAIN_MODEL", ""), env.get("BOUNTY_MODEL_FALLBACKS", "")):
+        for tok in str(blob).split(","):
+            tok = tok.strip()
+            if tok and tok not in seen:
+                seen.add(tok)
+                out.append(tok)
+    return out
+
+
+def pick_challenger(hunter_model: str, env: dict) -> str | None:
+    """First chain model whose family differs from the hunter's.
+
+    Gate 4 exists to catch one model's confident mistake. Asking the same
+    family — often the same weights behind a different proxy — reproduces that
+    mistake and lends it a second opinion, which is worse than one honest
+    verdict. So no different family available means no gate, and no gate means
+    the finding does not ship.
+    """
+    fam = model_family(hunter_model)
+    for m in model_chain(env):
+        if m == hunter_model:
+            continue
+        if model_family(m) and model_family(m) != fam:
+            return m
+    return None
+
+
+def gate_scope(finding: dict, ins: list[str], outs: list[str]) -> tuple[bool, str]:
+    """Gate 1 — SCOPE. Fail closed: no host, or no allow list, is a FAIL."""
+    url = str(finding.get("url") or "").strip()
+    host = str(finding.get("host") or "").strip().lower() or B._host_of(url)
+    if not host:
+        return False, "finding carries no host/URL — scope cannot be proven (fail closed)"
+    if not ins:
+        return False, "empty in-scope list — scope cannot be proven (fail closed)"
+    # host_in_scope returns (ok, reason) — a tuple is always truthy, so
+    # `if not host_in_scope(...)` would have evaluated the deny branch out of
+    # existence and let every finding through. Unpack it.
+    ok, why = B.host_in_scope(host, ins, outs)
+    if not ok:
+        return False, (f"{host} is not covered by the program's in-scope list "
+                       f"({why})")
+    return True, f"{host} is in scope ({why})"
+
+
+def _norm_title(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (title or "").lower())
+
+
+def _local_findings(jobs_dir: Path | None = None) -> list[dict]:
+    """Everything already filed under bounty/<job>/.
+
+    Three shapes are read because three exist in the wild: report.md section
+    headings (older jobs), findings.json rows (newer jobs) and _ledger.json
+    (written by stage 5 from here on). A dup gate reading only its own ledger
+    would wave through anything filed before the ledger existed.
+    """
+    root = Path(jobs_dir) if jobs_dir else Path(B.JOBS)
+    out: list[dict] = []
+    if not root.is_dir():
+        return out
+    for p in sorted(root.glob("*/report.md")):
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith("## "):
+                t = line[3:].strip()
+                if t:
+                    out.append({"title": t, "source": str(p)})
+    for pat in ("*/findings.json", "_ledger.json"):
+        for p in sorted(root.glob(pat)) if "*" in pat else ([root / pat] if (root / pat).is_file() else []):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, ValueError):
+                continue
+            rows = data if isinstance(data, list) else data.get("findings", [])
+            for r in rows or []:
+                if isinstance(r, dict) and (r.get("title") or r.get("url")):
+                    out.append({
+                        "title": str(r.get("title") or ""),
+                        "url": str(r.get("url") or ""),
+                        "vuln_class": str(r.get("vuln_class") or "").lower(),
+                        "source": str(p),
+                    })
+    return out
+
+
+def _claimed_cves(finding: dict) -> list[str]:
+    """CVE ids the finding *asserts as its finding*.
+
+    Deliberately not a scan of description/evidence: prose that says "similar
+    to CVE-2023-1234" is background reading, not a claim. Only the title and
+    an explicit cve/cves field make the finding *be* the published advisory.
+    """
+    blob = " ".join([
+        str(finding.get("title") or ""),
+        str(finding.get("cve") or ""),
+        " ".join(str(x) for x in (finding.get("cves") or [])),
+        str(finding.get("vuln_class") or "") if str(finding.get("vuln_class") or "").lower() in ("cve", "known-cve") else "",
+    ])
+    return sorted({m.upper() for m in re.findall(r"CVE-\d{4}-\d{4,7}", blob, re.I)})
+
+
+def _cve_describe(cve_ids: list[str], cve_db: Path | None = None) -> dict[str, str]:
+    """Resolve CVE ids against the local cve.db (read-only) for the reason line."""
+    if not cve_ids:
+        return {}
+    db = Path(cve_db) if cve_db else Path(
+        os.environ.get("BOUNTY_CVE_DB", str(Path.home() / ".config" / "auto-freecf" / "cve.db")))
+    if not db.is_file():
+        return {c: "<local cve.db not present>" for c in cve_ids}
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            rows = dict(con.execute(
+                f"SELECT id, description FROM cve WHERE id IN ({','.join('?' * len(cve_ids))})",
+                cve_ids).fetchall())
+        finally:
+            con.close()
+    except Exception as exc:  # noqa: BLE001
+        return {c: f"<local cve.db unreadable: {type(exc).__name__}>" for c in cve_ids}
+    return {c: rows.get(c, "<not in local cve.db>") for c in cve_ids}
+
+
+def _h1_dup_check(program: str, keyword: str) -> tuple[list, bool, str]:
+    """Run validate.check_h1_dups and find out whether it actually reached H1.
+
+    check_h1_dups() returns [] for *both* "no duplicates" and "the request
+    blew up" — the only difference between those is a line it prints to
+    stderr. Reading that line is the difference between a gate that checked
+    and a gate that silently waved the finding through during an outage.
+    """
+    if not program or not keyword:
+        return [], False, "no program handle or keyword supplied"
+    bh = str(ABH / "bughunter")
+    if bh not in sys.path:
+        sys.path.insert(0, bh)
+    try:
+        import tools.validate as vmod
+    except Exception as exc:  # noqa: BLE001
+        return [], False, f"cannot import ABH tools.validate: {type(exc).__name__}: {exc}"
+    got = Path(getattr(vmod, "__file__", "") or "")
+    try:
+        if not got.is_relative_to(ABH.resolve()):
+            return [], False, f"a different tools.validate is loaded from {got}"
+    except (OSError, ValueError):
+        return [], False, f"cannot verify tools.validate origin ({got})"
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf):
+            hits = vmod.check_h1_dups(program, keyword)
+    except Exception as exc:  # noqa: BLE001
+        return [], False, f"{type(exc).__name__}: {exc}"
+    msg = buf.getvalue()
+    if "duplicate check failed" in msg.lower():
+        return [], False, (msg.strip().splitlines() or ["unknown"])[-1][:200]
+    return list(hits or []), True, ""
+
+
+def gate_dupcheck(finding: dict, program: str = "", jobs_dir: Path | None = None,
+                  h1=None, cve_db: Path | None = None) -> tuple[bool, str]:
+    """Gate 2 — DUPCHECK: local files, then public disclosure, then hacktivity.
+
+    The CVE branch is what stops "I found CVE-2024-1234 on this host" from
+    being reported: an assigned CVE is an advisory everyone can already read,
+    so it is public knowledge rather than a finding.
+    """
+    title = str(finding.get("title") or "").strip()
+    url = str(finding.get("url") or "").strip()
+    host = B._host_of(url)
+    vuln = str(finding.get("vuln_class") or "").strip().lower()
+    norm = _norm_title(title)
+
+    for row in _local_findings(jobs_dir):
+        rt = _norm_title(row.get("title", ""))
+        if norm and rt and (rt == norm or SequenceMatcher(None, norm, rt).ratio() >= 0.92):
+            return False, f"local duplicate: a near-identical title is already in {row['source']}"
+        if url and row.get("url") == url and vuln and row.get("vuln_class") == vuln:
+            return False, (f"local duplicate: same {vuln} already filed for {url} "
+                           f"in {row['source']}")
+
+    claimed = _claimed_cves(finding)
+    if claimed:
+        detail = _cve_describe(claimed, cve_db)
+        first = detail.get(claimed[0], "")
+        if len(first) > 160:
+            first = first[:160] + "…"
+        return False, (f"known public disclosure: finding claims {', '.join(claimed)}"
+                       + (f" — {first}" if first else ""))
+
+    keyword = vuln or (title.split()[0] if title else "")
+    hits, reachable, detail = (h1 or _h1_dup_check)(program, keyword)
+    if hits:
+        ex = str(hits[0].get("title") or hits[0].get("url") or "")[:120]
+        return False, (f"{len(hits)} HackerOne disclosed report(s) match keyword "
+                       f"{keyword!r}, e.g. {ex!r}")
+    if not reachable:
+        # Not fatal: H1 being unreachable must not freeze all reporting, and
+        # the local + CVE checks above still ran. The marker is kept on the
+        # gate line so a reviewer can see this one check was blind.
+        return True, f"no local or published-CVE duplicate — H1 hacktivity UNREACHABLE ({detail})"
+    return True, "no local, published-CVE, or HackerOne hacktivity duplicate"
+
+
+def _poc_replay(finding: dict, timeout: float = 25) -> tuple[int | None, str | None, str]:
+    """Replay the finding's request through ABH's poc_bundler.
+
+    poc_bundler rather than a bare urllib call because it goes through
+    tools.safe_http (the SSRF guard) and refuses mutating methods without an
+    explicit --confirm-unsafe — restraint an unattended replay should keep.
+    Returns (status, body, note); on failure body is None and note says why.
+    """
+    url = str(finding.get("url") or "").strip()
+    if not url:
+        return None, None, "finding has no URL to replay"
+    method = str(finding.get("method") or "GET").upper()
+    bundler = ABH / "bughunter" / "tools" / "poc_bundler.py"
+    if not bundler.is_file():
+        return None, None, f"poc_bundler.py not found at {bundler}"
+    outdir = Path(tempfile.mkdtemp(prefix="pocgate-"))
+    cmd = [sys.executable, str(bundler), "capture", url, "-X", method,
+           "--json", "-o", str(outdir), "--timeout", str(timeout)]
+    for k, v in (finding.get("headers") or {}).items():
+        cmd += ["-H", f"{k}: {v}"]
+    if finding.get("body"):
+        cmd += ["-d", str(finding["body"])]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout + 30, env=abh_env())
+    except subprocess.TimeoutExpired:
+        return None, None, f"replay timed out after {timeout + 30:.0f}s"
+    except OSError as exc:
+        return None, None, f"replay could not start: {exc}"
+    err = (proc.stderr or "").strip()
+    first_err = (err.splitlines() or [""])[0]
+    if proc.returncode == 2 or "confirm-unsafe" in err:
+        return None, None, (f"poc_bundler refused to replay {method} without "
+                            f"--confirm-unsafe (mutating method); "
+                            f"re-run that replay by hand if it is approved")
+    if proc.returncode != 0:
+        return None, None, f"replay exited {proc.returncode}: {first_err or 'no detail'}"
+    try:
+        payload = json.loads(proc.stdout)
+        bdir = Path(payload["bundle_dir"])
+        status = ((payload.get("manifest") or {}).get("exchange") or {}).get("response_status")
+        raw = (bdir / "response.http").read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return None, None, f"could not read the PoC bundle: {type(exc).__name__}: {exc}"
+    parts = re.split(r"\r?\n\r?\n", raw, maxsplit=1)
+    body = parts[1] if len(parts) == 2 else raw
+    return status, body, ""
+
+
+def gate_vm_poc(finding: dict, poc=None, timeout: float = 25) -> tuple[bool, str]:
+    """Gate 3 — VM-PoC: replay the request on this host and re-derive the claim."""
+    indicator = str(finding.get("indicator") or "").strip()
+    want_status = finding.get("indicator_status")
+    if not indicator and want_status is None:
+        return False, ("finding declares no reproduction indicator — there is "
+                       "nothing to verify (fail closed)")
+    fn = poc if poc is not None else (lambda f: _poc_replay(f, timeout))
+    status, body, note = fn(finding)
+    if body is None:
+        return False, note or "replay produced no response"
+    # AND, not OR: every assertion the finding declares has to hold. An OR
+    # here let a plain 200 status satisfy a gate whose real claim was a
+    # marker in the body — a 200 proves nothing on its own, so a matching
+    # status must not rescue a missing indicator.
+    missed: list[str] = []
+    if indicator and indicator not in body:
+        missed.append(f"indicator {indicator!r} absent from the replayed response")
+    if want_status is not None and (status is None or int(status) != int(want_status)):
+        missed.append(f"status {status} != expected {want_status}")
+    if missed:
+        return False, "; ".join(missed)
+    return True, f"replay reproduced the indicator (status {status})"
+
+
+def describe_finding(finding: dict) -> str:
+    """The text handed to the challenger — the facts a triager would read."""
+    lines = [
+        f"TITLE: {finding.get('title', '')}",
+        f"VULN CLASS: {finding.get('vuln_class', '')}",
+        f"SEVERITY: {finding.get('severity', '')}",
+        f"URL: {finding.get('url', '')}",
+    ]
+    if finding.get("method"):
+        lines.append(f"METHOD: {finding['method']}")
+    if finding.get("body"):
+        lines.append(f"REQUEST BODY: {finding['body']}")
+    if finding.get("indicator"):
+        lines.append(f"REPRO INDICATOR: {finding['indicator']}")
+    for k in ("description", "evidence", "impact"):
+        if finding.get(k):
+            lines.append(f"{k.upper()}: {finding[k]}")
+    return "\n".join(lines)
+
+
+def _brain_challenge(model: str, text: str) -> tuple[str, str]:
+    """7-Question Gate through ABH's Brain, forced onto `model`."""
+    for k, v in abh_env().items():
+        os.environ.setdefault(k, v)
+    bh = str(ABH / "bughunter")
+    if bh not in sys.path:
+        sys.path.insert(0, bh)
+    from brain import Brain
+    b = Brain(model=model)
+    if not b.enabled:
+        return "UNKNOWN", "brain has no usable provider/key for the challenger"
+    return b.triage_finding(text)
+
+
+def gate_challenger(finding: dict, hunter_model: str = "", env: dict | None = None,
+                    challenge=None) -> tuple[bool, str]:
+    """Gate 4 — CHALLENGER: an independent model must return SUBMIT."""
+    env = env if env is not None else abh_env()
+    hunter = hunter_model or str(env.get("BRAIN_MODEL", ""))
+    challenger = pick_challenger(hunter, env)
+    if not challenger:
+        return False, (f"no BOUNTY_MODEL_FALLBACKS entry comes from a different "
+                       f"family than the hunter ({hunter or 'unset'}) — an "
+                       f"independent challenger cannot be formed (fail closed)")
+    try:
+        verdict, reasoning = (challenge or _brain_challenge)(challenger, describe_finding(finding))
+    except Exception as exc:  # noqa: BLE001
+        return False, f"challenger {challenger} errored: {type(exc).__name__}: {exc} (fail closed)"
+    if verdict != "SUBMIT":
+        tail = " ".join((reasoning or "").split())[:300]
+        return False, f"challenger {challenger} returned {verdict}: {tail}"
+    return True, (f"{challenger} ({model_family(challenger)} != hunter "
+                  f"{model_family(hunter)}) returned SUBMIT")
+
+
+def run_four_gates(finding: dict, ins: list[str], outs: list[str], program: str = "",
+                   *, hunter_model: str = "", jobs_dir: Path | None = None,
+                   h1=None, poc=None, challenge=None, env: dict | None = None) -> tuple[bool, str]:
+    """Run all four pre-submit gates. Returns (all_passed, human-readable log).
+
+    Short-circuits on the first failure. That is not merely an optimisation:
+    gates 3 and 4 send traffic and spend model budget, and gate 3 would
+    otherwise replay a PoC against a host gate 1 never approved.
+    """
+    lines: list[str] = []
+    checks = (
+        ("SCOPE",      lambda: gate_scope(finding, ins, outs)),
+        ("DUPCHECK",   lambda: gate_dupcheck(finding, program=program,
+                                             jobs_dir=jobs_dir, h1=h1)),
+        ("VM-PoC",     lambda: gate_vm_poc(finding, poc=poc)),
+        ("CHALLENGER", lambda: gate_challenger(finding, hunter_model=hunter_model,
+                                               env=env, challenge=challenge)),
+    )
+    for name, fn in checks:
+        ok, why = fn()
+        lines.append(f"GATE {name}: {'PASS' if ok else 'FAIL'} — {why}")
+        if not ok:
+            lines.append(f"GATE RESULT: BLOCKED at {name} — remaining gates not run")
+            return False, "\n".join(lines)
+    lines.append(f"{GATE_PASSED} — cleared for report")
+    return True, "\n".join(lines)
+
+
+# ── Stage 5 — report & Telegram escalation ──────────────────────────────────
+
+def stage5_report(finding: dict, gates_log: str, job_id: str = "", program: str = "",
+                  alert: bool = True, brain: bool = False, findings_dir: str = "",
+                  jobs_dir: Path | None = None) -> Path | None:
+    """Write the submission-ready report and escalate to Telegram.
+
+    This publishes, it does not re-judge: it refuses to run at all unless the
+    gate log it is handed says 4/4, so a caller cannot reach Telegram by
+    skipping stage 4 — it would have to falsify the log instead.
+    """
+    if GATE_PASSED not in (gates_log or ""):
+        say("stage5 refused: four-gate log does not show a pass")
+        return None
+    title = str(finding.get("title") or "Untitled finding")
+    root = Path(jobs_dir) if jobs_dir else Path(B.JOBS)
+    jid = job_id or ("finding-" + (_norm_title(title) or "untitled")[:48])
+    d = root / jid
+    d.mkdir(parents=True, exist_ok=True)
+
+    md = [
+        "# " + title,
+        "",
+        f"- **Severity:** {finding.get('severity', 'unrated')}",
+        f"- **Class:** {finding.get('vuln_class', 'unspecified')}",
+        f"- **URL:** {finding.get('url', '')}",
+        f"- **Program:** {program or finding.get('program', '')}",
+        "",
+        "## Reproduction",
+        "",
+        f"```http\n{finding.get('repro_request') or describe_finding(finding)}\n```",
+        "",
+        "The response must contain `" + str(finding.get("indicator", "")) + "` "
+        f"(expected status: {finding.get('indicator_status', 'any')}).",
+        "",
+        "## Impact",
+        "",
+        str(finding.get("impact") or finding.get("description") or "See evidence."),
+        "",
+        "## Pre-submit gates",
+        "",
+        "```",
+        gates_log.strip(),
+        "```",
+    ]
+    if brain and findings_dir:
+        try:
+            for k, v in abh_env().items():
+                os.environ.setdefault(k, v)
+            bh = str(ABH / "bughunter")
+            if bh not in sys.path:
+                sys.path.insert(0, bh)
+            from brain import Brain
+            prose = Brain().write_report(findings_dir)
+            if prose and prose.strip() and prose.strip() != "NO_REPORTS":
+                md += ["", "## Model-written report", "", prose.strip()]
+        except Exception as exc:  # noqa: BLE001
+            # The deterministic report above is already submission-ready; a
+            # Brain outage must not lose it.
+            md += ["", f"_(report writer unavailable: {type(exc).__name__})_"]
+
+    path = d / "report.md"
+    path.write_text("\n".join(md) + "\n", encoding="utf-8")
+
+    ledger = root / "_ledger.json"
+    try:
+        rows = json.loads(ledger.read_text(encoding="utf-8")) if ledger.is_file() else []
+        if not isinstance(rows, list):
+            rows = []
+    except (OSError, ValueError):
+        rows = []
+    rows.append({
+        "title": title,
+        "url": str(finding.get("url", "")),
+        "vuln_class": str(finding.get("vuln_class", "")),
+        "severity": str(finding.get("severity", "")),
+        "program": program or str(finding.get("program", "")),
+        "report": str(path),
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    ledger.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+    if alert:
+        try:
+            from notify import send
+            send(f"CONFIRMED FINDING\n\n{title}\n"
+                 f"{finding.get('url', '')}\n"
+                 f"severity={finding.get('severity', 'unrated')} "
+                 f"class={finding.get('vuln_class', '?')} "
+                 f"program={program or finding.get('program', '?')}\n\n"
+                 f"{gates_log.strip()}\n\n{path}")
+        except Exception as exc:  # noqa: BLE001
+            say("telegram failed for confirmed finding: %s" % exc)
+    say("confirmed finding written to %s" % path)
+    return path
+
+
+# ── Stages 4/5 wiring — ABH findings → gates → report ───────────────────────
+#
+# ABH persists each finding as one line of scanner output: findings_log rows
+# are {tool, severity, text, ts}. The gates need a URL and a reproduction
+# indicator, so both are derived here. The derivations deliberately fail
+# *closed*: when a line carries no host, gate 1 blocks it; when it carries no
+# literal that would itself be the proof, gate 3 blocks it. A claim nobody can
+# point at or replay must not become a report, and inventing a URL or an
+# indicator to make the pipeline look productive would be the worst possible
+# way to unblock it.
+
+HIGH_VALUE = ("CRITICAL", "HIGH", "MEDIUM")
+
+URL_RE = re.compile(r"https?://[^\s'\"<>()\]]+")
+# httpx/nuclei print `host/path` when they have no scheme; reconstruct rather
+# than drop, because scope is still decided on the resulting host.
+HOSTPATH_RE = re.compile(r"\b([a-z0-9][a-z0-9.-]*\.[a-z]{2,})(/[^\s'\"<>)]*)?", re.I)
+
+TOOL_CLASS = {
+    "run_cors_check": "cors",
+    "run_crlf_scan": "crlf",
+    "run_nosqli_scan": "nosqli",
+    "run_graphql_audit": "graphql",
+    "run_takeover_scan": "takeover",
+    "run_403_bypass": "403-bypass",
+    "run_cve_hunt": "cve",
+    "run_eol_check": "eol",
+    "run_vuln_scan": "vuln-scan",
+    "run_secret_hunt": "secrets",
+    "run_param_discovery": "params",
+    "run_jwt_audit": "jwt",
+    "run_recon": "recon",
+}
+
+
+def vuln_class_for(tool: str) -> str:
+    if tool in TOOL_CLASS:
+        return TOOL_CLASS[tool]
+    t = (tool or "").replace("run_", "")
+    for suf in ("_scan", "_check", "_audit", "_hunt", "_discovery"):
+        if t.endswith(suf):
+            t = t[: -len(suf)]
+    return t or "unspecified"
+
+
+def derive_indicator(text: str) -> str:
+    """A literal the replayed response must contain, if the line names one.
+
+    Ordered by how much each would prove on its own: a JWT or a leaked
+    address *is* the finding, a quoted response fragment is close behind, and
+    a credential-shaped key=value carries enough entropy to be evidence. A
+    bare `id=1` or a scanner's own prose proves nothing and is skipped.
+    Returns '' when nothing convincing appears, which gate 3 rejects.
+    """
+    t = text or ""
+    m = re.search(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", t)
+    if m:
+        return m.group(0)
+    m = re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", t)
+    if m:
+        return m.group(0)
+    for q in re.findall(r"['\"]([^'\"]{8,120})['\"]", t):
+        if not q.lower().startswith(("http", "www.")):
+            return q
+    m = re.search(r"\b[A-Za-z0-9_]{3,40}=([A-Za-z0-9_.-]{12,})\b", t)
+    if m and not m.group(1).lower().startswith("http"):
+        return m.group(0)
+    return ""
+
+
+def finding_from_log(entry: dict, target: str = "") -> dict:
+    """Shape one findings_log row into the dict the four gates consume."""
+    raw = str(entry.get("text") or "")
+    text = " ".join(raw.split())
+    url = ""
+    m = URL_RE.search(raw)
+    if m:
+        url = m.group(0).rstrip(".,;:)>]\"'")
+    else:
+        m = HOSTPATH_RE.search(raw)
+        if m and m.group(1) and "." in m.group(1):
+            url = "https://" + m.group(1) + (m.group(2) or "")
+    return {
+        "title": text[:110] or "(untitled finding)",
+        "url": url,
+        "vuln_class": vuln_class_for(str(entry.get("tool") or "")),
+        "severity": str(entry.get("severity") or "").upper(),
+        "method": "GET",
+        "indicator": derive_indicator(text),
+        "evidence": text,
+        "description": text,
+        "program": target,
+    }
+
+
+def load_abh_findings(session_file: str, target: str = "") -> list[dict]:
+    """Read ABH's session file and return gate-shaped findings, deduped."""
+    p = Path(session_file) if session_file else None
+    if not p or not p.is_file():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return []
+    out, seen = [], set()
+    for e in (data.get("findings_log") or []) if isinstance(data, dict) else []:
+        if not isinstance(e, dict):
+            continue
+        f = finding_from_log(e, target)
+        key = (f["title"], f["url"])
+        if key not in seen:
+            seen.add(key)
+            out.append(f)
+    return out
+
+
+def gate_findings(session_file: str, target: str, program: str = "",
+                  ins=(), outs=(), jobs_dir: Path | None = None,
+                  alert: bool = True, h1=None, poc=None, challenge=None,
+                  env: dict | None = None) -> str:
+    """Stages 4 + 5 for one hunt. Returns a compact note for the run digest.
+
+    LOW/INFO rows are not gated: they cannot be submitted anyway, and routing
+    each one through DUPCHECK would spend a rate-limited HackerOne query on
+    rows nobody would ever file.
+    """
+    rows = load_abh_findings(session_file, target)
+    if not rows:
+        return "no findings recorded"
+    high = [r for r in rows if r["severity"] in HIGH_VALUE]
+    if not high:
+        return "%d finding(s), none above LOW — not gated" % len(rows)
+
+    cleared: list[dict] = []
+    blocked_at: dict[str, int] = {}
+    for r in high:
+        ok, log = run_four_gates(r, list(ins), list(outs), program=program,
+                                 jobs_dir=jobs_dir, h1=h1, poc=poc,
+                                 challenge=challenge, env=env)
+        if ok:
+            cleared.append(r)
+            stage5_report(r, log, program=program, jobs_dir=jobs_dir, alert=alert)
+        else:
+            stage = "?"
+            for ln in log.splitlines():
+                if ln.startswith("GATE ") and ": FAIL" in ln:
+                    stage = ln[5:].split(":")[0].strip()
+                    break
+            blocked_at[stage] = blocked_at.get(stage, 0) + 1
+
+    parts = "%d gated, %d cleared" % (len(high), len(cleared))
+    if blocked_at:
+        parts += ", blocked " + " ".join(
+            "%s:%d" % (k, v) for k, v in sorted(blocked_at.items()))
+    return parts
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="24/7 hunt loop: bounty_run discovery + ABH engine")
     ap.add_argument("--platform", default="bugcrowd", choices=["bugcrowd", "hackerone", "both"])
@@ -227,6 +889,26 @@ def main() -> int:
 
             seeds.sort(key=lambda h: (0 if h.count(".") == 1 else (1 if h.startswith("www.") else 2), h))
             target = seeds[0]
+
+            # Stage 1: persist the whole in-scope seed set where this target's
+            # recon will live, before the engine starts. ABH keys recon by
+            # target (bughunter/recon/<target>/), not by program slug -- the
+            # spec's slug-keyed path would have been written and never read,
+            # because every recon tool resolves through the target. A resumed
+            # tick and a human can both see exactly which surface was in play.
+            # Skipped on --dry-run: a dry run claims to change nothing, and an
+            # empty recon/<target>/ left behind is one more thing that could be
+            # mistaken for recon already having run.
+            if not a.dry_run:
+                try:
+                    sdir = ABH / "bughunter" / "recon" / target
+                    sdir.mkdir(parents=True, exist_ok=True)
+                    (sdir / "seeds.txt").write_text("\n".join(seeds) + "\n",
+                                                    encoding="utf-8")
+                except OSError as e:
+                    # Not fatal: the hunt still runs off the single first seed.
+                    say("  seeds.txt not written for %s: %s" % (target, e))
+
             say("  target=%s  (%d in-scope, %d exclusions)" % (target, len(ins), len(outs)))
             rc, text = run_abh(target, flags, a.hours, a.steps, a.dry_run)
             if a.dry_run:
@@ -241,8 +923,11 @@ def main() -> int:
                 continue
             got = parse_abh_output(text)
             completed = (rc == 0 and got["steps"] > 0)
+            # seeds= belongs in the summary line too: "steps>0" alone says the
+            # hunt ran, not how much surface it was handed.
             line.update(status="hunted" if completed else ("hunt-empty" if rc == 0 else "hunt-failed"),
-                        note="rc=%d steps=%d findings=%d" % (rc, got["steps"], got["findings"]),
+                        note="rc=%d steps=%d findings=%d seeds=%d" % (
+                            rc, got["steps"], got["findings"], len(seeds)),
                         session=got["session"])
             if not completed:
                 tail = [l for l in text.strip().splitlines() if l.strip()][-3:]
@@ -254,6 +939,18 @@ def main() -> int:
             # If steps==0 (e.g. LLM failure or circuit-breaker trip on step 1),
             # leave the program in the rotation to retry.
             if completed:
+                try:
+                    gn = gate_findings(got.get("session") or "", target,
+                                       program=slug, ins=ins, outs=outs)
+                except Exception as e:  # noqa: BLE001
+                    # Isolated: a gate crash must not decide whether the program
+                    # is retired. That verdict belongs to the hunt, and letting
+                    # an exception here loop a target forever would be worse
+                    # than one unreviewed finding.
+                    gn = "gate error: %s: %s" % (type(e).__name__, e)
+                if gn:
+                    line["note"] = "%s | gates: %s" % (line["note"], gn)
+                    say("  gates: %s" % gn)
                 B._mark_attempted(a.platform, slug)
         except Exception as e:  # noqa: BLE001
             line.update(status="error", note="%s: %s" % (type(e).__name__, e))
