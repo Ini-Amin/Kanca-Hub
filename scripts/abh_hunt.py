@@ -73,7 +73,11 @@ def abh_env() -> dict:
             if not line or line.startswith("#") or not line.startswith("export "):
                 continue
             k, _, v = line[len("export "):].partition("=")
-            env[k.strip()] = v.strip().strip('"').strip("'")
+            v = v.strip().strip('"').strip("'")
+            # Expand $PATH / ${PATH} against the existing environment instead of
+            # writing a literal "$PATH" token that wipes /usr/bin and /bin.
+            v = v.replace("${PATH}", env.get("PATH", "")).replace("$PATH", env.get("PATH", ""))
+            env[k.strip()] = v
     env.setdefault("PATH", "/root/go/bin:/root/.local/bin:/usr/local/bin:/usr/bin:/bin")
     return env
 
@@ -152,8 +156,11 @@ def main() -> int:
         return 2
 
     worked = B._worked_programs(a.platform)
-    cands = B.discover_bugcrowd(a.limit if a.platform == "bugcrowd"
-                                else max(a.limit, 40))
+    cands = []
+    if a.platform in ("bugcrowd", "both"):
+        cands += B.discover_bugcrowd(a.limit)
+    if a.platform in ("hackerone", "both"):
+        cands += B.discover_hackerone(a.limit)
     if a.min_reward:
         def money(v):
             return int("".join(ch for ch in str(v) if ch.isdigit()) or 0)
@@ -207,8 +214,9 @@ def main() -> int:
                 summary.append(line)
                 continue
 
-            # ABH targets one host. Prefer the first concrete in-scope host; a
-            # wildcard alone gives it nothing to start from.
+            # ABH targets one primary host (while all -d/-x flags remain active
+            # for scope enforcement). Prefer apex / www.* over obscure regional
+            # subdomains that sort first alphabetically (e.g. badger.it.vinted.com).
             seeds = B._scannable(ins, ins, outs)
             if not seeds:
                 B._mark_attempted(a.platform, slug)
@@ -217,6 +225,7 @@ def main() -> int:
                 summary.append(line)
                 continue
 
+            seeds.sort(key=lambda h: (0 if h.count(".") == 1 else (1 if h.startswith("www.") else 2), h))
             target = seeds[0]
             say("  target=%s  (%d in-scope, %d exclusions)" % (target, len(ins), len(outs)))
             rc, text = run_abh(target, flags, a.hours, a.steps, a.dry_run)
@@ -231,18 +240,20 @@ def main() -> int:
                 summary.append(line)
                 continue
             got = parse_abh_output(text)
-            line.update(status="hunted" if rc == 0 else "hunt-failed",
+            completed = (rc == 0 and got["steps"] > 0)
+            line.update(status="hunted" if completed else ("hunt-empty" if rc == 0 else "hunt-failed"),
                         note="rc=%d steps=%d findings=%d" % (rc, got["steps"], got["findings"]),
                         session=got["session"])
-            if rc != 0:
+            if not completed:
                 tail = [l for l in text.strip().splitlines() if l.strip()][-3:]
-                say("  failed: " + " | ".join(tail)[:300])
+                say("  incomplete (%s): %s" % (line["status"], " | ".join(tail)[:300]))
             else:
                 say("  %s" % line["note"])
 
-            # A completed hunt is a real verdict, so the program is retired.
-            # A crashed hunt is not: leave it in the rotation to retry.
-            if rc == 0:
+            # Only a hunt that actually executed >=1 tool step is a real verdict.
+            # If steps==0 (e.g. LLM failure or circuit-breaker trip on step 1),
+            # leave the program in the rotation to retry.
+            if completed:
                 B._mark_attempted(a.platform, slug)
         except Exception as e:  # noqa: BLE001
             line.update(status="error", note="%s: %s" % (type(e).__name__, e))
