@@ -220,6 +220,16 @@ def main() -> int:
             target = seeds[0]
             say("  target=%s  (%d in-scope, %d exclusions)" % (target, len(ins), len(outs)))
             rc, text = run_abh(target, flags, a.hours, a.steps, a.dry_run)
+            if a.dry_run:
+                # A dry run sends no traffic and proves nothing about the
+                # program, so it must never retire it. It used to: run_abh()
+                # returns rc=0 for a dry run, the completion check below saw a
+                # success, and _mark_attempted() consumed the program. Two dry
+                # runs quietly burned two real targets out of the rotation.
+                line.update(status="dry-run", note="no traffic sent, not retired")
+                say("  " + line["note"])
+                summary.append(line)
+                continue
             got = parse_abh_output(text)
             line.update(status="hunted" if rc == 0 else "hunt-failed",
                         note="rc=%d steps=%d findings=%d" % (rc, got["steps"], got["findings"]),
