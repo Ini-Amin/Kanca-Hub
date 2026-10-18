@@ -1,0 +1,17 @@
+[Unit]
+Description=Gigs control API (bug-bounty pipeline over HTTP, :8795)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+# BOUNTY_R9_KEY lets /health report model liveness through the reverse tunnel.
+# Optional: without it the probe still runs, just unauthenticated.
+EnvironmentFile=-%h/.config/auto-freecf/main_egress.env
+ExecStart=/usr/bin/python3 %h/Auto-FreeCF/scripts/gigs_api.py --host 127.0.0.1 --port 8795
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
