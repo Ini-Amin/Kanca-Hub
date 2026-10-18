@@ -7,7 +7,9 @@ Two real page layouts are covered, both captured from live Bugcrowd briefs:
 """
 import sys
 from pathlib import Path
-sys.path.insert(0, "/home/amen/Auto-FreeCF/scripts")
+# Resolve scripts/ relative to this file so the test runs from any checkout
+# (laptop, blu, a CI box) instead of only /home/amen/Auto-FreeCF.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from bounty_run import parse_scope, host_in_scope, filter_hosts, _scannable, scope_warnings
 
 fails = 0
@@ -206,6 +208,43 @@ if (FIX / "bugcrowd-bitso-brief.txt").exists():
     for trap in ("sandbox.bitso.com", "quetzal.bitso.com", "*.efx.bitso.com"):
         check(trap in bo, "real bitso: %s excluded" % trap)
     check("bitso.com" in bi, "real bitso: apex in scope")
+
+# ---------- rule specificity: narrow explicit allow beats broad deny ----------
+# Real LaunchDarkly brief: the apex and a few named hosts are OUT, while four
+# specific subdomains are IN. A blanket "deny always wins" rejected every
+# explicitly in-scope asset and the program reported "no scannable in-scope
+# seed (app-store only?)", retiring a live paying program as if it had nothing
+# to test. These cases pin the intended reading: most specific rule wins, ties
+# deny, unmatched stays out.
+LD_IN = ["app.launchdarkly.com", "events.launchdarkly.com",
+         "stream.launchdarkly.com", "docs.launchdarkly.com",
+         "https://launchdarkly.com/docs"]
+LD_OUT = ["blog.launchdarkly.com", "launchdarkly.com", "sandbox.launchdarkly.com",
+          "slack.launchdarkly.com", "status.launchdarkly.com",
+          "launchdarkly.atlassian.net"]
+for host, want, why in (
+        ("app.launchdarkly.com", True, "explicit allow beats apex deny"),
+        ("stream.launchdarkly.com", True, "explicit allow beats apex deny"),
+        ("blog.launchdarkly.com", False, "named deny beats apex allow"),
+        ("sandbox.launchdarkly.com", False, "named deny beats apex allow"),
+        ("random.launchdarkly.com", False, "no allow at all -> out"),
+        ("launchdarkly.com", False, "apex is explicitly denied"),
+        ("evil.com", False, "unmatched stays out"),
+):
+    got, reason = host_in_scope(host, LD_IN, LD_OUT)
+    check(got == want, "specificity: %-26s -> %s (%s)" % (host, want, why))
+
+check(_scannable(LD_IN, LD_IN, LD_OUT) ==
+      ["app.launchdarkly.com", "docs.launchdarkly.com",
+       "events.launchdarkly.com", "stream.launchdarkly.com"],
+      "specificity: launchdarkly seeds are exactly the 4 explicit allows")
+
+# The narrow-deny case must not regress: a specific exclusion inside a broad
+# allow still has to be denied, and so must everything under it.
+for host, want in (("bitso.com", True), ("api.bitso.com", True),
+                   ("sandbox.bitso.com", False), ("x.sandbox.bitso.com", False)):
+    got, _ = host_in_scope(host, ["bitso.com"], ["sandbox.bitso.com"])
+    check(got == want, "specificity: narrow deny %-22s -> %s" % (host, want))
 
 print()
 print("RESULT:", "ALL PASS" if fails == 0 else "%d FAILURES" % fails)

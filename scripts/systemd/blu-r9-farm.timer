@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the TokenHarbor farm on LightVela (4 windows/day, jittered)
+
+[Timer]
+# Four windows a day, but NOT on a metronome: RandomizedDelaySec spreads each
+# one over 15 minutes so the farm never looks like a cron-driven bot. The
+# previous schedule fired at exactly :15 past every 6th hour.
+OnCalendar=*-*-* 00,06,12,18:15
+RandomizedDelaySec=900
+Persistent=true
+Unit=blu-r9-farm.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,34 @@
+[Unit]
+Description=Farm TokenHarbor keys on LightVela, inject into this box's 9Router
+Documentation=https://github.com/Ini-Amin/Kanca-Hub/blob/main/scripts/r9_farm_remote.sh
+
+# This unit is installed on blu, not on the laptop. blu owns the 9Router DB that
+# the bounty workers call, so the keys have to land here; LightVela only farms.
+#
+# Ordering matters: injecting into a dead 9Router would write keys nobody can
+# use, and the sync step below would then report success against a router that
+# is not serving. Requires= makes systemd fail loudly instead.
+Requires=blu-9router.service
+After=blu-9router.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=R9_FARM_HOST=lightvela
+Environment=R9_FARM_PROXY=http://127.0.0.1:25344
+Environment=R9_FARM_MAX=4
+ExecStart=/bin/bash /root/Auto-FreeCF/scripts/r9_farm_remote.sh
+
+# A farm run that hangs must not block the next window. One hour is well past
+# the longest observed run (4 accounts ~= 12 min), and TimeoutStartSec also
+# bounds the remote ssh, which is the part that can wedge.
+TimeoutStartSec=3600
+Nice=10
+IOSchedulingClass=idle
+
+# Never run two farms at once: both would pull the same account.json, and the
+# merge step is not atomic across processes.
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the autonomous bounty pipeline on blu (every 3h, jittered)
+
+[Timer]
+# Every 3 hours, but deliberately NOT on a metronome. RandomizedDelaySec spreads
+# each run over 40 minutes so we do not look like a cron job hammering Bugcrowd
+# at exactly :00 every 3 hours, and so two runs never overlap at a boundary.
+# The prior farm timers fired at fixed :15 marks and that pattern is exactly what
+# per-IP rate limits key on.
+OnCalendar=*-*-* 00/3:20
+RandomizedDelaySec=2400
+Persistent=true
+Unit=blu-bounty.service
+
+[Install]
+WantedBy=timers.target
