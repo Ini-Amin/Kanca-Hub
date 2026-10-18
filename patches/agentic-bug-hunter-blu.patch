@@ -1,0 +1,256 @@
+diff --git a/bughunter/agent.py b/bughunter/agent.py
+index 20b5f36..9e284ce 100644
+--- a/bughunter/agent.py
++++ b/bughunter/agent.py
+@@ -78,6 +78,92 @@ except ImportError:
+     _ollama_lib = None
+     _OLLAMA_OK = False
+ 
++# ── OpenAI-compatible chat adapter (9router, vLLM, LM Studio, ...) ─────────────
++#
++# The ReAct loop was written against the Ollama Python client, so it raised
++# "Ollama Python package not installed" on any box that does not run a local
++# Ollama — including ours, where every model lives behind 9router on :20128.
++# The tool schemas in TOOLS are already plain OpenAI function-calling JSON, so
++# the only thing missing was a client that speaks that dialect.
++#
++# This adapter returns the same {"message": {"content", "tool_calls"}} shape the
++# loop already consumes, which keeps the change contained to construction.
++class OpenAICompatClient:
++    """Minimal Ollama-shaped client over an OpenAI-compatible /chat/completions."""
++
++    def __init__(self, base_url: str, api_key: str, timeout: int = 180):
++        import requests
++        self.base_url = base_url.rstrip("/")
++        self.timeout = timeout
++        self._http = requests.Session()
++        self._http.headers.update({
++            "Authorization": f"Bearer {api_key}",
++            "Content-Type": "application/json",
++        })
++
++    def list(self):
++        """Return an object with `.models` of `.model` names, like ollama.list()."""
++        class _M:
++            def __init__(self, name): self.model = name
++        class _L:
++            def __init__(self, names): self.models = [_M(n) for n in names]
++        try:
++            r = self._http.get(f"{self.base_url}/models", timeout=30)
++            r.raise_for_status()
++            payload = _decode_json(r.text)
++            return _L([m.get("id", "") for m in payload.get("data", []) if m.get("id")])
++        except Exception:
++            return _L([])
++
++    def chat(self, *, model, messages, tools=None, options=None):
++        """Ollama-shaped chat. Returns {"message": {"content", "tool_calls"}}."""
++        body = {"model": model, "messages": messages, "temperature": 0.1}
++        if options:
++            if options.get("num_predict"):
++                body["max_tokens"] = options["num_predict"]
++            if options.get("temperature") is not None:
++                body["temperature"] = options["temperature"]
++        if tools:
++            body["tools"] = tools
++            body["tool_choice"] = "auto"
++        r = self._http.post(f"{self.base_url}/chat/completions",
++                            data=json.dumps(body), timeout=self.timeout)
++        r.raise_for_status()
++        payload = _decode_json(r.text)
++        if "choices" not in payload and isinstance(payload.get("data"), dict):
++            payload = payload["data"]
++        if "choices" not in payload:
++            raise RuntimeError(
++                "no 'choices' in response (keys: %s)" % sorted(payload)[:10])
++        msg = payload["choices"][0].get("message") or {}
++        return {
++            "message": {
++                "content": msg.get("content") or "",
++                "tool_calls": msg.get("tool_calls") or [],
++            }
++        }
++
++
++def _decode_json(text: str) -> dict:
++    """Parse a JSON body that may have SSE frames appended.
++
++    9router answers a NON-streaming request with `content-type: text/event-stream`
++    and appends the SSE terminator to the JSON document:
++
++        {"id":"chatcmpl-...","choices":[...]}data: [DONE]
++
++    `json.loads` then raises "Extra data", which is easy to mistake for a
++    malformed model reply. Decode the first value and ignore the trailer.
++    """
++    text = (text or "").strip()
++    if not text:
++        raise RuntimeError("empty response body")
++    try:
++        return json.loads(text)
++    except json.JSONDecodeError:
++        return json.JSONDecoder().raw_decode(text)[0]
++
++
+ # ── hunt.py lazy imports (avoids running main()) ───────────────────────────────
+ _hunt = None
+ def _h():
+@@ -649,10 +735,14 @@ class ToolDispatcher:
+ 
+         try:
+             if name == "run_recon":
++                # Do NOT pass max_urls: hunt.run_recon(domain, quick, scope_lock)
++                # has no such parameter, and the TOOLS schema advertises it. The
++                # mismatch made every run_recon call raise TypeError, so the agent
++                # burned its first step on an exception and the whole hunt reported
++                # "Steps executed: 0". Pass only what the function accepts.
+                 ok = h.run_recon(
+                     domain,
+                     scope_lock=args.get("scope_lock", self.scope_lock),
+-                    max_urls=int(args.get("max_urls", self.max_urls)),
+                 )
+                 obs = self._summarize_recon(domain, ok)
+ 
+@@ -1219,15 +1309,34 @@ class ReActAgent:
+         self._race_models: list[str] = []
+ 
+         if not _OLLAMA_OK:
+-            raise RuntimeError("Ollama Python package not installed: pip install ollama")
+-
+-        self.client = _ollama_lib.Client(host=OLLAMA_HOST)
++            # Fall back to any OpenAI-compatible gateway (9router, vLLM, LM Studio)
++            # instead of refusing to start. Ours has no local Ollama at all: every
++            # model is behind 9router, so the old hard failure made the autonomous
++            # loop unusable on the one box that has the models and the tooling.
++            _base = (os.environ.get("OPENAI_BASE_URL")
++                     or os.environ.get("OPENAI_API_BASE") or "")
++            _key = os.environ.get("OPENAI_API_KEY", "")
++            if not (_base and _key):
++                raise RuntimeError(
++                    "No LLM backend: the ollama package is not installed and "
++                    "OPENAI_BASE_URL/OPENAI_API_KEY are unset. Install ollama, or "
++                    "point OPENAI_BASE_URL at an OpenAI-compatible gateway."
++                )
++            self.client = OpenAICompatClient(_base, _key)
++            self._backend = "openai-compat"
++        else:
++            self.client = _ollama_lib.Client(host=OLLAMA_HOST)
++            self._backend = "ollama"
+         requested_model = model or os.environ.get("BRAIN_MODEL") or None
+         self.model  = requested_model or self._pick_tool_capable_model()
+         if not self.model:
+-            raise RuntimeError("No Ollama model available. Pull one: ollama pull qwen2.5:32b")
++            raise RuntimeError("No model available. Set BRAIN_MODEL or pull an Ollama model.")
+ 
+-        if requested_model:
++        if requested_model and self._backend == "ollama":
++            # Only Ollama needs this pre-flight: its client fails opaquely on an
++            # unknown model. An OpenAI-compatible gateway accepts any id and
++            # returns a clear error, and its /models list is paginated and
++            # filtered, so validating against it produces false negatives.
+             available = [m.model for m in self.client.list().models]
+             if requested_model not in available:
+                 raise RuntimeError(
+diff --git a/bughunter/brain.py b/bughunter/brain.py
+index 3795c1b..7f3ec83 100644
+--- a/bughunter/brain.py
++++ b/bughunter/brain.py
+@@ -646,11 +646,38 @@ class LLMClient:
+                 f"to a supported one."
+             )
+         r.raise_for_status()
+-        payload = r.json()
++        # Parse defensively. Some OpenAI-compatible gateways (notably 9router)
++        # advertise `content-type: text/event-stream` for a NON-streaming
++        # request and append the SSE terminator to the JSON body:
++        #
++        #   {"id":"chatcmpl-...","choices":[...]}data: [DONE]
++        #
++        # `r.json()` then dies with "Extra data: line 1 column N", the exception
++        # is swallowed by chat()'s broad handler, and every caller sees an empty
++        # string. In this repo that surfaced as `DECISION: UNKNOWN` from the
++        # 7-Question Gate — the model had answered correctly and we threw the
++        # answer away. Decode the first JSON value and ignore any trailing SSE
++        # frames instead of assuming the whole body is one document.
++        text = r.text.strip()
++        payload = None
++        try:
++            payload = r.json()
++        except Exception:
++            payload = _json.JSONDecoder().raw_decode(text)[0] if text else None
++        if payload is None:
++            raise RuntimeError(
++                f"{self.provider} returned a body that is not JSON "
++                f"(first 200 chars: {text[:200]!r})"
++            )
+         # Some OpenAI-compatible gateways (e.g. 9router) wrap the standard
+         # chat-completion body in {"data": {...}, "success": true}.
+         if "choices" not in payload and isinstance(payload.get("data"), dict):
+             payload = payload["data"]
++        if "choices" not in payload:
++            raise RuntimeError(
++                f"{self.provider} response has no 'choices' "
++                f"(keys: {sorted(payload)[:10]})"
++            )
+         return payload["choices"][0]["message"]["content"].strip()
+ 
+     def list_models(self) -> list[str]:
+diff --git a/bughunter/tools/recon_engine.sh b/bughunter/tools/recon_engine.sh
+index acd7d8a..bd7c532 100755
+--- a/bughunter/tools/recon_engine.sh
++++ b/bughunter/tools/recon_engine.sh
+@@ -330,7 +330,7 @@ fi
+ 
+ # crt.sh (certificate transparency)
+ log_step "Querying crt.sh..."
+-curl -s "https://crt.sh/?q=%25.$TARGET&output=json" 2>/dev/null \
++curl -s --connect-timeout 10 --max-time 45 "https://crt.sh/?q=%25.$TARGET&output=json" 2>/dev/null \
+     | python3 -c "
+ import sys, json
+ try:
+@@ -350,8 +350,14 @@ except: pass
+ log_done "crt.sh: $(wc -l < "$RECON_DIR/subdomains/crtsh.txt" 2>/dev/null || echo 0) subdomains"
+ 
+ # Wayback subdomains
++# --max-time is REQUIRED here, not a nicety. web.archive.org/cdx is regularly
++# slow and sometimes accepts the connection then never answers; with no bound
++# the whole recon pipeline hangs at Phase 1 forever. Observed: a hunt sat at
++# "Querying Wayback Machine for subdomains..." for 5+ minutes and would have
++# stayed there until the outer timeout killed it, so no later phase ever ran.
++# --connect-timeout bounds the handshake, --max-time the whole transfer.
+ log_step "Querying Wayback Machine for subdomains..."
+-curl -s "https://web.archive.org/cdx/search/cdx?url=*.$TARGET/*&output=text&fl=original&collapse=urlkey" 2>/dev/null \
++curl -s --connect-timeout 10 --max-time 60 "https://web.archive.org/cdx/search/cdx?url=*.$TARGET/*&output=text&fl=original&collapse=urlkey" 2>/dev/null \
+     | sed -nE "s|.*://([a-zA-Z0-9._-]+\.$TARGET).*|\1|p" \
+     | sort -u > "$RECON_DIR/subdomains/wayback_subs.txt" 2>/dev/null || true
+ log_done "wayback: $(wc -l < "$RECON_DIR/subdomains/wayback_subs.txt" 2>/dev/null || echo 0) subdomains"
+@@ -414,8 +420,19 @@ echo ""
+ log_info "Phase 3: Port Scanning"
+ 
+ if command -v nmap &>/dev/null; then
++    # Bounded on purpose. `nmap -sV --top-ports 1000` sends 1000 probes AND does
++    # service-version detection on every open port, which against a CDN-fronted
++    # host (Cloudflare, Akamai) is both slow and pointless: the answers come from
++    # the CDN edge, not the target. Observed: this phase ran 5+ minutes and the
++    # hunt never reached the vulnerability sweep.
++    #
++    # --host-timeout caps the whole scan, --max-retries keeps a filtered port
++    # from being retried into the timeout. Port scanning is the lowest-value
++    # phase for web targets, so it is the right one to bound hardest.
+     log_step "Running nmap (top 1000 ports) on $TARGET..."
+-    nmap -sV --top-ports 1000 -T4 --open "$TARGET" \
++    timeout 300 nmap -sV --top-ports 1000 -T4 --open \
++        --host-timeout 240s --max-retries 1 --max-rtt-timeout 400ms \
++        "$TARGET" \
+         -oN "$RECON_DIR/ports/nmap_results.txt" \
+         -oG "$RECON_DIR/ports/nmap_greppable.txt" 2>/dev/null || true
+     log_done "Nmap scan complete"
+@@ -447,7 +464,7 @@ elif command -v gau &>/dev/null; then
+ else
+     log_warn "gau not installed — using wayback fallback. To install gau:"
+     dep_install_hint gau
+-    curl -s "https://web.archive.org/cdx/search/cdx?url=*.$TARGET/*&output=text&fl=original&collapse=urlkey&limit=5000" \
++    curl -s --connect-timeout 10 --max-time 60 "https://web.archive.org/cdx/search/cdx?url=*.$TARGET/*&output=text&fl=original&collapse=urlkey&limit=5000" \
+         > "$RECON_DIR/urls/wayback.txt" 2>/dev/null || true
+     log_done "wayback: $(wc -l < "$RECON_DIR/urls/wayback.txt" 2>/dev/null || echo 0) URLs"
+ fi

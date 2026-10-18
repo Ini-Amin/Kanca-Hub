@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Deploy Agentic-Bug-Hunter (ABH) onto blu and point its brain at the local
+# 9router.
+#
+# WHY THIS SCRIPT EXISTS
+# ----------------------
+# blu is ephemeral: a Manus rebuild gives a fresh box with a new hostname, so
+# every hand-applied edit is lost. ABH is the actual hunt engine now (9-phase
+# recon, deterministic ScopeChecker, 7-Question Gate, ReAct loop), and it needs
+# three patches to run here at all:
+#
+#   1. brain.py  — 9router answers a non-streaming request with
+#                  `content-type: text/event-stream` and appends `data: [DONE]`
+#                  to the JSON body. `r.json()` then raises "Extra data", the
+#                  error is swallowed by a broad except, and every caller sees
+#                  an empty string. Symptom: the 7-Question Gate prints
+#                  `DECISION: UNKNOWN` even though the model answered correctly.
+#   2. agent.py  — the ReAct loop was written against the Ollama Python client
+#                  and refuses to start without it. There is no local Ollama
+#                  here; every model lives behind 9router. Adds an
+#                  OpenAI-compatible client and fixes a run_recon() call that
+#                  passed a `max_urls` argument the function does not accept
+#                  (every recon step died with TypeError, so the hunt reported
+#                  "Steps executed: 0").
+#   3. recon_engine.sh — two network calls had no timeout (curl to
+#                  web.archive.org, `nmap -sV --top-ports 1000`). Both hung for
+#                  5+ minutes on a CDN-fronted target and the hunt never
+#                  reached the vulnerability sweep.
+#
+# Run this on blu as root:   bash abh_deploy.sh
+# Re-runnable: it fetches the upstream tree once, then re-applies the patch.
+set -euo pipefail
+
+ABH_DIR=${ABH_DIR:-/root/Agentic-Bug-Hunter}
+REPO=${REPO:-https://github.com/awarexone/Agentic-Bug-Hunter.git}
+PATCH=${PATCH:-/root/Auto-FreeCF/patches/agentic-bug-hunter-blu.patch}
+ENVFILE=${ENVFILE:-/root/abh.env}
+ROUTER_KEY=${ROUTER_KEY:-/root/grokbot/router.key}
+MODEL=${MODEL:-Zcode/GLM-5.3}
+
+say() { printf '\n\033[1;36m[abh]\033[0m %s\n' "$*"; }
+die() { printf '\n\033[1;31m[abh] FATAL:\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "run as root (system units + /root paths)"
+
+# ── 1. source tree ────────────────────────────────────────────────────────────
+# cvelistV5 is a 7 GB nested clone of the CVE corpus. Nothing in the code
+# references it, and pulling it here would dominate the transfer, so it is
+# skipped and the rest of the tree is fetched shallow.
+if [ -d "$ABH_DIR/.git" ]; then
+  say "updating existing checkout at $ABH_DIR"
+  git -C "$ABH_DIR" fetch --depth 1 origin >/dev/null 2>&1 || true
+  git -C "$ABH_DIR" reset --hard origin/HEAD >/dev/null 2>&1 || true
+else
+  say "cloning $REPO -> $ABH_DIR (skipping cvelistV5)"
+  rm -rf "$ABH_DIR"
+  git clone --depth 1 "$REPO" "$ABH_DIR" >/dev/null 2>&1 \
+    || die "clone failed (is the repo still public?)"
+fi
+
+# ── 2. patches ────────────────────────────────────────────────────────────────
+[ -f "$PATCH" ] || die "patch not found: $PATCH (copy patches/agentic-bug-hunter-blu.patch to blu first)"
+if git -C "$ABH_DIR" apply --check "$PATCH" 2>/dev/null; then
+  git -C "$ABH_DIR" apply "$PATCH"
+  say "applied $(basename "$PATCH")"
+elif git -C "$ABH_DIR" apply --reverse --check "$PATCH" 2>/dev/null; then
+  say "patch already applied — skipping"
+else
+  die "patch does not apply and is not already applied; upstream changed. Re-derive it."
+fi
+
+# ── 3. recon toolchain ────────────────────────────────────────────────────────
+# blu already has these under /root/go/bin from blu_bootstrap.sh, but a fresh
+# box may not. Only install what is missing; `go install` is slow.
+export PATH=/root/go/bin:/root/.local/bin:$PATH
+if command -v go >/dev/null 2>&1; then
+  for t in subfinder httpx nuclei katana dnsx gau anew qsreplace waybackurls dalfox interactsh-client; do
+    if ! command -v "$t" >/dev/null 2>&1; then
+      say "installing $t"
+      go install "github.com/projectdiscovery/$t/cmd/$t@latest" >/dev/null 2>&1 \
+        || printf '  (could not install %s — recon degrades gracefully)\n' "$t"
+    fi
+  done
+else
+  printf '[abh] go not installed — skipping toolchain (recon will be limited)\n'
+fi
+
+# ── 4. brain wiring ───────────────────────────────────────────────────────────
+[ -f "$ROUTER_KEY" ] || die "9router key missing: $ROUTER_KEY"
+KEY=$(cat "$ROUTER_KEY")
+[ -n "$KEY" ] || die "9router key file is empty"
+
+# 9router must actually be serving before we point a 2-hour hunt at it.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
+  -H "Authorization: Bearer $KEY" http://127.0.0.1:20128/v1/models || true)
+[ "$CODE" = "200" ] || die "9router not healthy on :20128 (got ${CODE:-no-response}); start blu-9router"
+
+umask 077
+cat > "$ENVFILE" <<EOF
+# ABH runtime environment on blu. Generated by scripts/abh_deploy.sh — do not
+# hand-edit; re-run the deploy script instead.
+export PATH=/root/go/bin:/root/.local/bin:\$PATH
+export OPENAI_API_KEY="$KEY"
+export OPENAI_BASE_URL="http://127.0.0.1:20128/v1"
+export BRAIN_PROVIDER=openai
+export BRAIN_MODEL="$MODEL"
+EOF
+chmod 600 "$ENVFILE"
+say "wrote $ENVFILE (model=$MODEL)"
+
+# ── 5. prove the brain answers ────────────────────────────────────────────────
+# A silent brain is the failure mode this whole script exists to prevent, so
+# verify a real completion instead of just checking that a key file exists.
+say "verifying brain round-trip through 9router"
+if ! ( source "$ENVFILE"; cd "$ABH_DIR" && python3 - <<'PY'
+import sys
+sys.path.insert(0, "bughunter")
+from brain import LLMClient
+import os
+c = LLMClient("openai", model=os.environ["BRAIN_MODEL"])
+out = c.chat(os.environ["BRAIN_MODEL"], "You are terse.",
+             "Reply with exactly: OK", max_tokens=20)
+if not (out or "").strip():
+    sys.exit("brain returned empty content")
+print("brain says:", out.strip()[:60])
+PY
+); then
+  die "brain round-trip failed — check blu-9router and the model id"
+fi
+
+say "done. Run a hunt with:"
+printf '  source %s && cd %s && python3 bughunter/agent.py --target HOST -d HOST\n' "$ENVFILE" "$ABH_DIR"
