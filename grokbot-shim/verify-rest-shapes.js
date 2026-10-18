@@ -117,10 +117,14 @@ for (const [svcName, methName, reply] of CASES) {
     if (!declared.has("capabilities." + k)) unknown.push("capabilities." + k);
   }
 
-  let json;
-  try { json = new M.O(reply).toJson(); }
+  let json, binBytes = 0;
+  try {
+    const inst = new M.O(reply);
+    binBytes = inst.toBinary().byteLength;
+    json = M.O.fromBinary(inst.toBinary()).toJson();
+  }
   catch (e) { json = { __error: String(e.message).slice(0, 80) }; }
-  const empty = json && typeof json === "object" && Object.keys(json).length === 0;
+  const empty = json && typeof json === "object" && Object.keys(json).length === 0 || binBytes === 0;
 
   const flag = (unknown.length || empty) ? "FAIL" : "ok  ";
   if (unknown.length || empty) bad++;

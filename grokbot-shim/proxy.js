@@ -561,21 +561,23 @@ const server = http.createServer((req, res) => {
     const ch = [];
     req.on("data", (c) => ch.push(c));
     req.on("end", async () => {
+      const isProto = /\/proto/i.test(req.headers["content-type"] || "");
       let body = {};
-      try { body = JSON.parse(Buffer.concat(ch).toString("utf8") || "{}"); } catch {}
+      try { body = isProto && meth?.I ? meth.I.fromBinary(Buffer.concat(ch)) : JSON.parse(Buffer.concat(ch).toString("utf8") || "{}"); } catch {}
       const svcShort = m[1].split(".").pop();
       const qualified = `${svcShort}.${m[2]}`.toLowerCase();
       const hk = Object.keys(handlers).find((k) => k.toLowerCase() === qualified)
         || Object.keys(handlers).find((k) => k.toLowerCase() === m[2].toLowerCase());
       if (!handlers[hk]) {
         console.log("[rest] no handler", m[1] + "/" + m[2]);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end("{}");
+        res.writeHead(200, { "content-type": isProto ? "application/proto" : "application/json" });
+        res.end(isProto ? Buffer.alloc(0) : "{}");
         return;
       }
       try {
         const out = await handlers[hk](body, res, () => {}, () => {});
         if (res.writableEnded || res.headersSent) return; // streaming handler owns the response
+        if (isProto && meth?.O) { res.writeHead(200, { "content-type": "application/proto" }); return res.end(Buffer.from(new meth.O(out ?? {}).toBinary())); } // ponytail: unary proto only, add streaming frame header when Connect stream needed
         // Serialize through the real proto message when we can.
         //
         // WHY: Connect/JSON encodes ENUMS BY NAME, but a bare JSON.stringify emits
