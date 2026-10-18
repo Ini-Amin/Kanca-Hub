@@ -357,6 +357,11 @@ def discover_intigriti(limit=25):
         mx = (e.get("max_bounty") or {}).get("value") or 0
         out.append({
             "platform": "intigriti",
+            # Explicit slug: every Intigriti detail URL ends in "/detail", so
+            # the last path segment is "detail" for ALL of them. Deriving the
+            # slug from the URL made every program share one identity -- same
+            # scope, same _mark_attempted bucket.
+            "slug": (e.get("handle") or "").strip(),
             "name": (e.get("name") or e.get("handle") or "").strip(),
             "brief": e.get("url") or "",
             "min": (e.get("min_bounty") or {}).get("value", ""),
@@ -381,6 +386,7 @@ def discover_yeswehack(limit=25):
             continue
         out.append({
             "platform": "yeswehack",
+            "slug": pid,   # last URL segment already equals the id; be explicit
             "name": (e.get("name") or pid).strip(),
             "brief": f"https://yeswehack.com/programs/{pid}",
             "min": _money(e.get("min_bounty")),
@@ -593,11 +599,18 @@ def _mirror_entry(platform, slug):
         if not isinstance(e, dict):
             continue
         if platform == "intigriti":
-            # Both handle and company_handle identify a program; abh_hunt keeps
-            # the detail-page tail, which is the program handle.
-            if slug in (e.get("handle"), e.get("company_handle")):
+            # handle is unique; company_handle is not (one company, several
+            # programs), so it is only a fallback for a manually passed slug.
+            if slug == (e.get("handle") or ""):
                 return e
-            if (e.get("url") or "").rstrip("/").endswith("/" + slug):
+            # Detail pages are /programs/<company>/<handle>/detail. The URL
+            # must end in "/<slug>/detail" -- matching a bare "/<slug>" tail
+            # matched ONLY the literal word "detail", which every Intigriti
+            # program has, so any slug resolved to the first feed entry.
+            if slug and slug != "detail" and \
+                    (e.get("url") or "").rstrip("/").endswith("/%s/detail" % slug):
+                return e
+            if slug and slug == (e.get("company_handle") or ""):
                 return e
         else:
             if slug == (e.get("id") or ""):

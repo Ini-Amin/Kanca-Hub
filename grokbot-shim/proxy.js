@@ -216,11 +216,184 @@ function mintToken() {
 }
 
 // ---------- method handlers ----------
+// ---------- /gigs control commands ----------
+// The bounty pipeline runs unattended on this box and is driven over HTTP by
+// scripts/gigs_api.py (:8795). Intercepting `/gigs ...` here answers it from the
+// API instead of the model, so steering the pipeline from the grok-bot window
+// needs no SSH, costs zero tokens, and cannot be talked out of a guardrail by a
+// prompt. Anything not starting with `/gigs` still goes to the router.
+const GIGS = process.env.GIGS_URL || "http://127.0.0.1:8795";
+// Must match ABH_PLATFORMS in scripts/gigs_api.py. Used only to decide which
+// token of `/gigs hunt <program> <platform>` is the platform.
+const GIGS_PLATFORMS = ["bugcrowd", "hackerone", "intigriti", "yeswehack", "both", "all"];
+
+async function gigsJson(pathname, opts) {
+  const res = await fetch(`${GIGS}${pathname}`, opts);
+  let body = {};
+  try { body = await res.json(); } catch { /* empty or non-JSON body */ }
+  return { status: res.status, body };
+}
+
+// Job names come from third-party feeds and can contain `|` or newlines, either
+// of which would break the Markdown table they land in.
+function cell(v, max = 40) {
+  return String(v == null ? "" : v).replace(/\|/g, "/").replace(/\s+/g, " ").slice(0, max);
+}
+
+function gigsErr(status, body, what) {
+  if (status === 429) return `**${what}: cooldown** — retry in ${body.retry_in_s}s`;
+  return `**${what} failed (${status})** — ${cell(body.error, 120)}`;
+}
+
+function fmtStatus(sessions, jobs) {
+  const rows = (sessions && sessions.sessions) || [];
+  const hunting = Object.keys((sessions && sessions.agent_running) || {});
+  const loop = (sessions && sessions.hunt_loop_pids) || [];
+  const out = [
+    "**Bounty pipeline**",
+    loop.length ? `- hunt loop: running (pid ${loop.join(", ")})` : "- hunt loop: **not running**",
+    hunting.length ? `- agent: hunting ${hunting.join(", ")}` : "- agent: idle",
+  ];
+  if (!rows.length) {
+    out.push("- sessions: none yet");
+  } else {
+    out.push("", "| target | steps | findings | last tool | state |",
+             "|---|---|---|---|---|");
+    for (const r of rows.slice(0, 12)) {
+      // `findings` already excludes our own [SURFACE RANKING] note; showing the
+      // raw row count here would report findings before any scanner has run.
+      const state = r.running ? "**RUNNING**" : (r.bump_pending ? "bump waiting" : "idle");
+      out.push(`| ${cell(r.target)} | ${r.steps} | ${r.findings} | ${cell((r.last_tool || {}).tool, 24)} | ${state} |`);
+    }
+    if (rows.length > 12) out.push(`_…and ${rows.length - 12} more_`);
+  }
+  const list = (jobs && jobs.jobs) || [];
+  if (list.length) {
+    out.push("", `**Jobs:** ${list.length}`);
+    for (const j of list.slice(0, 6)) {
+      out.push(`- \`${cell(j.id, 28)}\` ${cell(j.platform)} ${cell(j.program, 26)} — ${cell(j.status, 16)}`);
+    }
+    if (list.length > 6) out.push(`_…and ${list.length - 6} more_`);
+  } else if (jobs && jobs.note) {
+    out.push("", `**Jobs:** _${cell(jobs.note, 60)}_`);
+  }
+  return out.join("\n");
+}
+
+async function gigsCommand(raw) {
+  const parts = String(raw || "").trim().split(/\s+/);
+  const sub = (parts[1] || "status").toLowerCase();
+  const rest = parts.slice(2);
+  const post = (pathname, payload) => gigsJson(pathname, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (sub === "help" || sub === "?") {
+    return [
+      "`/gigs status` — sessions + jobs",
+      "`/gigs discover [platform]` — pull a platform's program feed",
+      "`/gigs hunt <program-slug> [platform]` — start a hunt (900s cooldown)",
+      "`/gigs bump <guidance>` — steer the agent that is hunting right now",
+      "`/gigs findings <id>` — findings recorded for one job",
+    ].join("\n");
+  }
+
+  if (sub === "status" || sub === "jobs") {
+    // Two independent reads: a dead /gigs/jobs must not hide the sessions.
+    const [s, j] = await Promise.all([gigsJson("/gigs/abh/sessions"), gigsJson("/gigs/jobs")]);
+    return fmtStatus(s.body, j.body);
+  }
+
+  if (sub === "discover") {
+    const platform = (rest[0] || "both").toLowerCase();
+    const { status, body } = await post("/gigs/discover", { platform });
+    if (status >= 400) return gigsErr(status, body, "Discover");
+    const lines = String(body.stdout || "").trim().split("\n").filter(Boolean);
+    const head = lines.slice(0, 12).join("\n");
+    return `**Discovery: \`${platform}\`** rc=${body.rc}\n\`\`\`\n${head || "(nothing found)"}\n\`\`\``
+      + (lines.length > 12 ? `\n_…and ${lines.length - 12} more_` : "");
+  }
+
+  if (sub === "hunt") {
+    // `/gigs hunt dropbox` and `/gigs hunt dropbox intigriti` both work: a
+    // trailing token that names a platform is taken as the platform, the rest
+    // is the program slug. Slugs are hyphenated, so spaced input is joined.
+    let platform = "bugcrowd";
+    let program = rest;
+    if (rest.length > 1 && GIGS_PLATFORMS.includes(rest[rest.length - 1].toLowerCase())) {
+      platform = rest[rest.length - 1].toLowerCase();
+      program = rest.slice(0, -1);
+    }
+    const payload = { platform };
+    if (program.length) payload.program = program.join("-");
+    const { status, body } = await post("/gigs/abh/hunt", payload);
+    if (status >= 400) return gigsErr(status, body, "Hunt");
+    // 202: nothing has been hunted yet. A run is minutes of recon plus model
+    // calls, so the answer says how to check rather than claiming success.
+    return `**Hunt accepted** — \`${cell(payload.program || "next new program", 40)}\` on ${platform}`
+      + `\ncooldown ${body.cooldown_s}s · check \`/gigs status\` or \`GET ${body.status_url}\``;
+  }
+
+  if (sub === "bump") {
+    const text = rest.join(" ").trim();
+    if (!text) return "**bump** needs guidance — `/gigs bump focus on the upload endpoint`";
+    const { status, body } = await post("/gigs/abh/bump", { text });
+    // 409 is the honest answer: writing into a finished session would be a
+    // silent no-op, because agent.py reads the bump on its NEXT step.
+    if (status === 409) return `**Nothing to steer** — ${cell(body.error, 80)}. ${cell(body.hint, 90)}`;
+    if (status >= 400) return gigsErr(status, body, "Bump");
+    return `**Guidance queued** (${body.chars} chars) for ${cell(body.session, 70)}\n`
+      + `${cell(body.note, 90)}`;
+  }
+
+  if (sub === "findings") {
+    const id = rest[0];
+    if (!id) return "**findings** needs a job id — `/gigs findings <id>`";
+    // /gigs/findings/<id> answers 200 with an empty list for an id that does
+    // not exist at all, so existence is checked separately — otherwise a typo'd
+    // id reads as "this job has no findings yet" and the operator waits for
+    // something that can never arrive.
+    const job = await gigsJson(`/gigs/jobs/${encodeURIComponent(id)}`);
+    if (job.status === 404) return `**No such job** — \`${cell(id, 40)}\``;
+    if (job.status >= 400) return gigsErr(job.status, job.body, "Findings");
+    const { status, body } = await gigsJson(`/gigs/findings/${encodeURIComponent(id)}`);
+    if (status >= 400) return gigsErr(status, body, "Findings");
+    const rows = body.findings || [];
+    if (!rows.length) return `**No findings** for \`${cell(id, 40)}\``;
+    const out = [`**${rows.length} findings** for \`${cell(id, 40)}\``];
+    for (const f of rows.slice(0, 15)) {
+      out.push(`- **${cell(f.severity, 10)}** ${cell(f.tool, 20)} — ${cell(f.text, 110)}`);
+    }
+    if (rows.length > 15) out.push(`_…and ${rows.length - 15} more_`);
+    return out.join("\n");
+  }
+
+  return `**Unknown /gigs subcommand** \`${cell(sub, 20)}\` — try \`/gigs help\``;
+}
+
 const handlers = {
   SendGrokBotUserMessage: async (req, res, send) => {
     const s = sess(req.agentId || "main");
     s.history.push({ role: "user", content: req.text });
     send({ dispatched: true }); // grpc-web unary: headers + message + trailers
+    // `/gigs` is a control command, not a prompt: answer it straight from the
+    // gigs API. Sending it to the model would spend tokens on it and, worse,
+    // leave it to a model to decide whether a guardrail applies.
+    if ((req.text || "").trim().startsWith("/gigs")) {
+      let reply;
+      try {
+        reply = await gigsCommand(req.text);
+      } catch (err) {
+        // An unreachable API must read as a control-plane outage, not as the
+        // chat being broken.
+        reply = `[gigs] cannot reach ${GIGS} — ${err.message}`;
+      }
+      s.history.push({ role: "assistant", content: reply });
+      broadcast(req.agentId || "main", messageEntry(s, reply, "agent"), s);
+      return;
+    }
     // answer asynchronously; watchers get it via the rows fanout below
     try {
       const reply = await callRouter(s.history);

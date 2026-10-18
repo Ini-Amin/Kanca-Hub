@@ -3,7 +3,7 @@
 # NOTE: upstream awarexone/Agentic-Bug-Hunter force-pushed (cd58a40 -> 40b03ee).
 # blu is deployed by scp of the individual files; this patch is the reviewable diff.
 diff --git a/bughunter/agent.py b/bughunter/agent.py
-index 20b5f36..6e606d4 100644
+index 20b5f36..6b7b62f 100644
 --- a/bughunter/agent.py
 +++ b/bughunter/agent.py
 @@ -42,8 +42,11 @@ from __future__ import annotations
@@ -1096,7 +1096,26 @@ index 20b5f36..6e606d4 100644
      def _read_recon_files(self, domain: str) -> str:
          h = _h()
          recon_dir = h._resolve_recon_dir(domain)
-@@ -1173,17 +1657,19 @@ You are an elite autonomous bug bounty hunter operating within an authorized bug
+@@ -982,6 +1466,18 @@ class ToolDispatcher:
+ 
+     def _classify_obs(self, tool: str, obs: str) -> None:
+         """Extract severity labels from observation text and add to findings_log."""
++        # Never classify our own annotation. Stage 2 appends the surface ranking
++        # to run_recon's observation, and its first line reads "High-value
++        # endpoints" -- which the "high" keyword below logged as a HIGH finding
++        # on EVERY recon run, before a single scanner had run. That row then fed
++        # gate_findings() as a real candidate on every tick. The ranking is
++        # guidance for the model, not evidence; strip it and classify only what
++        # the tool itself returned.
++        cut = obs.find("[SURFACE RANKING]")
++        if cut >= 0:
++            obs = obs[:cut]
++        if not obs.strip():
++            return
+         obs_l = obs.lower()
+         if any(kw in obs_l for kw in ("rce_confirmed", "injectable", "critical")):
+             sev = "CRITICAL"
+@@ -1173,17 +1669,19 @@ You are an elite autonomous bug bounty hunter operating within an authorized bug
  You have a set of tools that execute real security scans. Use them strategically.
  
  CORE RULES:
@@ -1122,7 +1141,7 @@ index 20b5f36..6e606d4 100644
  Think step by step. Pick the highest-impact next action given what you know."""
  
  
-@@ -1219,15 +1705,34 @@ class ReActAgent:
+@@ -1219,15 +1717,34 @@ class ReActAgent:
          self._race_models: list[str] = []
  
          if not _OLLAMA_OK:
@@ -1162,7 +1181,7 @@ index 20b5f36..6e606d4 100644
              available = [m.model for m in self.client.list().models]
              if requested_model not in available:
                  raise RuntimeError(
-@@ -1247,7 +1752,28 @@ class ReActAgent:
+@@ -1247,7 +1764,28 @@ class ReActAgent:
          except Exception:
              self._race_models = [self.model]
  
@@ -1191,7 +1210,7 @@ index 20b5f36..6e606d4 100644
          race_note = f"  race_models={self._race_models}" if len(self._race_models) > 1 else ""
          print(f"{DIM}[Agent] max_steps={max_steps}  budget={time_budget_hours}h  "
                f"tool_calling=native{race_note}{NC}", flush=True)
-@@ -1349,7 +1875,7 @@ class ReActAgent:
+@@ -1349,7 +1887,7 @@ class ReActAgent:
                      {"role": "system",    "content": AGENT_SYSTEM},
                      {"role": "user",      "content": user_msg},
                  ],
@@ -1200,7 +1219,7 @@ index 20b5f36..6e606d4 100644
                  options={
                      "num_ctx":     16384,
                      "num_predict": 1024,
-@@ -1529,11 +2055,12 @@ class ReActAgent:
+@@ -1529,11 +2067,12 @@ class ReActAgent:
              "working_memory":   self.memory.working_memory,
              "verdict":          self.verdict,
              "session_file":     self.memory.session_file,
@@ -1218,7 +1237,7 @@ index 20b5f36..6e606d4 100644
          }
  
  
-@@ -1717,10 +2244,8 @@ def run_agent_hunt(
+@@ -1717,10 +2256,8 @@ def run_agent_hunt(
                  "findings":        len(memory.findings_log),
                  "session_file":    session_file,
                  "working_memory":  memory.working_memory,
@@ -1856,10 +1875,10 @@ index ee51be8..0ef09d3 100644
 +            assert "do NOT" in result  # tells the model not to retry it
 diff --git a/tests/test_surface_rank.py b/tests/test_surface_rank.py
 new file mode 100644
-index 0000000..cb614db
+index 0000000..595d61e
 --- /dev/null
 +++ b/tests/test_surface_rank.py
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,199 @@
 +#!/usr/bin/env python3
 +"""Stage 2 (surface ranking) of the 5-stage pipeline.
 +
@@ -2006,6 +2025,48 @@ index 0000000..cb614db
 +            check(False, f"dispatch raised {type(exc).__name__}: {exc}")
 +        finally:
 +            agent_mod._h = real_h
++
++    # 4. The ranking we inject must never be read as evidence. Its first line
++    #    says "High-value endpoints", and _classify_obs matches the substring
++    #    "high" — so without a guard every run_recon wrote a fake HIGH finding,
++    #    which gate_findings() then handed to the four pre-submit gates as a
++    #    live candidate on every single tick.
++    print("4. the injected ranking is guidance, not a finding")
++
++    class _Holder:
++        pass
++
++    holder = _Holder()
++    holder.memory = agent.HuntMemory.__new__(agent.HuntMemory)
++    holder.memory.findings_log = []
++    ranking = agent.format_surface_rank(
++        [{"url": "https://app.example.com/login", "score": 90,
++          "why": "auth form"}])
++    check(ranking.startswith("[SURFACE RANKING]") and "High-value" in ranking,
++          "fixture ranking carries the phrase that used to trigger it")
++
++    summary = "Found 12 live urls\nhttps://app.example.com/login\n"
++    agent.ToolDispatcher._classify_obs(holder, "run_recon",
++                                       summary + "\n\n" + ranking)
++    check(holder.memory.findings_log == [],
++          "ranking appended to a real observation adds no finding (%r)"
++          % holder.memory.findings_log)
++
++    holder.memory.findings_log = []
++    agent.ToolDispatcher._classify_obs(holder, "run_recon", ranking)
++    check(holder.memory.findings_log == [],
++          "ranking-only observation adds no finding (%r)"
++          % holder.memory.findings_log)
++
++    # The guard must not have become a blanket no-op — a suppression that also
++    # swallowed real hits would be a worse bug than the false positive.
++    holder.memory.findings_log = []
++    agent.ToolDispatcher._classify_obs(
++        holder, "run_vuln_scan",
++        "SQL injection found in /login: injectable parameter q")
++    check(bool(holder.memory.findings_log),
++          "a genuine scanner hit is still classified (%r)"
++          % [(f["tool"], f["severity"]) for f in holder.memory.findings_log])
 +
 +    print("RESULT:", "ALL PASS" if fails == 0 else "%d FAILURES" % fails)
 +    return fails

@@ -418,6 +418,67 @@ finally:
     B._MIRROR_CACHE.pop(YESWEHACK_MIRROR, None)
 
 print()
+print("Task 3c-2. one Intigriti slug resolves to ONE program, never the first entry")
+# Every Intigriti brief URL ends in "/detail". Deriving the slug from the URL
+# last segment gave "detail" for all 140 programs, and _mirror_entry's
+# endswith("/detail") then matched the first entry every time -- so hunting any
+# Intigriti program would have scanned the FIRST program's hosts, and
+# _mark_attempted("detail") would have retired all 140 at once.
+INT_MANY = [
+    {"handle": "aaa-first", "company_handle": "aaa", "name": "First",
+     "status": "open", "confidentiality_level": "public", "url":
+     "https://www.intigriti.com/programs/aaa/aaa-first/detail",
+     "min_bounty": {"value": 0}, "max_bounty": {"value": 10}, "targets": {}},
+    {"handle": "zzz-target", "company_handle": "zzz", "name": "Target",
+     "status": "open", "confidentiality_level": "public", "url":
+     "https://www.intigriti.com/programs/zzz/zzz-target/detail",
+     "min_bounty": {"value": 0}, "max_bounty": {"value": 20}, "targets": {}},
+]
+B._MIRROR_CACHE[INTIGRITI_MIRROR] = INT_MANY
+try:
+    rows = discover_intigriti(10)
+    # Compare as a set: discovery sorts by max bounty descending (zzz 20 >
+    # aaa 10), so asserting a list order here would be asserting the sort, which
+    # the section above already covers.
+    check({r.get("slug") for r in rows} == {"aaa-first", "zzz-target"},
+          "discovery publishes a real handle as slug (%s)"
+          % sorted(r.get("slug") for r in rows))
+    check(all(r.get("slug") and r["slug"] != "detail" for r in rows),
+          "no published slug is the shared /detail tail")
+
+    for handle, want_name in (("zzz-target", "Target"), ("aaa-first", "First")):
+        entry = B._mirror_entry("intigriti", handle)
+        check(entry is not None and entry["name"] == want_name,
+              "handle %-11s -> %s (not the first feed entry)"
+              % (handle, entry["name"] if entry else None))
+
+    # The literal tail every program shares must never resolve to anything.
+    check(B._mirror_entry("intigriti", "detail") is None,
+          'slug "detail" resolves to NO program (it is every program\'s tail)')
+
+    # And the URL shape still works for a manually passed program handle.
+    check(B._mirror_entry("intigriti", "zzz-target")["name"] == "Target",
+          "URL /<slug>/detail fallback resolves correctly")
+    check(B._mirror_entry("intigriti", "nope") is None,
+          "unknown slug -> None (caller sees an empty page)")
+
+    # YesWeHack: id is the URL tail and is explicit, so it must agree too.
+    B._MIRROR_CACHE[YESWEHACK_MIRROR] = [
+        {"id": "y-first", "name": "YFirst", "public": True, "disabled": False,
+         "max_bounty": 1, "targets": {}},
+        {"id": "y-second", "name": "YSecond", "public": True, "disabled": False,
+         "max_bounty": 2, "targets": {}}]
+    yrows = discover_yeswehack(10)
+    check({r.get("slug") for r in yrows} == {"y-first", "y-second"},
+          "yeswehack publishes the id as slug (%s)"
+          % sorted(r.get("slug") for r in yrows))
+    check(B._mirror_entry("yeswehack", "y-second")["name"] == "YSecond",
+          "yeswehack slug resolves to that program, not the first")
+finally:
+    B._MIRROR_CACHE.pop(INTIGRITI_MIRROR, None)
+    B._MIRROR_CACHE.pop(YESWEHACK_MIRROR, None)
+
+print()
 print("Task 3d. --platform routing reaches exactly the right scrapers")
 # Each scraper is swapped for a stub returning one tagged row, so this tests the
 # ROUTING in discover() and nothing else. Testing the real scrapers here would
