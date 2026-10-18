@@ -149,13 +149,73 @@ rotate_box() {
     printf '%s' "$n"
 }
 
+# sync_lightvela_code : ship the CURRENT working tree to the box over tar+ssh.
+#
+# WHY NOT `git pull`
+# ------------------
+# The box's origin is https://github.com/Ini-Amin/Kanca-Hub.git and it has NO
+# credentials at all — no gh, no credential.helper, no ssh key (verified
+# 2026-10-18). So `git pull` failed with "could not read Username for
+# 'https://github.com'" on EVERY run, silently (the call ends in `2>/dev/null`),
+# and the box stayed frozen at c992d14 with the old captcha_slider (b8b24f1).
+# That is why signups kept failing there while the laptop's solver was two
+# commits newer: the fix never reached the box.
+#
+# Railway never had this problem because railbox.py pushes with tar over ssh.
+# Use the same mechanism here: it needs no git credentials, ships uncommitted
+# work too, and fails loudly instead of pretending to update.
+sync_lightvela_code() {
+    echo "--- lightvela: syncing code (tar+ssh, no git creds needed) ---"
+    # Ship ONLY what the signup path needs. The repo is 1.5 GB (Sider_CAPTCHA_Solver
+    # 876M, rea 451M, reports 118M) and tar-piping all of it over the WAN hangs for
+    # minutes — measured. scripts/ is 4.9 MB and is the entire runtime surface.
+    local ex=()
+    for e in "*.pyc" "__pycache__" ".venv"; do ex+=("--exclude=$e"); done
+    if ! tar czf - "${ex[@]}" -C "$REPO/scripts" . 2>/dev/null \
+        | ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=10 "$HOST" \
+              "mkdir -p ~/Auto-FreeCF/scripts && tar xzf - -C ~/Auto-FreeCF/scripts" 2>/dev/null; then
+        echo "--- lightvela: code sync FAILED ---" >&2
+        return 1
+    fi
+    # The detector's fitted label store lives outside scripts/. Without it the
+    # solver falls back to the raw COEF curve, which is exactly the "old solver"
+    # behaviour we are trying to leave behind.
+    for f in slider_labels_store.json slider_mined.json slider_verified.json; do
+        local src="$HOME/.zcode-bridge/$f"
+        [ -f "$src" ] || continue
+        ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
+            "mkdir -p ~/.zcode-bridge" 2>/dev/null
+        scp -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+            "$src" "$HOST:.zcode-bridge/$f" 2>/dev/null \
+            && echo "--- lightvela: synced $f ---"
+    done
+    local box_sha local_sha
+    box_sha=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
+              "md5sum ~/Auto-FreeCF/scripts/captcha_slider.py 2>/dev/null | cut -d' ' -f1" 2>/dev/null)
+    local_sha=$(md5sum "$REPO/scripts/captcha_slider.py" 2>/dev/null | cut -d' ' -f1)
+    if [ -n "$box_sha" ] && [ "$box_sha" = "$local_sha" ]; then
+        echo "--- lightvela: solver in sync ($local_sha) ---"
+        return 0
+    fi
+    echo "--- lightvela: solver MISMATCH (box=${box_sha:-?} local=${local_sha:-?}) ---" >&2
+    return 1
+}
+
 farm_lightvela() {
     echo "=== $COUNT signup(s) on $HOST ==="
     # Transfer dir is persistent state, NOT /tmp: a reboot mid-run must not eat
     # pulled records (merge() only runs after the pull).
     local lvtmp="$HOME/.config/auto-freecf/lv_zai"
+    # Ship code first and refuse to run a stale solver: a farm run on the old
+    # captcha_slider just burns accounts and mail quota on captcha_failed.
+    if ! sync_lightvela_code; then
+        echo "!! lightvela is running a STALE solver; refusing to farm" >&2
+        echo "!! (fix the sync above, then re-run)" >&2
+        return 1
+    fi
     ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 "$HOST" \
-      "cd ~/Auto-FreeCF && git pull -q 2>/dev/null; mkdir -p ~/.config/auto-freecf/lv_zai; rm -f ~/.config/auto-freecf/lv_zai/*.json; \
+      "cd ~/Auto-FreeCF; mkdir -p ~/.config/auto-freecf/lv_zai; rm -f ~/.config/auto-freecf/lv_zai/*.json; \
        for i in \$(seq 1 $COUNT); do \
          echo \"--- remote signup \$i/$COUNT ---\"; \
          ZAI_MAIL_DOMAIN=$DOMAIN xvfb-run -a ~/venv/bin/python scripts/zai_signup.py \
