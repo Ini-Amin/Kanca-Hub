@@ -250,6 +250,162 @@ def _h1_handles():
     return rows
 
 
+# ── Intigriti / YesWeHack (mirror-backed) ────────────────────────────────────
+#
+# Same arkadiyt/bounty-targets-data mirror that HackerOne already reads, which
+# is why this cost almost nothing: the data is PUBLIC and STRUCTURED, so unlike
+# Bugcrowd there is no brief to render and no saved browser session to keep
+# alive. That is the whole reason get_scope() can answer for these two without
+# touching a browser at all.
+INTIGRITI_MIRROR = ("https://raw.githubusercontent.com/arkadiyt/"
+                    "bounty-targets-data/main/data/intigriti_data.json")
+YESWEHACK_MIRROR = ("https://raw.githubusercontent.com/arkadiyt/"
+                    "bounty-targets-data/main/data/yeswehack_data.json")
+
+# One download per process. Discovery and get_scope() both need the feed; a
+# second fetch would double the latency and risk the two views disagreeing
+# about a program that changed between them.
+_MIRROR_CACHE: dict = {}
+
+
+def _mirror_json(url):
+    """Parsed mirror document, cached for the life of the process."""
+    if url not in _MIRROR_CACHE:
+        try:
+            _MIRROR_CACHE[url] = _http_json(url, timeout=60)
+        except Exception:
+            # A network failure must not look like "no programs exist".
+            _MIRROR_CACHE[url] = []
+    return _MIRROR_CACHE[url]
+
+
+# Extensions that make a dotted token a filename, not a host. Intigriti lists
+# downloadable assets alongside URLs, and treating one as a host produces a seed
+# that can never resolve -- the run then looks like a clean program.
+_FILE_LABELS = frozenset((
+    "js", "css", "png", "jpg", "jpeg", "gif", "svg", "webp", "json", "txt",
+    "md", "html", "htm", "php", "asp", "aspx", "jsp", "pdf", "zip", "gz",
+    "tar", "xml", "yml", "yaml", "apk", "ipa", "exe", "dll", "mp4", "mp3",
+))
+
+
+def _host_pattern(value):
+    """Structured target value -> a host pattern, or '' when it names no host.
+
+    These feeds are not all hostnames. Intigriti writes `endpoint: "all"` for a
+    whole-asset scope and YesWeHack writes prose ("Any resource created with the
+    Outscale Cloud...") for its exclusions. Neither can be turned into a host,
+    and inventing one (mapping "all" to the apex) would claim a far wider scope
+    than the program actually granted -- so they return '' and are dropped.
+
+    A wildcard is kept as a wildcard. Flattening `*.example.com` to
+    `example.com` would silently narrow what we scan, and the reverse mistake
+    (widening an apex to its subdomains) is worse: we would report against hosts
+    the program never invited.
+    """
+    e = (value or "").strip().lower()
+    if not e or " " in e:
+        return ""  # empty, or a sentence rather than a host
+    # Regex-shaped entries (YesWeHack writes *.doctolib.(fr|de|it|com|net)).
+    # ScopeChecker._domain_matches does a literal endswith(), so such a pattern
+    # matches nothing at all -- it is dead as an allow-list entry and, worse, it
+    # is a *seed* we would hand to recon as target, where it cannot resolve.
+    # Dropping it loses a scope we could never have used anyway, and it is the
+    # fail-closed direction: under-scanning, never over-scanning.
+    if any(ch in e for ch in "()[]{}|"):
+        return ""
+    host = _host_of(e)
+    if not host or "." not in host or " " in host:
+        return ""
+    if host.startswith("*.") and "." in host[2:]:
+        return host
+    if _is_placeholder_host(host):
+        return ""
+    if host.rsplit(".", 1)[-1] in _FILE_LABELS:
+        return ""
+    return host
+
+
+def _hosts_from_targets(platform, targets):
+    """(in_scope, out_of_scope) host patterns from a structured target block."""
+    ins, outs = [], []
+    block = targets if isinstance(targets, dict) else {}
+    for want, key in ((ins, "in_scope"), (outs, "out_of_scope")):
+        for t in block.get(key) or []:
+            if not isinstance(t, dict):
+                continue
+            # Intigriti names the asset `endpoint`; YesWeHack names it `target`.
+            raw = t.get("endpoint") if platform == "intigriti" else t.get("target")
+            p = _host_pattern(raw)
+            if p and p not in want:
+                want.append(p)
+    return ins, outs
+
+
+def discover_intigriti(limit=25):
+    """Intigriti's public program directory, keyless, reward-sorted."""
+    out = []
+    for e in _mirror_json(INTIGRITI_MIRROR):
+        if not isinstance(e, dict):
+            continue
+        if (e.get("status") or "").lower() != "open":
+            continue
+        # Anything not explicitly public is a private/VDP-confidential program
+        # we cannot enumerate.
+        if (e.get("confidentiality_level") or "public").lower() != "public":
+            continue
+        mx = (e.get("max_bounty") or {}).get("value") or 0
+        out.append({
+            "platform": "intigriti",
+            "name": (e.get("name") or e.get("handle") or "").strip(),
+            "brief": e.get("url") or "",
+            "min": (e.get("min_bounty") or {}).get("value", ""),
+            "max": mx,
+            "industry": "",
+            "type": "",
+        })
+    out.sort(key=lambda r: _money(r["max"]) or 0, reverse=True)
+    return out[:limit]
+
+
+def discover_yeswehack(limit=25):
+    """YesWeHack's public program directory, keyless, reward-sorted."""
+    out = []
+    for e in _mirror_json(YESWEHACK_MIRROR):
+        if not isinstance(e, dict):
+            continue
+        if not e.get("public") or e.get("disabled"):
+            continue
+        pid = (e.get("id") or "").strip()
+        if not pid:
+            continue
+        out.append({
+            "platform": "yeswehack",
+            "name": (e.get("name") or pid).strip(),
+            "brief": f"https://yeswehack.com/programs/{pid}",
+            "min": _money(e.get("min_bounty")),
+            "max": _money(e.get("max_bounty")),
+            "industry": "",
+            "type": "",
+        })
+    out.sort(key=lambda r: _money(r["max"]) or 0, reverse=True)
+    return out[:limit]
+
+
+def discover(platform, limit=25):
+    """Candidates for any single platform. 'both'/'all' mean every one we have."""
+    rows = []
+    if platform in ("bugcrowd", "both", "all"):
+        rows += discover_bugcrowd(limit)
+    if platform in ("hackerone", "both", "all"):
+        rows += discover_hackerone(limit)
+    if platform in ("intigriti", "all"):
+        rows += discover_intigriti(limit)
+    if platform in ("yeswehack", "all"):
+        rows += discover_yeswehack(limit)
+    return rows
+
+
 def _h1_graphql(query, timeout=45):
     """POST to HackerOne's PUBLIC GraphQL endpoint. No token required.
 
@@ -295,11 +451,7 @@ def h1_scope(handle, limit=200):
 
 
 def cmd_discover(a):
-    rows = []
-    if a.platform in ("bugcrowd", "both"):
-        rows += discover_bugcrowd(a.limit)
-    if a.platform in ("hackerone", "both"):
-        rows += discover_hackerone(a.limit)
+    rows = discover(a.platform, a.limit)
     if not rows:
         print("no candidates")
         return
@@ -434,12 +586,43 @@ def parse_scope(text):
     return dedupe(ins), dedupe(outs)
 
 
+def _mirror_entry(platform, slug):
+    """The mirror document for one Intigriti/YesWeHack program handle."""
+    url = INTIGRITI_MIRROR if platform == "intigriti" else YESWEHACK_MIRROR
+    for e in _mirror_json(url):
+        if not isinstance(e, dict):
+            continue
+        if platform == "intigriti":
+            # Both handle and company_handle identify a program; abh_hunt keeps
+            # the detail-page tail, which is the program handle.
+            if slug in (e.get("handle"), e.get("company_handle")):
+                return e
+            if (e.get("url") or "").rstrip("/").endswith("/" + slug):
+                return e
+        else:
+            if slug == (e.get("id") or ""):
+                return e
+    return None
+
+
 def get_scope(platform, program):
     """(in_scope, out_of_scope, page_text).
 
     page_text is returned so callers can tell "session expired" (empty page)
     from "program really lists nothing" (page rendered, no target tables).
     """
+    # Mirror-backed platforms: the scope is already structured JSON, so there is
+    # nothing to render and no browser session to depend on. Returning the raw
+    # entry as `page_text` keeps the contract callers rely on -- a non-empty page
+    # means "the program really lists nothing" rather than "session expired",
+    # which is what cmd_scope/abh_hunt key off.
+    if platform in ("intigriti", "yeswehack"):
+        entry = _mirror_entry(platform, program)
+        if not entry:
+            return [], [], ""
+        ins, outs = _hosts_from_targets(platform, entry.get("targets"))
+        return ins, outs, json.dumps(entry, indent=1)
+
     url = program
     if not url.startswith("http"):
         url = "https://bugcrowd.com/engagements/" + url.strip("/")
@@ -1192,7 +1375,9 @@ def cmd_auto(a):
     from notify import send
 
     worked = _worked_programs(a.platform)
-    cands = discover_bugcrowd(a.limit if a.platform == "bugcrowd" else max(a.limit, 40))
+    # Was hardcoded to discover_bugcrowd regardless of --platform, so any other
+    # platform silently dispatched over Bugcrowd candidates.
+    cands = discover(a.platform, a.limit if a.platform == "bugcrowd" else max(a.limit, 40))
     if a.min_reward:
         def money(v):
             dg = "".join(ch for ch in str(v) if ch.isdigit())
@@ -1327,10 +1512,10 @@ def main():
     ap = argparse.ArgumentParser(prog="bounty_run.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
     ds = sub.add_parser("discover")
-    ds.add_argument("--platform", default="both", choices=["bugcrowd", "hackerone", "both"])
+    ds.add_argument("--platform", default="both", choices=["bugcrowd", "hackerone", "intigriti", "yeswehack", "both", "all"])
     ds.add_argument("--limit", type=int, default=25)
     sc = sub.add_parser("scope")
-    sc.add_argument("--platform", default="bugcrowd", choices=["bugcrowd", "hackerone"])
+    sc.add_argument("--platform", default="bugcrowd", choices=["bugcrowd", "hackerone", "intigriti", "yeswehack", "both", "all"])
     sc.add_argument("--program", required=True, help="brief URL or Bugcrowd slug")
     sc.add_argument("--json", action="store_true")
     n = sub.add_parser("new")
@@ -1352,7 +1537,7 @@ def main():
     rm.add_argument("stage", choices=["dispatch", "triage"])
     rm.add_argument("id")
     au = sub.add_parser("auto")
-    au.add_argument("--platform", default="bugcrowd", choices=["bugcrowd"])
+    au.add_argument("--platform", default="bugcrowd", choices=["bugcrowd", "hackerone", "intigriti", "yeswehack"])
     au.add_argument("--limit", type=int, default=12, help="candidates to consider")
     au.add_argument("--max-programs", type=int, default=3, help="programs to actually work")
     au.add_argument("--min-reward", type=int, default=0, help="skip programs below this max reward")
