@@ -32,11 +32,23 @@ Environment=BOUNTY_REMOTE=1
 # Tell bounty_platform.py which interpreter has camoufox, so the browser child
 # does not depend on the legacy laptop venv path.
 Environment=BOUNTY_PY=/root/.local/share/auto-freecf/venv/bin/python
-ExecStart=/usr/bin/python3 /root/Auto-FreeCF/scripts/bounty_run.py auto \
+# Agentic-Bug-Hunter is the hunt engine. bounty_run.py still owns discovery and
+# scope parsing (keyless feed, saved session, specificity rules), but its recon
+# was a fixed subfinder/httpx/nuclei pipeline with no reasoning about what it
+# found. ABH runs a 9-phase recon, enforces its own ScopeChecker on every
+# outbound request, and drives a ReAct loop. abh_hunt.py is the bridge: it takes
+# the scope bounty_run.py parsed and passes it to ABH as -d/-x, so the two halves
+# each do what they are best at.
+Environment=ABH_DIR=/root/Agentic-Bug-Hunter
+Environment=ABH_ENV=/root/abh.env
+# ABH's brain is the local 9router. --hours is the per-program wall clock and
+# --steps caps the ReAct loop, so a single wedged program cannot eat the run.
+ExecStart=/usr/bin/python3 /root/Auto-FreeCF/scripts/abh_hunt.py \
     --platform bugcrowd \
     --limit 12 \
     --max-programs 2 \
-    --min-reward 0
+    --hours 0.5 \
+    --steps 10
 
 # A single program can legitimately take 20+ minutes (passive subfinder, scope
 # parse, httpx, nuclei, then triage). Two hours bounds the whole run without
