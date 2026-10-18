@@ -190,6 +190,54 @@ python3 scripts/bounty_run.py discover --platform all --limit 5
 python3 tests/test_bounty_scope.py
 ```
 
+**Status: COMPLETE.** All four required providers (HackerOne, Bugcrowd,
+Intigriti, YesWeHack) discover and produce scope.
+
+The implementation cost almost nothing because the **same
+`arkadiyt/bounty-targets-data` mirror HackerOne already reads** carries
+`intigriti_data.json` (140 programs) and `yeswehack_data.json` (55). That
+changes one thing that mattered: the data is **public and structured**, so
+unlike Bugcrowd there is no brief to render and no saved browser session to keep
+alive — `get_scope()` answers for these two entirely offline, and a program's
+scope is real JSON fields rather than prose that has to be parsed.
+
+`discover(platform, limit)` is now the single entry point; `cmd_discover`,
+`cmd_dispatch` and `abh_hunt.py` all route through it. `cmd_dispatch` was
+**hardcoded to `discover_bugcrowd` regardless of `--platform`**, so any non-
+Bugcrowd choice silently dispatched over Bugcrowd candidates.
+
+**Where the scope data is honest and where it is not.** These feeds contain
+entries that are not hostnames, and every one of them is *dropped* rather than
+approximated:
+
+| Feed entry | Handling | Why |
+|---|---|---|
+| `endpoint: "all"` (Intigriti whole-asset scope) | dropped | Mapping `all` → the apex would claim a far wider scope than the program granted |
+| Prose (`"Any resource created with the Outscale Cloud…"`) | dropped | Not a hostname; there is no defensible host to derive |
+| `*.doctolib.(fr\|de\|it\|com\|net)` regex alternation | dropped | `ScopeChecker._domain_matches` does a literal `endswith()`, so it matches **nothing** — dead as an allow-list entry *and* an unresolvable seed as `seeds[0]` |
+| `10.0.0.0/8` CIDR | dropped | Not a hostname; ABH cannot resolve or recon it |
+| `moment.js`, `report.pdf` | dropped | Downloadable assets listed as targets |
+
+Each drop is the fail-closed direction — under-scanning, never over-scanning —
+and a program whose only targets are dropped ends up with **no seed** (which the
+caller reports) rather than a seed recon could not resolve. Wildcards are
+**preserved as wildcards**: flattening `*.example.com` to `example.com` would
+narrow what we scan, and widening an apex to its subdomains would scan hosts the
+program never invited.
+
+Also: `get_scope()` for an unknown handle returns `([], [], "")` — the same
+"empty page" signal `cmd_scope`/`abh_hunt` use for *session expired*. It must not
+look like a program that legitimately lists no targets, or a mistyped slug would
+be read as a scoped-but-empty program.
+
+**Verified:** `bounty_run.py discover --platform all --limit 5` returns all four
+platforms reward-sorted (exit 0). `tests/test_bounty_scope.py` **102 OK / 0
+FAIL** — up from 62 assertions; the new sections cover `_host_pattern` shapes,
+both target key spellings, discovery filtering/sorting, `--platform` routing
+(scrappers stubbed so the test cannot make network calls), cache reuse with a
+fetch counter proving **0 mirror fetches**, unknown-handle semantics, and a
+mirror fetch failure reading as "empty", not as an exception.
+
 ---
 
 ### TASK 4: Upgrade `gigs_api.py` (`:8795`) to Drive ABH Sessions & Wire into `grok-bot`

@@ -804,7 +804,8 @@ def gate_findings(session_file: str, target: str, program: str = "",
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="24/7 hunt loop: bounty_run discovery + ABH engine")
-    ap.add_argument("--platform", default="bugcrowd", choices=["bugcrowd", "hackerone", "both"])
+    ap.add_argument("--platform", default="bugcrowd",
+                    choices=["bugcrowd", "hackerone", "intigriti", "yeswehack", "both", "all"])
     ap.add_argument("--limit", type=int, default=12, help="candidates to consider from the feed")
     ap.add_argument("--max-programs", type=int, default=2, help="programs to actually hunt")
     ap.add_argument("--min-reward", type=int, default=0, help="skip programs below this max reward")
@@ -819,10 +820,9 @@ def main() -> int:
 
     worked = B._worked_programs(a.platform)
     cands = []
-    if a.platform in ("bugcrowd", "both"):
-        cands += B.discover_bugcrowd(a.limit)
-    if a.platform in ("hackerone", "both"):
-        cands += B.discover_hackerone(a.limit)
+    # One call per platform is now handled by B.discover(), which also knows
+    # about intigriti/yeswehack and about the "all" alias.
+    cands += B.discover(a.platform, a.limit)
     if a.min_reward:
         def money(v):
             return int("".join(ch for ch in str(v) if ch.isdigit()) or 0)

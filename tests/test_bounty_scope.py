@@ -11,6 +11,10 @@ from pathlib import Path
 # (laptop, blu, a CI box) instead of only /home/amen/Auto-FreeCF.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from bounty_run import parse_scope, host_in_scope, filter_hosts, _scannable, scope_warnings
+import bounty_run as B
+from bounty_run import (INTIGRITI_MIRROR, YESWEHACK_MIRROR, _host_pattern,
+                        _hosts_from_targets, discover, discover_intigriti,
+                        discover_yeswehack, get_scope)
 
 fails = 0
 
@@ -245,6 +249,228 @@ for host, want in (("bitso.com", True), ("api.bitso.com", True),
                    ("sandbox.bitso.com", False), ("x.sandbox.bitso.com", False)):
     got, _ = host_in_scope(host, ["bitso.com"], ["sandbox.bitso.com"])
     check(got == want, "specificity: narrow deny %-22s -> %s" % (host, want))
+
+
+# ---------- Task 3: Intigriti / YesWeHack (mirror-backed) ----------
+# Both feeds come from the same arkadiyt mirror HackerOne already reads, so they
+# are PUBLIC and STRUCTURED -- no brief to render, no browser session. These
+# tests seed _MIRROR_CACHE with canned documents and swap _http_json for a
+# counter, so they prove the functions never go near the network *and* that a
+# failed fetch cannot masquerade as "this platform has no programs".
+
+# --- _host_pattern: what counts as a host, and what must be dropped ---
+HP = [
+    ("https://api.example.com/v1",      "api.example.com", "URL -> host, path dropped"),
+    ("*.example.com",                   "*.example.com",   "wildcard kept, not flattened to apex"),
+    ("example.com",                     "example.com",     "apex stays an apex"),
+    ("cdn.sub.example.com",             "cdn.sub.example.com", "subdomain kept as-is"),
+    ("all",                             "",                "Intigriti \"all\" is not a host"),
+    ("Any resource created with the Outscale Cloud", "",
+                                        "YesWeHack prose is not a host"),
+    ("moment.js",                       "",                "filename is not a host"),
+    ("report.pdf",                      "",                "downloadable asset is not a host"),
+    ("*.doctolib.(fr|de|it|com|net)",   "",                "regex alternation can never suffix-match"),
+    ("10.0.0.0/8",                      "",                "CIDR is not a hostname"),
+    ("localhost",                       "",                "no dot -> not a routable host"),
+    ("",                                "",                "empty is empty"),
+]
+print("Task 3a. _host_pattern only yields literal, resolvable hosts")
+for value, want, why in HP:
+    got = _host_pattern(value)
+    check(got == want, "%-42s -> %-24r %s" % (value[:42], got, why))
+
+# A wildcard must NOT be widened to its apex (that claims subdomains the program
+# never granted) and an apex must NOT be widened to its subdomains (same error).
+check(_host_pattern("*.example.com") != "example.com",
+      "wildcard is not silently flattened to the apex")
+
+print()
+print("Task 3b. structured targets -> in/out host lists, both key spellings")
+INT_TARGETS = {
+    "in_scope": [{"type": "url", "endpoint": "https://api.dropboxapi.com/"},
+                 {"type": "url", "endpoint": "all"},
+                 {"type": "url", "endpoint": "www.dropbox.com"},
+                 "not-a-dict"],
+    "out_of_scope": [{"type": "url", "endpoint": "community.dropbox.com"}],
+}
+ins, outs = _hosts_from_targets("intigriti", INT_TARGETS)
+check(ins == ["api.dropboxapi.com", "www.dropbox.com"],
+      "intigriti uses `endpoint`, drops \"all\" and junk (%s)" % ins)
+check(outs == ["community.dropbox.com"], "intigriti out-of-scope extracted (%s)" % outs)
+
+YWH_TARGETS = {
+    "in_scope": [{"target": "https://app.example.com/", "type": "web-application"},
+                 {"target": "*.example.com", "type": "web-application"}],
+    "out_of_scope": [{"target": "store.example.com", "type": "other"}],
+}
+ins, outs = _hosts_from_targets("yeswehack", YWH_TARGETS)
+check(ins == ["app.example.com", "*.example.com"],
+      "yeswehack uses `target` (%s)" % ins)
+check(outs == ["store.example.com"], "yeswehack out-of-scope extracted (%s)" % outs)
+check(_hosts_from_targets("intigriti", None) == ([], []),
+      "missing targets block is not an error")
+check(_hosts_from_targets("intigriti", "garbage") == ([], []),
+      "non-dict targets block is not an error")
+
+print()
+print("Task 3c. discovery filters and reward sort")
+INT_DOC = [
+    {"handle": "pay", "name": "Pay Co", "status": "open",
+     "confidentiality_level": "public",
+     "url": "https://www.intigriti.com/programs/pay/pay/detail",
+     "min_bounty": {"value": 100}, "max_bounty": {"value": 5000}, "targets": {}},
+    {"handle": "closed", "name": "Closed", "status": "closed",
+     "confidentiality_level": "public", "url": "",
+     "max_bounty": {"value": 99999}, "targets": {}},
+    {"handle": "secret", "name": "Confidential", "status": "open",
+     "confidentiality_level": "confidential", "url": "",
+     "max_bounty": {"value": 99999}, "targets": {}},
+    {"handle": "rich", "name": "Rich Co", "status": "open",
+     "confidentiality_level": "public",
+     "url": "https://www.intigriti.com/programs/rich/rich/detail",
+     "min_bounty": {"value": 50}, "max_bounty": {"value": 50000}, "targets": {}},
+    "junk-not-a-dict",
+]
+YWH_DOC = [
+    {"id": "live", "name": "Live", "public": True, "disabled": False,
+     "min_bounty": 10, "max_bounty": 1000, "targets": {}},
+    {"id": "hidden", "name": "Hidden", "public": False, "disabled": False,
+     "max_bounty": 99999, "targets": {}},
+    {"id": "off", "name": "Off", "public": True, "disabled": True,
+     "max_bounty": 99999, "targets": {}},
+    {"name": "NoId", "public": True, "disabled": False,
+     "max_bounty": 99999, "targets": {}},
+]
+
+B._MIRROR_CACHE[INTIGRITI_MIRROR] = INT_DOC
+B._MIRROR_CACHE[YESWEHACK_MIRROR] = YWH_DOC
+
+# A mirror fetch from here on is a BUG, not a fallback: both documents are
+# already in the cache, so going back to the network would mean the cache path
+# is broken. Any other feed (bugcrowd/hackerone) answers empty -- this test
+# reads none of them, and an empty reply keeps those scrapers off the wire too.
+_MIRROR_CALLS = {"n": 0}
+_real_http_json = B._http_json
+
+
+def _guard_mirror_fetch(*a, **k):
+    url = a[0] if a else k.get("url")
+    if url in (INTIGRITI_MIRROR, YESWEHACK_MIRROR):
+        _MIRROR_CALLS["n"] += 1
+        raise AssertionError("mirror fetch attempted: %r" % (url,))
+    return {}
+
+
+B._http_json = _guard_mirror_fetch
+try:
+    int_rows = discover_intigriti(10)
+    ywh_rows = discover_yeswehack(10)
+
+    check([r["name"] for r in int_rows] == ["Rich Co", "Pay Co"],
+          "intigriti: open+public only, reward-sorted desc (%s)"
+          % [r["name"] for r in int_rows])
+    check(all(r["platform"] == "intigriti" for r in int_rows),
+          "intigriti rows carry the platform tag")
+    check(int_rows[0]["brief"].endswith("/rich/rich/detail"),
+          "intigriti brief is the program detail URL")
+    check(int_rows[0]["max"] == 50000, "intigriti max bounty kept numeric")
+    check([r["name"] for r in ywh_rows] == ["Live"],
+          "yeswehack: public, enabled, id present (%s)"
+          % [r["name"] for r in ywh_rows])
+    check(ywh_rows[0]["brief"] == "https://yeswehack.com/programs/live",
+          "yeswehack brief is built from the id")
+
+    # Scope for known handles, straight from the seeded cache.
+    i_ins, i_outs, i_page = get_scope("intigriti", "rich")
+    check(len(i_page) > 0,
+          "intigriti scope returns page_text (%d bytes) so callers can tell "
+          "\"lists nothing\" from \"session expired\"" % len(i_page))
+    y_ins, y_outs, y_page = get_scope("yeswehack", "live")
+    check(len(y_page) > 0, "yeswehack scope returns page_text (%d bytes)" % len(y_page))
+
+    # An unknown handle must be indistinguishable from "page came back empty" --
+    # that is the signal cmd_scope/abh_hunt key off to say session-expired. It
+    # must NOT look like a program that legitimately lists no targets, or a
+    # typo'd slug would be read as a scoped-but-empty program.
+    n_ins, n_outs, n_page = get_scope("intigriti", "does-not-exist")
+    check((n_ins, n_outs, n_page) == ([], [], ""),
+          "unknown handle -> empty page, not a fake empty scope")
+
+    # A program whose only targets are regex/prose/CIDR yields NO seed rather
+    # than one recon could not resolve -- and its page still renders, so the
+    # caller can see the program exists but exposes no enumerable host.
+    B._MIRROR_CACHE[YESWEHACK_MIRROR] = [
+        {"id": "weird", "name": "Weird", "public": True, "disabled": False,
+         "max_bounty": 100,
+         "targets": {"in_scope": [{"target": "*.weird.(fr|de)"},
+                                  {"target": "Any resource in our cloud"},
+                                  {"target": "10.0.0.0/8"}]}}]
+    w_ins, _, w_page = get_scope("yeswehack", "weird")
+    check(w_ins == [] and len(w_page) > 0,
+          "regex/prose/CIDR-only scope -> no seed, page still rendered (%s)" % w_ins)
+    B._MIRROR_CACHE[YESWEHACK_MIRROR] = YWH_DOC
+
+    check(_MIRROR_CALLS["n"] == 0,
+          "discovery + scope served from cache, 0 mirror fetches")
+finally:
+    B._http_json = _real_http_json
+    B._MIRROR_CACHE.pop(INTIGRITI_MIRROR, None)
+    B._MIRROR_CACHE.pop(YESWEHACK_MIRROR, None)
+
+print()
+print("Task 3d. --platform routing reaches exactly the right scrapers")
+# Each scraper is swapped for a stub returning one tagged row, so this tests the
+# ROUTING in discover() and nothing else. Testing the real scrapers here would
+# mean network calls and a dependency on three third-party feeds staying up.
+_real_scrapers = (B.discover_bugcrowd, B.discover_hackerone,
+                  B.discover_intigriti, B.discover_yeswehack)
+
+
+def _stub(plat):
+    return lambda limit=25: [{"platform": plat, "name": plat,
+                              "min": "", "max": 0, "brief": ""}]
+
+
+B.discover_bugcrowd = _stub("bugcrowd")
+B.discover_hackerone = _stub("hackerone")
+B.discover_intigriti = _stub("intigriti")
+B.discover_yeswehack = _stub("yeswehack")
+try:
+    def plats(value):
+        return [r["platform"] for r in discover(value, 5)]
+
+    check(plats("both") == ["bugcrowd", "hackerone"],
+          '"both" is still exactly bugcrowd+hackerone, not two new feeds (%s)'
+          % plats("both"))
+    check(plats("all") == ["bugcrowd", "hackerone", "intigriti", "yeswehack"],
+          '"all" reaches every platform (%s)' % plats("all"))
+    check(plats("intigriti") == ["intigriti"],
+          '"intigriti" reaches only intigriti')
+    check(plats("yeswehack") == ["yeswehack"],
+          '"yeswehack" reaches only yeswehack')
+    check(plats("bugcrowd") == ["bugcrowd"],
+          '"bugcrowd" unchanged')
+    check(discover("nothing-else", 5) == [], "unknown platform returns nothing")
+finally:
+    (B.discover_bugcrowd, B.discover_hackerone,
+     B.discover_intigriti, B.discover_yeswehack) = _real_scrapers
+
+print()
+print("Task 3e. a mirror fetch failure must not read as \"no programs\"")
+B._MIRROR_CACHE.pop(INTIGRITI_MIRROR, None)
+_real_http_json = B._http_json
+B._http_json = _guard_mirror_fetch  # raises on the mirror URL -> except branch
+try:
+    check(discover_intigriti(5) == [],
+          "fetch failure -> empty list, not an exception")
+    check(get_scope("intigriti", "anything") == ([], [], ""),
+          "fetch failure -> empty page, not a fabricated scope")
+    check(discover_yeswehack(5) == [],
+          "second mirror failing the same way is equally non-fatal")
+finally:
+    B._http_json = _real_http_json
+    B._MIRROR_CACHE.pop(INTIGRITI_MIRROR, None)
+    B._MIRROR_CACHE.pop(YESWEHACK_MIRROR, None)
 
 print()
 print("RESULT:", "ALL PASS" if fails == 0 else "%d FAILURES" % fails)
