@@ -16,14 +16,42 @@ No credentials are ever stored by this script — only the browser profile
 """
 import argparse
 import asyncio
+import importlib.util
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 HOME = Path.home()
 SESS = HOME / ".config" / "auto-freecf" / "sessions"
-VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
+
+# Which interpreter runs the camoufox child.
+#
+# WHY THIS IS NOT A CONSTANT ANY MORE: the old value was a hardcoded laptop path
+# (`~/.local/share/auto-freecf/venv/bin/python`). On any other box that path does
+# not exist, so `subprocess.run` raised FileNotFoundError *before* the browser
+# ever started — and because bounty_run.py's _render_text() discards stderr and
+# returns "" on a non-zero exit, the pipeline reported "empty page - session
+# expired? re-login bugcrowd" for every program. That is a perfect false
+# diagnosis: it blames a login that was never used, and it looks like a session
+# problem rather than a missing interpreter.
+#
+# Resolution order, first hit wins:
+#   1. $BOUNTY_PY        explicit override (set it in a unit to pin an env)
+#   2. this interpreter  if it can already import camoufox
+#   3. the legacy venv   for boxes that already have the old layout
+def _pick_python() -> Path:
+    env = os.environ.get("BOUNTY_PY")
+    if env:
+        return Path(env)
+    if importlib.util.find_spec("camoufox") is not None:
+        return Path(sys.executable)
+    legacy = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
+    return legacy
+
+
+VENV_PY = _pick_python()
 
 PLATFORMS = {
     "bugcrowd": {"login": "https://bugcrowd.com/user/sign_in",
@@ -60,7 +88,17 @@ async def main():
             print("LOGIN-TIMEOUT", flush=True)
             return
         await page.wait_for_timeout(8000)
-        print((await page.inner_text("body"))[:6000], flush=True)
+        # Print the FULL body text, not a fixed prefix.
+        #
+        # This used to be [:6000]. The Targets table sits BELOW the program
+        # description, and long descriptions (OpenAI Safety's is several
+        # paragraphs) pushed the table past character 6000. parse_scope() then
+        # found no "In Scope"/"Out of Scope" cards and auto reported
+        # "page rendered but no in-scope targets parsed - layout change?" and
+        # retired the program. The page had rendered perfectly; we had simply
+        # truncated it. Print everything and let the caller decide what to parse.
+        text = await page.inner_text("body")
+        print(text, flush=True)
 asyncio.run(main())
 """
 
@@ -72,10 +110,21 @@ def run_cfg(cfg):
         json.dump(cfg, f)
         path = f.name
     runner = Path("/tmp/opencode/bp_runner.py")
+    runner.parent.mkdir(parents=True, exist_ok=True)
     runner.write_text(RUNNER)
-    p = subprocess.run([str(VENV_PY), str(runner), path],
-                       capture_output=True, text=True, timeout=int(cfg.get("timeout", 700)))
-    return p.returncode, (p.stdout or "")[-8000:], (p.stderr or "")[-500:]
+    try:
+        p = subprocess.run([str(VENV_PY), str(runner), path],
+                           capture_output=True, text=True, timeout=int(cfg.get("timeout", 700)))
+    except FileNotFoundError as e:
+        # Say what actually broke. Swallowing this turned a missing interpreter
+        # into "session expired" on every program, which sent us chasing logins.
+        return 127, "", "interpreter not found: %s (set BOUNTY_PY)" % e.filename
+    # Do NOT truncate stdout. This was `p.stdout[-8000:]`, which kept only the
+    # TAIL of the rendered page — the nav and program header are at the top, the
+    # Targets table follows the description, so a tail slice silently dropped the
+    # very thing parse_scope() needs and the caller concluded "layout change".
+    # Page text is data; pass all of it through.
+    return p.returncode, (p.stdout or ""), (p.stderr or "")[-800:]
 
 
 def cmd_login(a):

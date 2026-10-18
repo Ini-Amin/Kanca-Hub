@@ -45,6 +45,21 @@ CveDB = HOME / ".config" / "auto-freecf" / "cve.db"
 R9 = os.environ.get("BOUNTY_R9_BASE", "http://127.0.0.1:20128/v1")
 BOX = os.environ.get("BOUNTY_BOX", "blu")
 
+# PATH prefix for the recon tools, resolved HERE in Python rather than written as
+# "$HOME/go/bin" inside the shell snippet.
+#
+# WHY: under a systemd *system* unit there is no HOME in the environment, so
+# `export PATH="$HOME/go/bin:$HOME/.local/bin:$PATH"` expands to
+# `/go/bin:/.local/bin:/usr/...` — directories that do not exist. subfinder,
+# httpx and nuclei then resolve to "command not found", and because phase A
+# redirects subfinder's stderr to /dev/null the failure is completely silent:
+# the pipeline reported "gate 1: 0 discovered, 0 in scope, 0 rejected" and
+# marked real programs recon-empty. Path.home() in the parent process still
+# resolves correctly (it falls back to the passwd entry for the uid), so we
+# build the prefix once, here, and pass the literal path to the shell.
+TOOLPATH = "export PATH=\"%s:%s:%s\"; " % (
+    HOME / "go" / "bin", HOME / ".local" / "bin", os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"))
+
 PLANNER = os.environ.get("BOUNTY_PLANNER", "cbai/deepseek-v4.1-flash")
 DRAFTER = os.environ.get("BOUNTY_DRAFTER", "Zcode/GLM-5.3")
 CHALLENGERS = os.environ.get(
@@ -114,11 +129,24 @@ def _http_json(url, timeout=40):
 
 
 def _render_text(platform, url, timeout=220):
-    """Rendered body text via bounty_platform.py (camoufox, reuses the saved session)."""
+    """Rendered body text via bounty_platform.py (camoufox, reuses the saved session).
+
+    Returns "" on failure, but SAYS WHY on stderr. The old version returned ""
+    for any non-zero exit with no explanation, so a missing interpreter, a
+    crashed browser and an expired cookie all looked identical from the caller —
+    and the caller blamed the session every time ("empty page - session expired?
+    re-login bugcrowd"). That cost real time: the actual cause was that the
+    camoufox venv path did not exist on this box at all.
+    """
     p = subprocess.run([sys.executable, str(HERE / "bounty_platform.py"),
                         "fetch", "--platform", platform, "--url", url],
                        capture_output=True, text=True, timeout=timeout)
-    return (p.stdout or "") if p.returncode == 0 else ""
+    if p.returncode != 0:
+        err = (p.stderr or "").strip().splitlines()
+        print("  render failed (rc=%d): %s" % (p.returncode, err[-1] if err else "no stderr"),
+              file=sys.stderr)
+        return ""
+    return p.stdout or ""
 
 
 def discover_bugcrowd(limit=25):
@@ -427,6 +455,34 @@ def _host_of(entry):
     return e.strip(".")
 
 
+def _is_placeholder_host(host):
+    """True if the host contains a scope placeholder instead of a real label.
+
+    Bugcrowd programs routinely write templated assets like
+    `bugcrowd-pam-###.oktapreview.com` or `*.{customer}.example.com`, meaning
+    "any tenant number here". Those are NOT enumerable: subfinder cannot resolve
+    a pattern, so feeding one in produces zero subdomains and the run looks like
+    a clean program. Worse, the naive host normaliser turned
+    `bugcrowd-pam-###.oktapreview.com` into the literal seed `bugcrowd-pam-`,
+    which is not even a domain.
+
+    Anything still containing a template marker after normalisation is skipped as
+    a seed. It stays in the in-scope list, so discovered hosts are still judged
+    against it — we simply cannot *enumerate* from it.
+    """
+    if not host:
+        return True
+    if any(tok in host for tok in ("###", "{", "}", "<", ">", "*", "$")):
+        return True
+    # A host with no dot, or ending in a hyphen/underscore, is a truncated
+    # template (e.g. "bugcrowd-pam-") rather than a registrable domain.
+    if "." not in host or host.endswith(("-", "_")):
+        return True
+    # Needs a plausible TLD: last label at least two alphabetic chars.
+    tld = host.rsplit(".", 1)[-1]
+    return not (len(tld) >= 2 and tld.isalpha())
+
+
 def _matches(host, pattern, include_apex=False):
     """Glob-ish host match.
 
@@ -448,23 +504,66 @@ def _matches(host, pattern, include_apex=False):
     return host == pattern or host.endswith("." + pattern)
 
 
-def host_in_scope(host, in_scope, out_of_scope):
-    """Fail-closed: deny wins, and anything unmatched is OUT.
+def _specificity(pattern):
+    """How specific a scope pattern is, as a label count (higher = narrower).
 
-    Returns (allowed: bool, reason: str).
+    'launchdarkly.com'            -> 2
+    '*.launchdarkly.com'          -> 2   (same subtree as the apex deny)
+    'app.launchdarkly.com'        -> 3
+    """
+    p = _host_of(pattern)
+    if p.startswith("*."):
+        p = p[2:]
+    return len([x for x in p.split(".") if x])
+
+
+def host_in_scope(host, in_scope, out_of_scope):
+    """Fail-closed scope decision: MOST SPECIFIC RULE WINS, ties deny.
+
+    Why not "deny always wins": Bugcrowd briefs routinely carve specific assets
+    out of a broad deny. LaunchDarkly lists `launchdarkly.com` (apex), `blog.`,
+    `status.` and `sandbox.` as OUT of scope, then lists `app.`, `events.`,
+    `stream.` and `docs.` as IN. With a blanket "any matching deny wins", the
+    apex deny matched `app.launchdarkly.com` via the `host.endswith("." + pat)`
+    rule, so every explicitly in-scope asset was rejected and the program
+    reported "no scannable in-scope seed (app-store only?)" — a wrong answer
+    that silently retired a live, paying program.
+
+    The rule implemented here is the one a human reads off the brief: a narrow
+    explicit allow beats a broad deny, but a deny that is at least as specific
+    as the allow still wins. So:
+      app.launchdarkly.com  vs deny launchdarkly.com  -> allow (3 > 2)
+      blog.launchdarkly.com vs deny blog.launchdarkly.com -> deny (tie)
+      random.launchdarkly.com vs deny launchdarkly.com -> deny (no allow)
+    Unmatched hosts are still OUT, so this stays fail-closed.
     """
     h = _host_of(host)
     if not h:
         return False, "empty host"
+
+    deny_pat, deny_spec = None, -1
     for pat in out_of_scope:
         p = _host_of(pat)
         if p and _matches(h, p, include_apex=True):
-            return False, "out-of-scope %s" % pat
+            s = _specificity(p)
+            if s > deny_spec:
+                deny_pat, deny_spec = pat, s
+
+    allow_pat, allow_spec = None, -1
     for pat in in_scope:
         p = _host_of(pat)
         if p and _matches(h, p):
-            return True, "in-scope %s" % pat
-    return False, "not in scope"
+            s = _specificity(p)
+            if s > allow_spec:
+                allow_pat, allow_spec = pat, s
+
+    if deny_pat is not None and allow_pat is None:
+        return False, "out-of-scope %s" % deny_pat
+    if allow_pat is None:
+        return False, "not in scope"
+    if deny_pat is not None and deny_spec >= allow_spec:
+        return False, "out-of-scope %s (>= specificity of in-scope %s)" % (deny_pat, allow_pat)
+    return True, "in-scope %s" % allow_pat
 
 
 # Out-of-scope entries whose leading label also appears in live hostnames are a
@@ -524,6 +623,12 @@ def _scannable(targets, in_scope, out_of_scope):
             continue
         if h.startswith("*."):
             h = h[2:]
+        # A templated asset ("bugcrowd-pam-###.oktapreview.com") cannot be
+        # enumerated, and its truncated form ("bugcrowd-pam-") is not a domain.
+        # Skipping it here is what stops a wildcard-only program from silently
+        # producing "0 discovered, 0 in scope" and reading as a clean scan.
+        if _is_placeholder_host(h):
+            continue
         ok, _ = host_in_scope(h, in_scope, out_of_scope)
         if ok or (h in wildcard_bases and not any(
                 _matches(h, _host_of(p), include_apex=True) for p in out_of_scope if _host_of(p))):
@@ -579,7 +684,7 @@ def cmd_dispatch(a):
     ins, outs = job["in_scope"], job["out_of_scope"]
 
     if dry:
-        toolcheck = ("export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\"; "
+        toolcheck = (TOOLPATH +
                      "for t in subfinder httpx nuclei opengrep katana; do "
                      "command -v $t >/dev/null && echo -n \"$t \"; done; echo")
         if os.environ.get("BOUNTY_REMOTE"):
@@ -630,13 +735,20 @@ def cmd_dispatch(a):
 
     # ---- Phase A: passive enumeration only (subfinder sends no traffic to targets) ----
     roots = " ".join(seeds)
-    phase_a = ("export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\"; "
+    # `command -v subfinder` guard: if the tool is missing we must SAY so and fail.
+    # Without it, `subfinder` not being on PATH produced an empty subs_raw.txt and
+    # the run reported a clean program ("0 discovered") — the most dangerous
+    # possible output, because it looks like success.
+    phase_a = (TOOLPATH +
+               "command -v subfinder >/dev/null || { echo ---TOOLMISSING--- >&2; exit 42; }; "
                "cd /tmp && rm -rf bj && mkdir bj && cd bj; "
                "for h in %s; do subfinder -silent -d \"$h\" 2>/dev/null; done | sort -u > subs_raw.txt; "
                "echo ---SUBS---; cat subs_raw.txt; echo ---END---" % roots)
     if os.environ.get("BOUNTY_REMOTE"):
         r = subprocess.run(["sh", "-c", phase_a], capture_output=True, text=True, timeout=1500)
         raw = r.stdout or ""
+        if r.returncode:
+            sys.exit("phase A rc=%d: %s" % (r.returncode, (r.stderr or "").strip()[:300]))
     else:
         # not ssh(): that helper keeps only the last 6000 chars, which would
         # silently truncate a large subdomain list. Phase A output is data.
@@ -694,7 +806,7 @@ def cmd_dispatch(a):
     # its own timeout and writes nothing — observed as a 30-min run that produced
     # zero files. Bound nuclei itself so the pipeline always returns.
     NUCLEI_SECS = int(os.environ.get("BOUNTY_NUCLEI_SECS", "900"))
-    phase_b = (("export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\"; mkdir -p %s; cd %s; " % (wd, wd))
+    phase_b = ((TOOLPATH + "mkdir -p %s; cd %s; " % (wd, wd))
                + "httpx -silent -mc 200,201,301,302,403 -timeout 10 < allow.txt 2>/dev/null | head -80 > live.txt; "
                "timeout %d nuclei -silent -l live.txt -severity high,critical "
                "-timeout 10 -retries 1 2>/dev/null | head -60 > nuclei.txt; " % NUCLEI_SECS
@@ -950,6 +1062,63 @@ def _mark_attempted(platform, slug):
             f.write(slug + "\n")
 
 
+# Transient failures are counted, not burned.
+#
+# WHY: `_mark_attempted` used to be called BEFORE the scope fetch, so any
+# transient failure (a browser that would not start, a 502 from Bugcrowd, a
+# missing interpreter) permanently retired that program from the rotation. The
+# failure mode is silent and terminal: one bad afternoon of renders and the
+# pipeline reports "12 candidates, 12 already worked, nothing new to do"
+# forever, which looks exactly like "all the bounty programs are finished".
+# A 24/7 loop cannot afford that, so a failure only retires a program after it
+# has failed MAX_TRANSIENT times — and a genuine verdict (no scope, no seed, job
+# created, report filed) still retires it immediately.
+MAX_TRANSIENT = 3
+
+
+def _retry_path(platform):
+    return JOBS / (".retry-" + platform)
+
+
+def _bump_transient(platform, slug) -> int:
+    """Count one transient failure for `slug`; return the new count."""
+    JOBS.mkdir(parents=True, exist_ok=True)
+    p = _retry_path(platform)
+    counts = {}
+    if p.is_file():
+        for line in p.read_text().splitlines():
+            parts = line.rsplit(None, 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                counts[parts[0]] = int(parts[1])
+    counts[slug] = counts.get(slug, 0) + 1
+    p.write_text("".join("%s %d\n" % (k, v) for k, v in sorted(counts.items())))
+    return counts[slug]
+
+
+def _clear_transient(platform, slug):
+    """Forget failure counts for `slug` once it produces a real verdict."""
+    p = _retry_path(platform)
+    if not p.is_file():
+        return
+    keep = []
+    for line in p.read_text().splitlines():
+        parts = line.rsplit(None, 1)
+        if len(parts) == 2 and parts[0] != slug:
+            keep.append(line)
+    p.write_text("".join(l + "\n" for l in keep))
+
+
+def _transient_count(platform, slug) -> int:
+    p = _retry_path(platform)
+    if not p.is_file():
+        return 0
+    for line in p.read_text().splitlines():
+        parts = line.rsplit(None, 1)
+        if len(parts) == 2 and parts[0] == slug and parts[1].isdigit():
+            return int(parts[1])
+    return 0
+
+
 def _stage(fn, jid, label):
     """Run one stage, absorbing SystemExit so one bad program cannot kill the run."""
     try:
@@ -1002,14 +1171,35 @@ def cmd_auto(a):
         print("\n=== [%d/%d] %s (%s) ===" % (n, len(picked), c["name"], slug))
         line = {"program": slug, "name": c["name"], "status": "unknown", "note": ""}
         try:
-            _mark_attempted(a.platform, slug)
+            # NOTE: no _mark_attempted here. A program is only retired once it
+            # yields a real verdict (below), never merely because we tried.
             ins, outs, page = get_scope(a.platform, slug)
             if not page:
-                print("  page did not render - session expired? skipping")
-                line.update(status="no-session", note="empty page (re-login bugcrowd)")
+                # A blank render is a TRANSIENT failure, not a verdict: the
+                # browser may have died, the site may have 502'd, the login may
+                # merely be stale. Count it and retry on a later run; retire the
+                # program only after MAX_TRANSIENT such failures.
+                n_fail = _bump_transient(a.platform, slug)
+                if n_fail >= MAX_TRANSIENT:
+                    _mark_attempted(a.platform, slug)
+                    print("  page did not render (%d/%d) - retiring program"
+                          % (n_fail, MAX_TRANSIENT))
+                    line.update(status="no-session",
+                                note="empty page %d/%d, retired" % (n_fail, MAX_TRANSIENT))
+                else:
+                    print("  page did not render (%d/%d) - will retry next run"
+                          % (n_fail, MAX_TRANSIENT))
+                    line.update(status="retry",
+                                note="empty page %d/%d" % (n_fail, MAX_TRANSIENT))
                 summary.append(line)
                 continue
+            _clear_transient(a.platform, slug)
             if not ins:
+                # A rendered page with no parseable scope is a LAYOUT verdict,
+                # not a transient fault, so it retires immediately: retrying the
+                # same parser against the same page cannot produce a different
+                # answer, and leaving it in the rotation starves real programs.
+                _mark_attempted(a.platform, slug)
                 print("  page rendered but no in-scope targets parsed - layout change?")
                 line.update(status="no-scope", note="0 parsed in-scope (layout?)")
                 summary.append(line)
@@ -1018,11 +1208,13 @@ def cmd_auto(a):
             # seed only from real registrable hosts in the in-scope list
             seeds = _scannable(ins, ins, outs)
             if not seeds:
+                _mark_attempted(a.platform, slug)
                 print("  no scannable in-scope seed (app-store only?) - skipping")
                 line.update(status="no-seed", note="no scannable host")
                 summary.append(line)
                 continue
             jid, job = create_job(a.platform, slug, ins, outs, ",".join(seeds))
+            _mark_attempted(a.platform, slug)
             print("  job", jid)
             line["job"] = jid
 

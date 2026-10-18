@@ -1,0 +1,49 @@
+[Unit]
+Description=Autonomous bug-bounty pipeline on blu (discover -> scope -> dispatch -> triage -> report)
+Documentation=https://github.com/Ini-Amin/Kanca-Hub/blob/main/scripts/bounty_run.py
+
+# blu is the box that holds the models (9Router), the tooling (Drost MCP) and the
+# job store, so the hunt runs here and nowhere else. Requires= rather than
+# After= because a hunt with no router is worse than no hunt: every stage would
+# fail slowly and the Telegram digest would say "0 findings" as if the programs
+# had been tested and were clean.
+Requires=blu-9router.service
+After=blu-9router.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=BOUNTY_JOBS=/root/.config/auto-freecf/bounty
+# A system unit does not inherit HOME. Python's Path.home() still resolves (it
+# falls back to the uid's passwd entry), but any shell snippet expanding $HOME
+# gets an empty string. Set it explicitly so subfinder/nuclei caches and the
+# tool PATH land in the right place.
+Environment=HOME=/root
+Environment=PATH=/root/go/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# BOUNTY_REMOTE=1 means "the recon runs HERE, not on another box". Without it
+# bounty_run.py shells out to `ssh blu ...`, and since this unit already runs on
+# blu that resolves to sshing into itself — which fails with "Could not resolve
+# hostname blu" because the box has no ~/.ssh/config entry for its own name.
+# The symptom was subtle: scope parsing worked, a job was created, then
+# "phase A rc=255" and "gate 1: 0 discovered" reported the program as clean.
+Environment=BOUNTY_REMOTE=1
+# Tell bounty_platform.py which interpreter has camoufox, so the browser child
+# does not depend on the legacy laptop venv path.
+Environment=BOUNTY_PY=/root/.local/share/auto-freecf/venv/bin/python
+ExecStart=/usr/bin/python3 /root/Auto-FreeCF/scripts/bounty_run.py auto \
+    --platform bugcrowd \
+    --limit 12 \
+    --max-programs 2 \
+    --min-reward 0
+
+# A single program can legitimately take 20+ minutes (passive subfinder, scope
+# parse, httpx, nuclei, then triage). Two hours bounds the whole run without
+# killing a healthy one, and stops a wedged nuclei from holding the slot forever.
+TimeoutStartSec=7200
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
