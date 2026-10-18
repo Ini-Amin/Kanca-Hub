@@ -3,10 +3,22 @@
 # NOTE: upstream awarexone/Agentic-Bug-Hunter force-pushed (cd58a40 -> 40b03ee).
 # blu is deployed by scp of the individual files; this patch is the reviewable diff.
 diff --git a/bughunter/agent.py b/bughunter/agent.py
-index 20b5f36..9d46ddb 100644
+index 20b5f36..6e606d4 100644
 --- a/bughunter/agent.py
 +++ b/bughunter/agent.py
-@@ -78,6 +78,106 @@ except ImportError:
+@@ -42,8 +42,11 @@ from __future__ import annotations
+ import argparse
+ import json
+ import os
++import queue
+ import re
++import subprocess
+ import sys
++import threading
+ import time
+ import traceback
+ from datetime import datetime
+@@ -78,6 +81,106 @@ except ImportError:
      _ollama_lib = None
      _OLLAMA_OK = False
  
@@ -113,7 +125,7 @@ index 20b5f36..9d46ddb 100644
  # ── hunt.py lazy imports (avoids running main()) ───────────────────────────────
  _hunt = None
  def _h():
-@@ -136,13 +236,21 @@ TOOLS: list[dict] = [
+@@ -136,13 +239,21 @@ TOOLS: list[dict] = [
          "function": {
              "name": "run_recon",
              "description": (
@@ -137,7 +149,7 @@ index 20b5f36..9d46ddb 100644
                      "scope_lock": {
                          "type": "boolean",
                          "description": "If true, skip subdomain enum and only probe the exact target given.",
-@@ -185,18 +293,6 @@ TOOLS: list[dict] = [
+@@ -185,18 +296,6 @@ TOOLS: list[dict] = [
              },
          },
      },
@@ -156,7 +168,7 @@ index 20b5f36..9d46ddb 100644
      {
          "type": "function",
          "function": {
-@@ -224,35 +320,23 @@ TOOLS: list[dict] = [
+@@ -224,35 +323,23 @@ TOOLS: list[dict] = [
      {
          "type": "function",
          "function": {
@@ -201,7 +213,7 @@ index 20b5f36..9d46ddb 100644
              ),
              "parameters": {"type": "object", "properties": {}, "required": []},
          },
-@@ -260,11 +344,9 @@ TOOLS: list[dict] = [
+@@ -260,11 +347,9 @@ TOOLS: list[dict] = [
      {
          "type": "function",
          "function": {
@@ -215,7 +227,7 @@ index 20b5f36..9d46ddb 100644
              ),
              "parameters": {"type": "object", "properties": {}, "required": []},
          },
-@@ -272,11 +354,9 @@ TOOLS: list[dict] = [
+@@ -272,11 +357,9 @@ TOOLS: list[dict] = [
      {
          "type": "function",
          "function": {
@@ -229,7 +241,7 @@ index 20b5f36..9d46ddb 100644
              ),
              "parameters": {"type": "object", "properties": {}, "required": []},
          },
-@@ -284,11 +364,9 @@ TOOLS: list[dict] = [
+@@ -284,11 +367,9 @@ TOOLS: list[dict] = [
      {
          "type": "function",
          "function": {
@@ -243,7 +255,7 @@ index 20b5f36..9d46ddb 100644
              ),
              "parameters": {"type": "object", "properties": {}, "required": []},
          },
-@@ -296,11 +374,9 @@ TOOLS: list[dict] = [
+@@ -296,11 +377,9 @@ TOOLS: list[dict] = [
      {
          "type": "function",
          "function": {
@@ -257,7 +269,7 @@ index 20b5f36..9d46ddb 100644
              ),
              "parameters": {"type": "object", "properties": {}, "required": []},
          },
-@@ -308,42 +384,29 @@ TOOLS: list[dict] = [
+@@ -308,42 +387,29 @@ TOOLS: list[dict] = [
      {
          "type": "function",
          "function": {
@@ -315,7 +327,49 @@ index 20b5f36..9d46ddb 100644
              ),
              "parameters": {"type": "object", "properties": {}, "required": []},
          },
-@@ -418,6 +481,98 @@ TOOLS: list[dict] = [
+@@ -393,6 +459,41 @@ TOOLS: list[dict] = [
+             },
+         },
+     },
++    {
++        "type": "function",
++        "function": {
++            "name": "run_drost_tool",
++            "description": (
++                "Run one tool from the drost-ai MCP server (nmap, ffuf, httpx, "
++                "whatweb, cve_lookup, ...) inside the local container. Pass the "
++                "drost tool's OWN argument names as a JSON object: drost_nmap "
++                "takes {\"arguments\": [\"-sV\", \"-p\", \"80\", \"host\"]}, "
++                "drost_cve_lookup takes {\"cve_id\": \"CVE-2021-44228\"}. Every "
++                "host in the arguments is scope-checked, so an out-of-scope host "
++                "is refused even if it is buried in an argument. bash/execute are "
++                "denied outright and exploit tools require human approval — if a "
++                "call is refused, do NOT retry it, pick a different tool."
++            ),
++            "parameters": {
++                "type": "object",
++                "properties": {
++                    "tool_name": {
++                        "type": "string",
++                        "description": "Exact drost tool name, e.g. drost_nmap, drost_ffuf, drost_whatweb, drost_cve_lookup.",
++                    },
++                    "args_json": {
++                        "type": "string",
++                        "description": "JSON object of that tool's own arguments, e.g. '{\"arguments\": [\"-sV\", \"target\"]}' or '{\"cve_id\": \"CVE-2021-44228\"}'.",
++                    },
++                    "target": {
++                        "type": "string",
++                        "description": "Host the engagement should be scoped to. Defaults to the current target.",
++                    },
++                },
++                "required": ["tool_name", "args_json"],
++            },
++        },
++    },
+     {
+         "type": "function",
+         "function": {
+@@ -418,6 +519,98 @@ TOOLS: list[dict] = [
  
  TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
  
@@ -414,7 +468,220 @@ index 20b5f36..9d46ddb 100644
  
  # ──────────────────────────────────────────────────────────────────────────────
  #  Memory
-@@ -522,31 +677,44 @@ class ToolDispatcher:
+@@ -514,6 +707,212 @@ class HuntMemory:
+ #  Tool dispatcher  (maps tool names → hunt.py functions)
+ # ──────────────────────────────────────────────────────────────────────────────
+ 
++# ── Drost MCP bridge ────────────────────────────────────────────────────────
++#
++# `blu` runs the drost-ai container (`docker exec -i drost-ai drost-mcp`),
++# which wraps ~107 local binaries behind 159 MCP tools. This exposes a curated
++# subset to the agent over MCP stdio.
++#
++# Three restrictions, and all three exist for the same reason: the agent is
++# unattended AND it reads attacker-controlled pages. Anything the model parses
++# from a target is a place an attacker can put instructions.
++#
++#   1. DROST_DENIED is never exposed. `drost_bash` and `drost_execute` take a
++#      command line and run it. Handing those to a model that has just read a
++#      target's HTML turns a single injected string into code execution inside
++#      the container.
++#   2. DROST_ACTIVE requires approval. sqlmap/dalfox/xsser/zap attack rather
++#      than enumerate, so an unattended run must ask first — the same rule the
++#      POST-declared tools already follow (SECURITY-REVIEW-2026-08-22 #7).
++#   3. Every host appearing in the arguments is scope-checked, not just the
++#      base --target domain. The model can otherwise aim a scanner at
++#      anything by putting the host in an argument instead of the target.
++
++DROST_CONTAINER = os.environ.get("DROST_CONTAINER", "drost-ai")
++DROST_TIMEOUT = int(os.environ.get("DROST_TIMEOUT", "300"))
++# Not exposed, at any approval level.
++DROST_DENIED = frozenset({"drost_bash", "drost_execute"})
++# Legitimate bounty work, but actively hostile — an unattended run asks first.
++DROST_ACTIVE = frozenset({
++    "drost_sqlmap", "drost_dalfox", "drost_xsser", "drost_zap",
++    "drost_attack_chain", "drost_exploit_search", "drost_evil_winrm",
++    "drost_dotdotpwn", "drost_aircrack", "drost_aireplay", "drost_airodump",
++})
++# Cache of the server-side engagements. drost requires a *server-generated*
++# engagement_id ("eng_<ts>_<hex>"); a hand-made id is rejected outright, so one
++# is created per target and reused across calls.
++_DROST_ENGAGEMENTS: dict[str, str] = {}
++_DROST_CATALOG: dict[str, dict] = {}
++
++
++class _DrostSession:
++    """One drost-mcp stdio session, with the MCP handshake already done.
++
++    A fresh process per call costs about a second of handshake and buys
++    isolation: a scanner that wedges is killed with its own session instead of
++    poisoning the next call. stdout is pumped onto a queue by a daemon thread
++    so every read can carry a real deadline — a blocking readline() against a
++    hung scanner would hang the whole hunt.
++    """
++
++    def __init__(self, timeout: int = DROST_TIMEOUT):
++        self.timeout = timeout
++        self._next_id = 0
++        self.proc = subprocess.Popen(
++            ["docker", "exec", "-i", DROST_CONTAINER, "drost-mcp"],
++            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
++            stderr=subprocess.DEVNULL, text=True, bufsize=1)
++        self._q: queue.Queue = queue.Queue()
++        threading.Thread(target=self._pump, daemon=True).start()
++
++    def _pump(self) -> None:
++        try:
++            for line in self.proc.stdout:
++                self._q.put(line)
++        finally:
++            self._q.put(None)  # sentinel: server closed its end
++
++    def _send(self, obj: dict) -> None:
++        self.proc.stdin.write(json.dumps(obj) + "\n")
++        self.proc.stdin.flush()
++
++    def _recv(self, want_id: int) -> dict | None:
++        deadline = time.time() + self.timeout
++        while True:
++            remaining = deadline - time.time()
++            if remaining <= 0:
++                return None
++            try:
++                line = self._q.get(timeout=min(remaining, 5.0))
++            except queue.Empty:
++                continue
++            if line is None:
++                return None
++            line = line.strip()
++            if not line:
++                continue
++            try:
++                msg = json.loads(line)
++            except ValueError:
++                continue
++            if msg.get("id") == want_id:
++                return msg
++
++    def handshake(self) -> bool:
++        self._send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
++                    "params": {"protocolVersion": "2024-11-05", "capabilities": {},
++                               "clientInfo": {"name": "agentic-bug-hunter", "version": "1.0"}}})
++        if self._recv(1) is None:
++            return False
++        self._send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
++        return True
++
++    def tools_list(self) -> dict[str, dict]:
++        self._next_id += 1
++        self._send({"jsonrpc": "2.0", "id": 900 + self._next_id,
++                    "method": "tools/list", "params": {}})
++        msg = self._recv(900 + self._next_id) or {}
++        return {t["name"]: t
++                for t in (msg.get("result") or {}).get("tools", [])}
++
++    def call(self, name: str, arguments: dict) -> tuple[bool, str]:
++        """Returns (ok, text). is_error and transport failure both land in ok=False."""
++        self._next_id += 1
++        rid = 4000 + self._next_id
++        self._send({"jsonrpc": "2.0", "id": rid, "method": "tools/call",
++                    "params": {"name": name, "arguments": arguments}})
++        msg = self._recv(rid)
++        if msg is None:
++            return False, f"drost-mcp: no reply for {name} within {self.timeout}s"
++        if "error" in msg:
++            return False, f"drost-mcp rpc error: {json.dumps(msg['error'])[:300]}"
++        res = msg.get("result") or {}
++        text = "".join(c.get("text", "") for c in res.get("content", []))
++        return (not res.get("isError")), text
++
++    def close(self) -> None:
++        try:
++            if self.proc.stdin:
++                self.proc.stdin.close()
++        except OSError:
++            pass
++        self.proc.terminate()
++        try:
++            self.proc.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            self.proc.kill()
++
++
++def call_drost_mcp(tool_name: str, arguments: dict, engagement_for: str = "",
++                   timeout: int | None = None) -> str:
++    """Run one drost tool over MCP stdio and return its text output.
++
++    `engagement_for` is the target the engagement should be scoped to. When the
++    tool's own schema declares `engagement_id` a real one is created/reused for
++    that target; tools with their own field schema (e.g. drost_cve_lookup takes
++    cve_id, drost_engagement_create takes name/targets) are called as-is,
++    because passing an unexpected engagement_id is a pydantic validation error
++    on their side, not a harmless extra key.
++    """
++    timeout = timeout or DROST_TIMEOUT
++    sess = _DrostSession(timeout)
++    try:
++        if not sess.handshake():
++            return f"drost-mcp: handshake failed (container {DROST_CONTAINER!r} not speaking MCP)"
++        catalog = sess.tools_list()
++        if not catalog:
++            return "drost-mcp: tools/list returned no tools"
++        _DROST_CATALOG.clear()
++        _DROST_CATALOG.update(catalog)
++
++        if tool_name not in catalog:
++            near = ", ".join(sorted(catalog)[:8])
++            return (f"drost-mcp: no such tool {tool_name!r}. "
++                    f"Call with one of the {len(catalog)} real names "
++                    f"(e.g. {near}, ...).")
++        if tool_name in DROST_DENIED:
++            return (f"DENIED: {tool_name} executes an arbitrary command line. "
++                    f"This is terminal for an unattended session — do NOT call "
++                    f"it again, including via a differently named tool.")
++
++        # Tools that declare engagement_id need a server-generated one. A
++        # hand-made id is rejected ("must be a server-generated identifier"),
++        # so create one per target on first use and reuse it afterwards.
++        props = (catalog[tool_name].get("inputSchema") or {}).get("properties", {})
++        if "engagement_id" in props:
++            key = engagement_for or "unscoped"
++            eng = _DROST_ENGAGEMENTS.get(key)
++            if not eng:
++                ok, txt = sess.call("drost_engagement_create",
++                                    {"name": f"abh-{re.sub(r'[^a-z0-9.-]+', '-', key.lower())[:40]}",
++                                     "targets": [key]})
++                if not ok:
++                    return f"drost-mcp: could not create engagement for {key}: {txt[:200]}"
++                try:
++                    eng = json.loads(txt)["engagement_id"]
++                except (ValueError, KeyError, TypeError):
++                    return f"drost-mcp: engagement_create returned no id: {txt[:200]}"
++                _DROST_ENGAGEMENTS[key] = eng
++            arguments = dict(arguments)
++            arguments["engagement_id"] = eng
++
++        ok, text = sess.call(tool_name, arguments)
++        body = text.strip()
++        if len(body) > 8000:
++            body = body[:8000] + f"\n... [truncated {len(text) - 8000} chars]"
++        return (f"drost {tool_name}: OK\n{body}" if ok
++                else f"drost {tool_name} FAILED\n{body[:2000]}")
++    except FileNotFoundError:
++        return (f"drost-mcp unavailable: `docker` or the {DROST_CONTAINER!r} "
++                f"container is missing on this host.")
++    except Exception as exc:  # noqa: BLE001
++        # A bridge failure is an observation, not a crash: the agent has to be
++        # told why so it stops retrying rather than burning its budget.
++        return f"drost-mcp bridge error ({type(exc).__name__}): {exc}"
++    finally:
++        sess.close()
++
++
+ class ToolDispatcher:
+     """Execute tool calls and return plain-text observations."""
+ 
+@@ -522,31 +921,54 @@ class ToolDispatcher:
      # before running. Local/bookkeeping tools are excluded — they touch only
      # session state on disk, never the network.
      NETWORK_TOOLS = {
@@ -433,6 +700,7 @@ index 20b5f36..9d46ddb 100644
 +        "run_nosqli_scan",     # POST  (JSON login body)
 +        "run_graphql_audit",   # POST  (introspection/mutation probes)
 +        "run_403_bypass",      # POST/PUT/PATCH (method-override probes)
++        "run_drost_tool",      # routes to ~100 container tools; see below
      }
 +    # Deliberately absent: run_secret_hunt and run_jwt_audit are offline-only
 +    # (they read recon/<domain>/ artifacts from disk and never open a socket).
@@ -467,10 +735,120 @@ index 20b5f36..9d46ddb 100644
 +        "run_nosqli_scan": "POST",
 +        "run_graphql_audit": "POST",
 +        "run_403_bypass": "POST",
++        # run_drost_tool is a router, not a single scanner, so no one verb
++        # describes it. GET is the honest label for the recon tools it
++        # normally carries — and it is deliberately NOT the whole policy: the
++        # subset that actively attacks is refused by name inside
++        # _run_drost_tool() before any container call is made. Understating
++        # the verb here would be exactly the flaw finding #7 was filed
++        # against, so the dangerous names are gated explicitly instead of
++        # being smuggled through a generous label.
++        "run_drost_tool": "GET",
      }
  
      def __init__(self, domain: str, memory: HuntMemory,
-@@ -604,44 +772,17 @@ class ToolDispatcher:
+@@ -575,6 +997,100 @@ class ToolDispatcher:
+         self._time_budget_hours = time_budget_hours
+         self._start_time        = start_time if start_time is not None else time.time()
+ 
++    # Host-shaped argument values: an explicit URL, an IPv4 literal, or a
++    # dotted name. A scanner can be aimed at anything by putting the host in an
++    # argument instead of the target, so these are what actually get checked.
++    _DROST_HOST_RE = re.compile(
++        r"^(?:https?://)?"
++        r"((?:\d{1,3}\.){3}\d{1,3}|[a-z0-9][a-z0-9.-]*\.[a-z]{2,})"
++        r"(?::\d+)?(?:[/\s?#]|$)", re.I)
++    # Final labels that make a dotted token a filename, not a host. Without
++    # this, an argument of "moment.js" is read as the host moment.js, fails the
++    # scope check, and blocks a legitimate call — the same false positive
++    # bounty_run._is_placeholder_host() exists for.
++    _DROST_FILE_EXT = frozenset((
++        "js", "css", "png", "jpg", "jpeg", "gif", "svg", "webp", "json", "txt",
++        "md", "html", "htm", "php", "asp", "aspx", "jsp", "pdf", "zip", "gz",
++        "tar", "xml", "yml", "yaml", "toml", "ini", "sh", "py", "rb", "log",
++        "bak", "old", "conf", "csv", "mp4", "mp3", "woff", "woff2", "ttf",
++        "eot", "ico", "map", "wasm", "exe", "dll", "deb", "rpm", "env",
++    ))
++
++    def _drost_scope_violations(self, arguments: dict) -> list[str]:
++        """Host-shaped values in the argument tree that fall outside scope.
++
++        Empty result means "nothing to object to" — including the case where
++        the arguments name no host at all, which is fine because the engagement
++        is still bound to the scoped target by the caller.
++        """
++        hosts: list[str] = []
++
++        def walk(node):
++            if isinstance(node, dict):
++                for v in node.values():
++                    walk(v)
++            elif isinstance(node, (list, tuple)):
++                for v in node:
++                    walk(v)
++            elif isinstance(node, str):
++                m = self._DROST_HOST_RE.match(node.strip())
++                if m:
++                    hosts.append(m.group(1).rstrip("."))
++
++        walk(arguments)
++        bad = []
++        for host in dict.fromkeys(hosts):
++            if host.rsplit(".", 1)[-1].lower() in self._DROST_FILE_EXT:
++                continue
++            gate = self._guard.check_request("GET", f"https://{host}")
++            if gate["decision"] == "block":
++                bad.append(host)
++        return bad
++
++    def _run_drost_tool(self, args: dict, domain: str) -> str:
++        """Route one call to the drost-ai MCP container.
++
++        Kept apart from dispatch()'s generic path because it carries policy the
++        guard cannot express: whether a call is *denied* or merely *needs
++        approval* depends on the drost tool name, and every host buried in the
++        argument values has to be scope-checked rather than only the base
++        target.
++        """
++        tool_name = str(args.get("tool_name") or "").strip()
++        if not tool_name:
++            return "BLOCKED: run_drost_tool needs tool_name (e.g. drost_nmap, drost_ffuf)."
++        if tool_name in DROST_DENIED:
++            return (f"DENIED: {tool_name} runs an arbitrary command line, and this "
++                    f"agent has already read attacker-controlled pages, so exposing "
++                    f"it turns one injected string into container code execution. "
++                    f"This is terminal for an unattended session: do NOT call "
++                    f"{tool_name} again, pick a different tool.")
++        if tool_name in DROST_ACTIVE:
++            return (f"REQUIRES APPROVAL: {tool_name} actively attacks the target "
++                    f"rather than enumerating it — a human must review and run "
++                    f"this manually before it proceeds. Not executed. This is "
++                    f"terminal for an unattended session: do NOT call "
++                    f"{tool_name} again, pick a different tool.")
++
++        raw = args.get("args_json", "{}")
++        try:
++            arguments = json.loads(raw) if isinstance(raw, str) else (raw or {})
++        except ValueError as e:
++            return f"BLOCKED: args_json is not valid JSON ({e})."
++        if not isinstance(arguments, dict):
++            return ('BLOCKED: args_json must be a JSON object, e.g. '
++                    '{"arguments": ["-sV", "-p", "80"]}, not a list or scalar.')
++
++        bad = self._drost_scope_violations(arguments)
++        if bad:
++            verb = "is not" if len(bad) == 1 else "are not"
++            return (f"BLOCKED by scope guard: {', '.join(sorted(bad))} {verb} on "
++                    f"the program allowlist. Do not retry this call against "
++                    f"those hosts.")
++
++        target = str(args.get("target") or "").strip() or domain
++        return call_drost_mcp(tool_name, arguments, engagement_for=target)
++
+     def dispatch(self, name: str, args: dict) -> str:
+         """Execute named tool and return text observation."""
+         h = _h()
+@@ -604,57 +1120,60 @@ class ToolDispatcher:
          # HTTP-method semantics (see TOOL_METHODS) so AutopilotGuard's
          # method policy can require human approval for state-changing tools
          # instead of every call being nominally "safe" GET.
@@ -520,9 +898,12 @@ index 20b5f36..9d46ddb 100644
              # Scope check above only validated the base --target domain;
              # recon may have discovered subdomains/URLs outside that scope.
              # Filter recon output in place before any scanner reads it.
-@@ -649,12 +790,39 @@ class ToolDispatcher:
+             self._filter_recon_urls_to_scope(domain)
  
          try:
++            if name == "run_drost_tool":
++                return self._run_drost_tool(args, domain)
++
              if name == "run_recon":
 +                # Do NOT pass max_urls: hunt.run_recon(domain, quick, scope_lock)
 +                # has no such parameter, and the TOOLS schema advertises it. The
@@ -561,7 +942,7 @@ index 20b5f36..9d46ddb 100644
  
              elif name == "run_vuln_scan":
                  ok = h.run_vuln_scan(
-@@ -664,10 +832,6 @@ class ToolDispatcher:
+@@ -664,10 +1183,6 @@ class ToolDispatcher:
                  )
                  obs = self._summarize_findings(domain, "scan", ok)
  
@@ -572,7 +953,7 @@ index 20b5f36..9d46ddb 100644
              elif name == "run_secret_hunt":
                  ok = h.run_secret_hunt(domain)
                  obs = self._summarize_findings(domain, "secrets", ok)
-@@ -676,46 +840,42 @@ class ToolDispatcher:
+@@ -676,46 +1191,42 @@ class ToolDispatcher:
                  ok = h.run_param_discovery(domain)
                  obs = self._summarize_params(domain, ok)
  
@@ -647,7 +1028,7 @@ index 20b5f36..9d46ddb 100644
              elif name == "read_recon_summary":
                  obs = self._read_recon_files(domain)
  
-@@ -738,7 +898,16 @@ class ToolDispatcher:
+@@ -738,7 +1249,16 @@ class ToolDispatcher:
              if name in self.NETWORK_TOOLS:
                  self._guard.record_failure(domain)
              tb = traceback.format_exc()
@@ -665,7 +1046,7 @@ index 20b5f36..9d46ddb 100644
  
          if name in self.NETWORK_TOOLS:
              self._guard.record_success(domain)
-@@ -771,26 +940,6 @@ class ToolDispatcher:
+@@ -771,26 +1291,6 @@ class ToolDispatcher:
          remaining = total_secs - elapsed
          return max(0.0, remaining / total_secs)
  
@@ -692,7 +1073,7 @@ index 20b5f36..9d46ddb 100644
      def _filter_recon_urls_to_scope(self, domain: str) -> None:
          """Drop out-of-scope URLs from recon output files IN PLACE before
          any scanner reads them. The base-domain check at the top of
-@@ -915,22 +1064,6 @@ class ToolDispatcher:
+@@ -915,22 +1415,6 @@ class ToolDispatcher:
                  lines.append(f"  {fn}: {count} lines")
          return "\n".join(lines)
  
@@ -715,7 +1096,7 @@ index 20b5f36..9d46ddb 100644
      def _read_recon_files(self, domain: str) -> str:
          h = _h()
          recon_dir = h._resolve_recon_dir(domain)
-@@ -1173,17 +1306,19 @@ You are an elite autonomous bug bounty hunter operating within an authorized bug
+@@ -1173,17 +1657,19 @@ You are an elite autonomous bug bounty hunter operating within an authorized bug
  You have a set of tools that execute real security scans. Use them strategically.
  
  CORE RULES:
@@ -741,7 +1122,7 @@ index 20b5f36..9d46ddb 100644
  Think step by step. Pick the highest-impact next action given what you know."""
  
  
-@@ -1219,15 +1354,34 @@ class ReActAgent:
+@@ -1219,15 +1705,34 @@ class ReActAgent:
          self._race_models: list[str] = []
  
          if not _OLLAMA_OK:
@@ -781,7 +1162,7 @@ index 20b5f36..9d46ddb 100644
              available = [m.model for m in self.client.list().models]
              if requested_model not in available:
                  raise RuntimeError(
-@@ -1247,7 +1401,28 @@ class ReActAgent:
+@@ -1247,7 +1752,28 @@ class ReActAgent:
          except Exception:
              self._race_models = [self.model]
  
@@ -810,7 +1191,7 @@ index 20b5f36..9d46ddb 100644
          race_note = f"  race_models={self._race_models}" if len(self._race_models) > 1 else ""
          print(f"{DIM}[Agent] max_steps={max_steps}  budget={time_budget_hours}h  "
                f"tool_calling=native{race_note}{NC}", flush=True)
-@@ -1349,7 +1524,7 @@ class ReActAgent:
+@@ -1349,7 +1875,7 @@ class ReActAgent:
                      {"role": "system",    "content": AGENT_SYSTEM},
                      {"role": "user",      "content": user_msg},
                  ],
@@ -819,7 +1200,7 @@ index 20b5f36..9d46ddb 100644
                  options={
                      "num_ctx":     16384,
                      "num_predict": 1024,
-@@ -1529,11 +1704,12 @@ class ReActAgent:
+@@ -1529,11 +2055,12 @@ class ReActAgent:
              "working_memory":   self.memory.working_memory,
              "verdict":          self.verdict,
              "session_file":     self.memory.session_file,
@@ -837,7 +1218,7 @@ index 20b5f36..9d46ddb 100644
          }
  
  
-@@ -1717,10 +1893,8 @@ def run_agent_hunt(
+@@ -1717,10 +2244,8 @@ def run_agent_hunt(
                  "findings":        len(memory.findings_log),
                  "session_file":    session_file,
                  "working_memory":  memory.working_memory,
@@ -1636,121 +2017,289 @@ index 0000000..cb614db
 +
 +if __name__ == "__main__":
 +    sys.exit(1 if main() else 0)
-diff --git a/tests/test_tool_integrity.py b/tests/test_tool_integrity.py
+diff --git a/tests/test_drost_bridge.py b/tests/test_drost_bridge.py
 new file mode 100644
-index 0000000..49124b3
+index 0000000..8be9c2d
 --- /dev/null
-+++ b/tests/test_tool_integrity.py
-@@ -0,0 +1,114 @@
++++ b/tests/test_drost_bridge.py
+@@ -0,0 +1,282 @@
 +#!/usr/bin/env python3
-+"""Tool integrity. Run after ANY change to TOOLS, dispatch(), or tools/hunt.py.
++"""run_drost_tool: the drost-ai MCP bridge and the three restrictions on it.
 +
-+Background: the agent once advertised 17 tools while only 6 had
-+implementations. Picking a missing one raised AttributeError inside
-+dispatch(), which returned the error without bumping step_count, so the model
-+retried it forever and the hunt ended as "Steps executed: 0". These checks
-+make that failure mode impossible to reintroduce silently.
++The agent is unattended AND it reads attacker-controlled pages, so anything
++the model parses from a target is a place an attacker can put instructions.
++These tests exist to pin down the three restrictions that follow from that:
 +
-+Standalone (no pytest):  python3 tests/test_tool_integrity.py
++  * bash/execute are never reachable, not even by calling call_drost_mcp
++    directly,
++  * tools that actively attack are refused, not merely labelled,
++  * a host buried in an *argument* is scope-checked, not just the --target.
++
++Everything runs against a fake session — no container, no network.
++
++Run after ANY change to call_drost_mcp / _run_drost_tool / _DrostSession:
++    python3 tests/test_drost_bridge.py        (or pytest tests/test_drost_bridge.py)
 +"""
++import json
++import os
 +import sys
++import tempfile
 +from pathlib import Path
 +
-+BUGHUNTER = Path(__file__).resolve().parent.parent / "bughunter"
-+sys.path.insert(0, str(BUGHUNTER))
++# agent.py lives in bughunter/, not at the repo root -- insert that directory
++# (the same one tests/conftest.py and test_surface_rank.py use).
++BUGHUNTER = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bughunter"))
++if BUGHUNTER not in sys.path:
++    sys.path.insert(0, BUGHUNTER)
 +
-+import agent  # noqa: E402
-+from tools import hunt  # noqa: E402
-+
-+# agent._h() loads tools/hunt.py a SECOND time under the module name "hunt",
-+# so it is a different object than the import above. Always patch through
-+# agent._h() or the dispatcher never sees the patch.
-+h = agent._h()
++import agent
++from agent import (DROST_ACTIVE, DROST_DENIED, HuntMemory, ToolDispatcher,
++                   call_drost_mcp)
++from tools.scope_checker import ScopeChecker
 +
 +fails = 0
 +
 +
 +def check(cond, label):
 +    global fails
-+    print(("  ok   " if cond else "  FAIL ") + label)
 +    if not cond:
 +        fails += 1
++    print("%-4s %s" % ("OK" if cond else "FAIL", label))
 +
 +
-+def main():
++def tool_schema(name, props):
++    return {name: {"name": name, "inputSchema": {"properties": props}}}
++
++
++# Catalog entries mirroring what `drost-mcp --catalog-json` and tools/list
++# actually report: exec-style tools take engagement_id + arguments, field-style
++# tools take their own fields and reject an unexpected engagement_id with a
++# pydantic validation error.
++EXEC_SCHEMA = tool_schema("drost_nmap", {
++    "engagement_id": {"type": "string"},
++    "arguments": {"items": {"type": "string"}, "type": "array"},
++})
++FIELD_SCHEMA = tool_schema("drost_cve_lookup", {"cve_id": {"type": "string"}})
++CATALOG = {}
++CATALOG.update(EXEC_SCHEMA)
++CATALOG.update(FIELD_SCHEMA)
++CATALOG.update(tool_schema("drost_ffuf", {
++    "engagement_id": {"type": "string"},
++    "arguments": {"items": {"type": "string"}, "type": "array"},
++}))
++CATALOG.update(tool_schema("drost_bash", {
++    "engagement_id": {"type": "string"},
++    "arguments": {"items": {"type": "string"}, "type": "array"},
++}))
++CATALOG.update(tool_schema("drost_sqlmap", {
++    "engagement_id": {"type": "string"},
++    "arguments": {"items": {"type": "string"}, "type": "array"},
++}))
++
++
++class FakeSession:
++    """Stands in for _DrostSession: records what was called, returns canned text."""
++
++    def __init__(self, catalog=None, replies=None, handshake_ok=True, timeout=1):
++        self.catalog = catalog if catalog is not None else CATALOG
++        self.replies = replies or {}
++        self.handshake_ok = handshake_ok
++        self.calls = []
++        self.closed = False
++        self.engagements = []
++
++    def handshake(self):
++        return self.handshake_ok
++
++    def tools_list(self):
++        return dict(self.catalog)
++
++    def call(self, name, arguments):
++        self.calls.append((name, arguments))
++        if name == "drost_engagement_create":
++            eid = "eng_20261018_%d" % (len(self.engagements) + 1)
++            self.engagements.append((name, arguments))
++            return True, json.dumps({"engagement_id": eid})
++        return self.replies.get(name, (True, "canned output"))
++
++    def close(self):
++        self.closed = True
++
++
++def with_fake(fake, fn):
++    """Swap in `fake` as the session factory.
++
++    _DrostSession is called as a constructor (sess = _DrostSession(timeout)),
++    so the seam has to accept that positional timeout and hand back the fake —
++    pointing it straight at an instance makes every real call die on
++    `instance(timeout)` before it reaches the fake.
++    """
++    real = agent._DrostSession
++    agent._DrostSession = lambda *a, **k: fake
++    try:
++        return fn()
++    finally:
++        agent._DrostSession = real
++
++
++def dispatcher(tmp):
++    # ScopeChecker anchors exactly: `example.com` matches only the apex, so a
++    # subdomain needs the wildcard the way a real Bugcrowd brief spells it.
++    return ToolDispatcher("example.com", HuntMemory(str(Path(tmp) / "s.json")),
++                          scope_checker=ScopeChecker(
++                              domains=["example.com", "*.example.com"]))
++
++
++def main() -> int:
 +    global fails
 +    fails = 0
-+    print("1. every advertised run_* tool has an implementation")
-+    run_tools = [t["function"]["name"] for t in agent.TOOLS
-+                 if t["function"]["name"].startswith("run_")]
-+    print("     advertised:", ", ".join(run_tools))
-+    for name in run_tools:
-+        check(hasattr(hunt, name) and callable(getattr(hunt, name)),
-+              f"{name} exists in tools/hunt.py")
++    agent._DROST_ENGAGEMENTS.clear()
 +
-+    print("2. no advertised tool references a function that was never written")
-+    for name in run_tools:
-+        check(not name.startswith("run_") or hasattr(hunt, name), f"{name} resolvable")
++    # ---------- policy constants ----------
++    print("1. bash/execute are denied, attack tools are approval-gated")
++    check("drost_bash" in DROST_DENIED and "drost_execute" in DROST_DENIED,
++          "bash and execute are in DROST_DENIED")
++    for t in ("drost_sqlmap", "drost_dalfox", "drost_xsser", "drost_zap"):
++        check(t in DROST_ACTIVE, f"{t} is approval-gated")
++    check(not (DROST_DENIED & DROST_ACTIVE), "denied and active sets do not overlap")
 +
-+    print("3. NETWORK_TOOLS and TOOL_METHODS only cover real tools")
-+    names = agent.TOOL_NAMES
-+    for net in agent.ToolDispatcher.NETWORK_TOOLS:
-+        check(net in names, f"network tool {net} is advertised")
-+        check(net in agent.ToolDispatcher.TOOL_METHODS,
-+              f"network tool {net} has a declared HTTP method")
-+    for method in agent.ToolDispatcher.TOOL_METHODS:
-+        check(method in names, f"method entry {method} is advertised")
-+    # Offline tools may carry a method entry without being scope-gated; what must
-+    # never happen is the reverse. A network tool with no declared method would be
-+    # assumed GET and could slip past AutopilotGuard's method policy.
-+    for net in agent.ToolDispatcher.NETWORK_TOOLS:
-+        check(net in agent.ToolDispatcher.TOOL_METHODS,
-+              f"{net} has a declared method for the guard's policy check")
++    # ---------- the dispatcher's own refusals ----------
++    with tempfile.TemporaryDirectory() as tmp:
++        d = dispatcher(tmp)
 +
-+    print("4. PHASE_FLAG_TOOLS points at tools that exist")
-+    for flag, tool in agent.PHASE_FLAG_TOOLS.items():
-+        check(tool in names, f"phase flag '{flag}' -> {tool} advertised")
++        print("2. denied and approval-gated tools are refused before any container call")
++        fake = FakeSession()
++        for t in sorted(DROST_DENIED):
++            out = with_fake(fake, lambda t=t: d.dispatch(
++                "run_drost_tool", {"tool_name": t, "args_json": '{"arguments": ["x"]}'}))
++            check(out.startswith("DENIED"), f"{t} refused ({out[:40]}...)")
++            check("do NOT call" in out, f"{t} refusal is terminal, not retryable")
++        for t in sorted(DROST_ACTIVE):
++            out = with_fake(fake, lambda t=t: d.dispatch(
++                "run_drost_tool", {"tool_name": t, "args_json": '{"arguments": ["x"]}'}))
++            check(out.startswith("REQUIRES APPROVAL"), f"{t} requires approval ({out[:40]}...)")
++            check("do NOT call" in out, f"{t} refusal is terminal")
++        check(fake.calls == [], "container was never invoked for any refused call")
 +
-+    print("5. an unadvertised tool is refused, not executed")
-+    mem = agent.HuntMemory(str(Path(__file__).parent / "_tmp_integrity_session.json"))
-+    d = agent.ToolDispatcher("example.com", mem, time_budget_hours=2.0)
-+    out = d.dispatch("run_cms_exploit", {})
-+    check("Unknown tool" in out, "dropped tool name refused at dispatch")
++        print("3. malformed args_json is rejected")
++        out = d.dispatch("run_drost_tool", {"tool_name": "drost_nmap", "args_json": "{oops"})
++        check(out.startswith("BLOCKED"), f"bad JSON refused ({out[:50]})")
++        out = d.dispatch("run_drost_tool", {"tool_name": "drost_nmap",
++                                            "args_json": '["-sV", "h"]'})
++        check("JSON object" in out, f"non-object refused ({out[:60]})")
++        out = d.dispatch("run_drost_tool", {"args_json": "{}"})
++        check("needs tool_name" in out, f"missing tool_name refused ({out[:50]})")
 +
-+    print("6. an exception still counts as a step (never a silent 0-step run)")
-+    # run_jwt_audit is offline (not in NETWORK_TOOLS), so no scope gate runs
-+    # upstream — it lands in the try/except the same way every real failure does.
-+    real = h.run_jwt_audit
-+    def boom(domain):
-+        raise RuntimeError("simulated tool failure")
-+    h.run_jwt_audit = boom
-+    try:
-+        before = mem.step_count
-+        out = d.dispatch("run_jwt_audit", {})
-+        check("raised exception" in out, "exception surfaced to the model")
-+        check(mem.step_count == before + 1,
-+              f"step_count incremented ({before} -> {mem.step_count})")
-+    finally:
-+        h.run_jwt_audit = real
++        print("4. a host buried in an ARGUMENT is scope-checked")
++        bad = d._drost_scope_violations({"arguments": ["-u", "https://evil.test/a"]})
++        check(bad == ["evil.test"], f"out-of-scope host detected ({bad})")
++        ok = d._drost_scope_violations({"arguments": ["-u", "https://app.example.com/a"]})
++        check(ok == [], "in-scope host passes")
++        ok = d._drost_scope_violations({"cve_id": "CVE-2021-44228"})
++        check(ok == [], "no host-shaped value is not a violation")
++        bad = d._drost_scope_violations({"arguments": ["-u", "10.9.8.7"]})
++        check(bad == ["10.9.8.7"], f"bare IP is checked too ({bad})")
 +
-+    print("7. a working tool also counts as a step")
-+    real_hunt = h.run_secret_hunt
-+    h.run_secret_hunt = lambda domain: True
-+    try:
-+        before = mem.step_count
-+        d.dispatch("run_secret_hunt", {})
-+        check(mem.step_count == before + 1, "step_count incremented on success")
-+    finally:
-+        h.run_secret_hunt = real_hunt
++        print("5. a filename is not mistaken for a host")
++        for arg in ("moment.js", "report.pdf", "style.css", "data.json"):
++            v = d._drost_scope_violations({"arguments": [arg]})
++            check(v == [], f"{arg} does not block the call ({v})")
++        # ...but a real host with a file-looking name still gets checked
++        v = d._drost_scope_violations({"arguments": ["https://evil.test/app.js"]})
++        check(v == ["evil.test"], f"a real out-of-scope host is still caught ({v})")
 +
-+    Path(str(Path(__file__).parent / "_tmp_integrity_session.json")).unlink(
-+        missing_ok=True)
-+    print("RESULT:", "ALL PASS" if fails == 0 else "%d FAILURES" % fails)
++        print("6. the scope refusal happens before the container is touched")
++        fake = FakeSession()
++        out = with_fake(fake, lambda: d.dispatch(
++            "run_drost_tool",
++            {"tool_name": "drost_ffuf", "args_json": '{"arguments": ["-u", "https://evil.test/"]}'})
++        )
++        check(out.startswith("BLOCKED by scope guard"), f"refused at dispatch ({out[:45]})")
++        check(fake.calls == [], "container never invoked for an out-of-scope call")
++
++        print("7. happy path: engagement created and passed through")
++        agent._DROST_ENGAGEMENTS.clear()
++        fake = FakeSession()
++        out = with_fake(fake, lambda: d.dispatch(
++            "run_drost_tool",
++            {"tool_name": "drost_nmap",
++             "args_json": '{"arguments": ["-Pn", "-p", "443", "app.example.com"]}'}))
++        check("drost drost_nmap: OK" in out, f"tool ran ({out[:50]})")
++        check(len(fake.calls) == 2, "engagement_create then the tool")
++        check(bool(fake.calls) and fake.calls[0][0] == "drost_engagement_create",
++              "engagement created first")
++        tool_args = fake.calls[1][1] if len(fake.calls) > 1 else {}
++        check(str(tool_args.get("engagement_id", "")).startswith("eng_"),
++              f"server-generated engagement id passed ({tool_args.get('engagement_id')})")
++        check(tool_args.get("arguments") == ["-Pn", "-p", "443", "app.example.com"],
++              "argv tokens passed through verbatim")
++        check(fake.closed, "session torn down afterwards")
++
++        print("8. the engagement is reused, not recreated per call")
++        fake2 = FakeSession()
++        with_fake(fake2, lambda: d.dispatch(
++            "run_drost_tool", {"tool_name": "drost_nmap",
++                               "args_json": '{"arguments": ["-Pn", "app.example.com"]}'}))
++        create_count = sum(1 for n, _ in fake2.calls if n == "drost_engagement_create")
++        check(create_count == 0, f"no second engagement_create ({create_count})")
++
++        print("9. tools with their own field schema are NOT given an engagement_id")
++        fake = FakeSession()
++        out = with_fake(fake, lambda: d.dispatch(
++            "run_drost_tool",
++            {"tool_name": "drost_cve_lookup", "args_json": '{"cve_id": "CVE-2021-44228"}'}))
++        check("drost drost_cve_lookup: OK" in out, f"field tool ran ({out[:50]})")
++        check(len(fake.calls) == 1, "no engagement_create for a field-style tool")
++        check("engagement_id" not in (fake.calls[0][1] if fake.calls else {}),
++              "engagement_id not injected into a schema that rejects it")
++
++        print("10. an unknown tool name is reported, not crashed on")
++        fake = FakeSession()
++        out = with_fake(fake, lambda: d.dispatch(
++            "run_drost_tool", {"tool_name": "drost_nope", "args_json": "{}"}))
++        check("no such tool" in out, f"unknown name reported ({out[:50]})")
++        check("drost_nmap" in out, "error names a real tool as an example")
++        check(fake.calls == [], "container never invoked for an unknown tool")
++
++    # ---------- call_drost_mcp's own safety net ----------
++    print("11. the bridge refuses denied tools even when called directly")
++    agent._DROST_ENGAGEMENTS.clear()
++    fake = FakeSession()
++    out = with_fake(fake, lambda: call_drost_mcp("drost_bash", {"arguments": ["cat /etc/passwd"]}))
++    check(out.startswith("DENIED"), f"direct call also denied ({out[:40]})")
++    check(fake.calls == [], "container never invoked")
++
++    print("12. transport failures are observations, not crashes")
++    class DeadSession(FakeSession):
++        def handshake(self):
++            return False
++    out = with_fake(DeadSession(), lambda: call_drost_mcp("drost_nmap", {"arguments": ["x"]}))
++    check("handshake failed" in out, f"handshake failure reported ({out[:60]})")
++
++    class NoList(FakeSession):
++        def tools_list(self):
++            return {}
++    out = with_fake(NoList(), lambda: call_drost_mcp("drost_nmap", {"arguments": ["x"]}))
++    check("no tools" in out, f"empty catalog reported ({out[:60]})")
++
++    class Boom(FakeSession):
++        def handshake(self):
++            raise RuntimeError("container gone")
++    out = with_fake(Boom(), lambda: call_drost_mcp("drost_nmap", {"arguments": ["x"]}))
++    check("bridge error" in out and "container gone" in out,
++          f"exception surfaces as text ({out[:70]})")
++
++    print("13. output is truncated so a firehose cannot fill the context")
++    fake = FakeSession(replies={"drost_nmap": (True, "x" * 40000)})
++    out = with_fake(fake, lambda: call_drost_mcp("drost_nmap", {"arguments": ["x"]}))
++    check(len(out) < 9000, f"long output truncated ({len(out)} chars)")
++    check("truncated" in out, "truncation is stated, not silent")
++
++    print("RESULT: %s" % ("ALL PASS" if fails == 0 else "%d FAILURES" % fails))
 +    return fails
 +
 +
-+def test_tool_integrity():
-+    """pytest entry point — same checks as the standalone run above."""
++def test_drost_bridge():
 +    assert main() == 0
 +
 +
