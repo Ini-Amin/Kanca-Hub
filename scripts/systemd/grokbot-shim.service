@@ -1,0 +1,16 @@
+[Unit]
+Description=Grok-Bot 9Router Shim on :8790
+After=network.target blu-9router.service
+
+[Service]
+Environment=ROUTER_URL=http://127.0.0.1:20128
+Environment=ROUTER_MODEL=Zcode/GLM-5.3
+EnvironmentFile=-/root/grokbot/shim.env
+ExecStart=/bin/bash -c "ROUTER_API_KEY=$(cat /root/grokbot/router.key) exec /usr/bin/node /root/grokbot/9router-shim/proxy.js"
+StandardOutput=append:/var/log/grokbot/shim.log
+StandardError=append:/var/log/grokbot/shim.log
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

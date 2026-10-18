@@ -340,5 +340,73 @@ systemctl --user enable --now blu-tunnel.service
 sleep 5
 say tunnel "$(systemctl --user is-active blu-tunnel.service)"
 
+# 4a. the bounty pipeline's own code. A fresh Manus box has no /root/Auto-FreeCF
+#     at all: nothing here clones it, and blu's copy is a scp'd tree rather than
+#     a git repo. So the ABH patch, gigs_api.py, the unit files installed in 4b
+#     and the test suite all fail to exist after a rebuild — which is why a
+#     rebuilt box could not run the pipeline even though every unit was fixed.
+#     Only the pipeline subtrees cross: the repo root is a 1.5 GB farm and
+#     scraper tree with its own credentials, and a throwaway box must not
+#     receive those (the same rule that keeps the laptop's opencode.json off).
+D=$(dirname "$0")
+PIPE="scripts patches tests grokbot-shim"
+tar -C "$D/.." --exclude='__pycache__' --exclude='.git' -cf - $PIPE \
+  | ssh -o BatchMode=yes "$BOX" \
+      'mkdir -p /root/Auto-FreeCF && rm -rf /root/Auto-FreeCF/scripts/__pycache__ && tar -C /root/Auto-FreeCF -xf -'
+say code "$(ssh -o BatchMode=yes "$BOX" 'du -sh /root/Auto-FreeCF 2>/dev/null | cut -f1') ($PIPE)"
+
+# 4b. the pipeline's units. blu-bounty and blu-r9-farm are the 24/7 loop;
+#     blu-gigs-api is the control API and grokbot-shim the chat surface that
+#     drives it. All four existed only on the box, so a rebuild came back with
+#     a pipeline nobody could steer. Installed from the repo copies on every
+#     provision, so the repo and the box cannot drift apart again.
+SYS=/etc/systemd/system
+scp -o BatchMode=yes "$D/systemd/blu-bounty.service" "$D/systemd/blu-bounty.timer" \
+                     "$D/systemd/blu-r9-farm.service" "$D/systemd/blu-r9-farm.timer" \
+                     "$D/systemd/blu-gigs-api.service" "$BOX:$SYS/"
+ssh -o BatchMode=yes "$BOX" 'systemctl daemon-reload && systemctl enable --now blu-bounty.timer blu-r9-farm.timer blu-gigs-api.service'
+say bounty "$(ssh -o BatchMode=yes "$BOX" 'systemctl is-active blu-bounty.timer blu-r9-farm.timer blu-gigs-api.service' | tr '\n' ' ')"
+
+# The shim's ExecStart points into /root/grokbot (proxy.js + router.key), which
+# is NOT part of this repo, so its unit is installed only when that tree is
+# already present. Enabling it otherwise starts a unit that can only fail-loop.
+if ssh -o BatchMode=yes "$BOX" 'test -f /root/grokbot/9router-shim/proxy.js'; then
+  scp -o BatchMode=yes "$D/systemd/grokbot-shim.service" "$BOX:$SYS/"
+  ssh -o BatchMode=yes "$BOX" 'systemctl daemon-reload && systemctl enable --now grokbot-shim.service'
+  say shim "$(ssh -o BatchMode=yes "$BOX" 'systemctl is-active grokbot-shim.service')"
+else
+  say shim "SKIP (no /root/grokbot/9router-shim/proxy.js on $BOX)"
+fi
+
+# 4c. the hunt engine. abh_deploy.sh fetches ABH, applies our patch and wires
+#     the brain, but it dies mid-run when router.key is missing or 9router is
+#     not answering on :20128 — and this script is `set -eu`, so letting it
+#     abort here would stop the provision halfway and leave an unconfigured
+#     box. Preflight both hard requirements and skip loudly instead, the way
+#     the skills2 and drost steps above already do.
+#
+#     The FIRST check is the one that matters for a box that already works.
+#     blu's /root/Agentic-Bug-Hunter is a plain tree with no .git — it was
+#     scp'd, not cloned — so abh_deploy.sh's `[ -d .git ]` test fails and it
+#     takes the CLONE branch: `rm -rf` the deployed tree, clone upstream, then
+#     apply a patch derived from a commit upstream has since force-pushed
+#     away. The tree is gone whether or not the apply succeeds afterwards.
+#     The patch reverse-applying cleanly is the honest signal that our edits
+#     are already in place, and it does not need a git repo at all.
+#     The patch path must be ABSOLUTE: `git -C <dir> apply` resolves a relative
+#     one against <dir>, so a relative path silently checks the wrong place.
+if ssh -o BatchMode=yes "$BOX" 'git -C /root/Agentic-Bug-Hunter apply --reverse --check /root/Auto-FreeCF/patches/agentic-bug-hunter-blu.patch >/dev/null 2>&1'; then
+  say abh "already patched — skipped (re-running would reset --hard first)"
+elif ! ssh -o BatchMode=yes "$BOX" 'test -f /root/grokbot/router.key'; then
+  say abh "SKIP (no /root/grokbot/router.key on $BOX)"
+elif ! ssh -o BatchMode=yes "$BOX" 'curl -sf -o /dev/null -m 8 http://127.0.0.1:20128/v1/models'; then
+  say abh "SKIP (9router not answering on :20128 — start blu-9router, then re-run)"
+elif ssh -o BatchMode=yes "$BOX" 'cd /root/Auto-FreeCF && bash scripts/abh_deploy.sh' >/tmp/abh_deploy.log 2>&1; then
+  say abh "deployed ($(grep -c '^\[abh\]' /tmp/abh_deploy.log 2>/dev/null || echo 0) steps)"
+else
+  say abh "FAILED — tail of /tmp/abh_deploy.log:"
+  tail -5 /tmp/abh_deploy.log | sed 's/^/              /'
+fi
+
 # 5. prove it end to end, from inside the box.
 ssh -o BatchMode=yes "$BOX" "export PATH=\"\$HOME/.local/bin:\$HOME/.opencode/bin:\$PATH\"; cd ~ && opencode run --model 9router/$MODEL 'Reply with exactly: BLU-OK'" 2>&1 | tail -1
