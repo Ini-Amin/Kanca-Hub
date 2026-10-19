@@ -8,15 +8,45 @@ System-wide route, so camoufox geoip=True follows the new exit IP automatically.
 ponytail: volunteer relays (logged, untrusted) - signup farming only, never real creds.
 Not for Google reCAPTCHA audio (verified refused even on residential relays).
 """
-import argparse, base64, csv, io, json, re, subprocess, sys, tempfile, time, urllib.request
+import argparse, base64, csv, io, json, os, re, socket, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
 
 API = "http://www.vpngate.net/api/iphone/"
 PID = Path.home() / ".cache" / "vpngate.pid"
 
+# The relay list must be fetched through a working egress on hosts whose direct
+# path to vpngate.net is intercepted. Measured 2026-10-19 on the farm box:
+# direct -> HTTP 200 but a 636-byte ASP.NET form (an interception page); through
+# the WARP proxy -> the real 1.3 MB CSV. Without this the farm printed
+# "no relays" and could never rotate IPs, which is the one thing THK's
+# per-IP signup cap requires.
+API_PROXY_ENV = "VPNGATE_API_PROXY"
+# The farm box's WARP wireproxy (documented port). Auto-used when the env var is
+# unset and something is listening there, so the farm needs no extra config.
+WARP_PROXY = "http://127.0.0.1:25344"
+
+
+def _api_proxy() -> str | None:
+    """Explicit VPNGATE_API_PROXY, else a locally listening WARP proxy, else None."""
+    if os.environ.get(API_PROXY_ENV):
+        return os.environ[API_PROXY_ENV]
+    try:
+        with socket.create_connection(("127.0.0.1", 25344), timeout=0.5):
+            return WARP_PROXY
+    except OSError:
+        return None
+
+
+def _api_opener():
+    proxy = _api_proxy()
+    if not proxy:
+        return urllib.request.build_opener()
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+
 
 def relays(country=None):
-    raw = urllib.request.urlopen(API, timeout=30).read().decode("utf-8", "ignore")
+    raw = _api_opener().open(API, timeout=30).read().decode("utf-8", "ignore")
     rows = csv.DictReader(io.StringIO("\n".join(l for l in raw.splitlines()
                                                 if not l.startswith("*")).lstrip("#")))
     out = [r for r in rows if r.get("OpenVPN_ConfigData_Base64")
@@ -24,11 +54,21 @@ def relays(country=None):
     return sorted(out, key=lambda r: -int(r["Speed"] or 0))
 
 
+# Several echo services: one being rate-limited on a shared egress must not be
+# read as "the tunnel never came up" (measured: api.ipify.org answered
+# "Too Many Requests" from the farm box while ifconfig.me answered fine).
+_IP_ECHOES = ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com")
+
+
 def exit_ip():
-    try:
-        return urllib.request.urlopen("https://api.ipify.org", timeout=10).read().decode()
-    except Exception:
-        return None
+    for url in _IP_ECHOES:
+        try:
+            ip = urllib.request.urlopen(url, timeout=10).read().decode().strip()
+        except Exception:
+            continue
+        if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+            return ip
+    return None
 
 
 def down():
