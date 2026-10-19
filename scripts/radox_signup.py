@@ -79,10 +79,18 @@ def gen_name():
 
 
 def _proxy_kwargs():
-    """Honor HTTP(S)_PROXY like zai_signup's camoufox launch."""
+    """Honor HTTP(S)_PROXY like zai_signup's camoufox launch.
+
+    Camoufox wants {"server","username","password"} — a bare URL string makes
+    its internals call .get() on a str and die with AttributeError. Convert
+    through the shared helper so user:pass URLs split correctly.
+    """
     p = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") \
         or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
-    return {"proxy": p} if p else {}
+    if not p:
+        return {}
+    from camoufox_helpers import to_camoufox_proxy
+    return {"proxy": to_camoufox_proxy(p)}
 
 def mask_promo(code: str) -> str:
     return code if len(code) <= 6 else f"{code[:4]}...{code[-2:]}"
@@ -180,6 +188,36 @@ async def _logged_in(page) -> bool:
     url = page.url
     return "register" not in url and "login" not in url
 
+# Radox accepts consumer mailboxes only: its signup form rejects custom
+# domains outright ("Custom email domains can only be used once"). Our
+# tempik/relay stack is kancalabs.my.id, so a farm run with one can never
+# succeed -- fail before submitting instead of waiting 150 s for mail.
+CONSUMER_DOMAINS = ("gmail.com", "googlemail.com", "outlook.com", "hotmail.com",
+                    "live.com", "icloud.com", "me.com", "proton.me", "protonmail.com",
+                    "yahoo.com")
+
+def _is_consumer_address(address: str) -> bool:
+    d = address.rsplit("@", 1)[-1].lower() if "@" in address else ""
+    return any(d == c or d.endswith("." + c) for c in CONSUMER_DOMAINS)
+
+async def _form_error(page) -> str:
+    """Visible validation error after a submit, or ''.
+
+    Laravel renders these as .invalid-feedback / .text-danger / an alert; the
+    wording matters more than the class, so match known phrases in body text
+    too. Without this, a rejected signup looks like 'waiting for verify mail'.
+    """
+    txt = (await js(page, "document.body.innerText", "") or "")
+    low = txt.lower()
+    for phrase in ("already been registered", "custom email domain",
+                   "can only be used once", "already exists",
+                   "email has already", "these credentials do not match",
+                   "invalid email", "too many attempts"):
+        if phrase in low:
+            i = low.find(phrase)
+            return txt[max(0, i - 120):i + 160].strip().replace("\n", " ")
+    return ""
+
 
 async def _grab_api_key(page, net_keys: list, log):
     """API key via (1) captured key-create API response, (2) dashboard DOM,
@@ -231,6 +269,15 @@ async def _once(*, headless=True, promo=None, log=print) -> dict:
 
     box = M.open_mailbox("auto", domain=MAIL_DOMAIN, log=log)
     email, password, name = box.address, gen_password(), gen_name()
+    if not _is_consumer_address(email):
+        # Radox rejects custom domains; waiting for a verify mail that cannot
+        # come wastes 150 s per attempt. Refuse up front with a usable message.
+        log(f"  ✗ {email} is a custom domain; radox only accepts "
+            f"{', '.join(CONSUMER_DOMAINS[:5])}...")
+        log("    set RADOX_MAIL_PROVIDER=gmail (needs a working provider) or pass --email")
+        return {"email": email, "password": password, "name": name,
+                "provider": "radox", "status": "custom_domain_rejected",
+                "api_key": None}
     rec = {"email": email, "password": password, "name": name,
            "provider": "radox", "status": "start", "api_key": None}
     log(f"  email: {email}  password: {password}  name: {name}")
@@ -257,6 +304,12 @@ async def _once(*, headless=True, promo=None, log=print) -> dict:
             rec["status"] = "register_form_error"
             return rec
         err = await js(page, "document.body.innerText", "") or ""
+        form_err = await _form_error(page)
+        if form_err:
+            rec["status"] = "register_rejected"
+            rec["error"] = form_err[:300]
+            log(f"  ✗ rejected: {form_err[:160]}")
+            return rec
         if "email has already" in err or "invalid" in err.lower()[:2000]:
             rec["status"] = "register_rejected"
             return rec
