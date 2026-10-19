@@ -125,7 +125,7 @@ globals().update({_n: getattr(kancahub_base, _n)
 _REEXPORTS = {
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
-    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw",
+    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack",
     "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api _r9_models cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
                       "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
@@ -850,6 +850,12 @@ def build_parser() -> argparse.ArgumentParser:
                      "Cloudflare Turnstile, e.g. 'kancahub abliteration run -- --cdp wss://...')")
     ab.add_argument("extra", nargs=argparse.REMAINDER,
                     help="args passed straight to node (e.g. -- -n 5 -c 2)")
+    nt = sub.add_parser("notrack",
+                        help="notrack-bulk-9router: cheap sessions (no email/captcha) pooled as one endpoint")
+    nt.add_argument("mode", nargs="?", choices=["create", "verify", "list", "connect", "run", "adapter"],
+                    default="list", help="create (mint sessions), adapter/run (serve :8784), list, verify, connect")
+    nt.add_argument("extra", nargs=argparse.REMAINDER, help="args passed straight to the vendor CLI")
+
     ac = sub.add_parser("autoclaw",
                         help="AutoClaw 2.0.3: fission referral bonuses & z.ai OAuth login")
     acs = ac.add_subparsers(dest="autoclaw_cmd")

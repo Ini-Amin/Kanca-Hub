@@ -270,12 +270,16 @@ async def _once(*, headless=True, promo=None, log=print) -> dict:
     provider = os.environ.get("RADOX_MAIL_PROVIDER", "").strip().lower() or "auto"
     box = M.open_mailbox(provider, domain=MAIL_DOMAIN, log=log)
     email, password, name = box.address, gen_password(), gen_name()
-    if not _is_consumer_address(email):
+    allow_custom = os.environ.get("RADOX_ALLOW_CUSTOM_DOMAIN", "") == "1"
+    if not _is_consumer_address(email) and not allow_custom:
         # Radox rejects custom domains; waiting for a verify mail that cannot
         # come wastes 150 s per attempt. Refuse up front with a usable message.
+        # The wording says a custom domain can be used ONCE, so a brand-new
+        # domain may pass -- opt in with RADOX_ALLOW_CUSTOM_DOMAIN=1 to try.
         log(f"  ✗ {email} is a custom domain; radox only accepts "
             f"{', '.join(CONSUMER_DOMAINS[:5])}...")
         log("    set RADOX_MAIL_PROVIDER=imap + KANCA_IMAP_USER/PASS (a real consumer inbox)")
+        log("    (or RADOX_ALLOW_CUSTOM_DOMAIN=1 to test a first-use domain)")
         return {"email": email, "password": password, "name": name,
                 "provider": "radox", "status": "custom_domain_rejected",
                 "api_key": None}

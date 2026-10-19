@@ -421,3 +421,41 @@ def cmd_autoclaw(a) -> int:
 
     print(kancahub.col("red", f"✗ unknown autoclaw subcommand {sub!r}"))
     return 1
+
+
+# notrack.ai pooling adapter. 8784 is the vendor default; nothing else on blu
+# uses it (8787 zcode, 8789 gemini, 8790 grokbot-shim, 8791 grokbot-gateway).
+NOTRACK_PORT = 8784
+
+
+def cmd_notrack(a) -> int:
+    """notrack-bulk-9router: create notrack.ai sessions and serve them as one endpoint.
+
+    Cheapest farm measured 2026-10-19: 1 account in 5s, no email, no CAPTCHA,
+    works from a datacenter IP (unlike THK/hark/agentscope). The adapter pools the
+    sessions and round-robins them, so 9Router needs ONE connection pointing at it.
+    Measured caveat: completions are flaky at speed (200/502 alternating) --
+    callers must retry.
+    """
+    import kancahub
+    root = VENDOR / "notrack-bulk-9router"
+    mode = getattr(a, "mode", "list") or "list"
+    if not root.exists():
+        print(kancahub.col("red", f"✗ notrack vendor missing at {root}"))
+        return 1
+    if mode == "adapter":
+        script = root / "src" / "adapter.js"
+    else:
+        script = root / "src" / "cli.js"
+    if not script.exists():
+        print(kancahub.col("red", f"✗ {script} not found"))
+        return 1
+    extra = _extra(a)
+    if mode == "adapter":
+        cmd = ["node", str(script)]
+    else:
+        cmd = ["node", str(script), mode] + extra
+    env = {"PORT": str(NOTRACK_PORT)} if mode in ("adapter", "run") else None
+    if mode in ("adapter", "run"):
+        print(kancahub.col("dim", f"  adapter base: http://127.0.0.1:{NOTRACK_PORT}/v1"))
+    return kancahub.run(cmd, cwd=root, env=env)
