@@ -467,15 +467,24 @@ def _peek_app_error(resp):
 def _try_another_account(err):
     """Should failover retry this model on a different account?
 
-    3012 (app-level "unusual activity") is a per-ACCOUNT block: the same request
-    works on another account (measured 2026-10-15: one account 3012, the next
-    answered 200). Without it here, a blocked account keeps getting picked until
-    a human prunes it by hand — and the client sees the raw 3012 instead."""
+    401/network errors are always worth another account. Quota errors
+    (1005/3009/3010) are per-account by definition: another account has its own
+    bucket, so rotating is correct.
+
+    3012 ("unusual activity") is ambiguous and the distinction matters:
+      * 2026-10-15 it was per-ACCOUNT -- one account 3012, the next answered 200.
+      * 2026-10-19 it is FARM-WIDE -- 25 accounts, both mail domains, and eight
+        egress IPs across five countries all return 3012 identically, while
+        billing/balance still authenticates and shows an intact plan.
+    Rotating on the farm-wide variant burns four accounts per request and
+    amplifies the very pattern that triggered the flag. So 3012 is NOT listed
+    here; `_call_failover` allows exactly one probe on a different account to
+    cover the per-account case, then stops and relays."""
     if getattr(err, "code", None) == 401:
         return True
     if "104" in str(err) or "Connection reset" in str(err):
         return True
-    return getattr(err, "app_code", None) in (1005, 3009, 3010, 3012)
+    return getattr(err, "app_code", None) in (1005, 3009, 3010)
 
 def _try_next_model(err):
     """Should the model chain advance to the next model?
@@ -750,6 +759,7 @@ class Handler(BaseHTTPRequestHandler):
         # many more accounts than it claims plans for, and file order put the
         # plan-less ones first (see usable_accounts()).
         queue = usable_accounts(model, exclude=tried)
+        blocked_3012 = 0
         while len(tried) < 4:
             email = self.account if not tried else (queue.pop(0) if queue else None)
             if email is None or email in tried:
@@ -764,6 +774,18 @@ class Handler(BaseHTTPRequestHandler):
                     bridge_event("failover", "dead JWT on %s -> using %s" % (self.account, email))
                 self.account = email
                 return resp, None
+            # 3012 is usually farm-wide (measured 2026-10-19), so walk at most
+            # ONE other account to cover the per-account case and then stop.
+            # Rotating four accounts per request is what turned a block into a
+            # pattern; the client gets the error and fails over to another model.
+            if getattr(err, "app_code", None) == 3012:
+                blocked_3012 += 1
+                if blocked_3012 >= 2:
+                    bridge_event("block", "3012 on %d accounts -> farm-wide; "
+                                 "stopping rotation, relaying to client" % blocked_3012)
+                    break
+                bridge_event("failover", "3012 on %s -> one cross-account probe" % email)
+                continue
             if not _try_another_account(err):
                 break
             bridge_event("failover", "%s on %s -> trying next account"
