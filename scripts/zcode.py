@@ -27,8 +27,19 @@ persona.txt, usage.json, balance.json, events.log, promos.json, farm_state.json)
 import argparse, json, os, subprocess, sys, time, urllib.request, urllib.error
 
 STATE = os.path.expanduser("~/.zcode-bridge")
-PY_BROWSER = os.path.expanduser("~/.local/share/auto-freecf/camoufox-venv/bin/python")
-SCRIPTS = "/home/amen/Auto-FreeCF/scripts"
+def _find_browser_py():
+    for cand in (
+        os.environ.get("PY_BROWSER"),
+        os.path.expanduser("~/.local/share/auto-freecf/camoufox-venv/bin/python"),
+        os.path.expanduser("~/venv/bin/python"),
+        sys.executable,
+    ):
+        if cand and os.path.exists(cand) and os.access(cand, os.X_OK):
+            return cand
+    return sys.executable
+
+PY_BROWSER = _find_browser_py()
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 MINT = os.path.join(SCRIPTS, "zcode_bridge.py")
 CLAIM_HELPER = os.path.join(SCRIPTS, "zcode_claim.py")
 SERVER = os.path.join(SCRIPTS, "zcode_bridge_server.py")

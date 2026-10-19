@@ -39,7 +39,7 @@ HEALTH = Path(os.path.expanduser("~/.config/auto-freecf/r9_health.json"))
 THK = "openai-compatible-chat-1d39647b-193d-4f65-b38b-03d80c92460a"
 
 # model names that THK no longer serves (probed live 2026-10-10)
-THK_STALE = {"glm-5.2:free", "glm-5.2"}
+THK_STALE = {"glm-5.2:free", "glm-5.2", "claude-haiku-5.5:free", "claude-haiku-5.5"}
 
 # ranking: a live key beats an unknown one beats a known-dead one
 RANK = {"ok": 0, "stored": 1, "unprobeable": 1, "error": 2}
