@@ -128,8 +128,16 @@ PY
 python3 "$REPO/scripts/kancahub.py" thk inject --verify 2>&1 | tail -8
 python3 "$REPO/scripts/kancahub.py" thk sync --prune 2>&1 | tail -5
 
-# 5. prove the router actually serves the new keys
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
+# 5. prove the router is alive and serving. The catalog endpoint serialises a
+#    ~292 KB model list and took 24s here, so a -m 20 probe reported 000 on a
+#    perfectly healthy router. Health is the liveness check; the catalog is a
+#    slower secondary check with room for the growing list.
+HEALTH=$(curl -s -o /dev/null -w '%{http_code}' -m 8 \
+  http://127.0.0.1:20128/api/health 2>/dev/null)
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 60 \
   http://127.0.0.1:20128/v1/models 2>/dev/null)
-echo "[farm] 9router /v1/models -> ${CODE:-no-response}"
+echo "[farm] 9router health -> ${HEALTH:-no-response} | /v1/models -> ${CODE:-no-response}"
+if [ "$HEALTH" != "200" ]; then
+  echo "[farm] WARN: 9Router is not healthy; injected keys may not be served"
+fi
 echo "[farm] done $(date '+%F %T')"
