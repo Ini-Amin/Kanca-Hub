@@ -8,7 +8,7 @@
 # (cd41300) — before that, 3 of 66 lightvela records were silently dropped.
 set -u
 FARM=${ZAI_FARM_HOST:-lightvela}
-LEDGER="$HOME/.config/auto-freecf/zai_accounts.jsonl"
+LEDGER="${HOME:-/root}/.config/auto-freecf/zai_accounts.jsonl"
 REPO="${R9_FARM_REPO:-${HOME:-/root}/Auto-FreeCF}"
 mkdir -p "$(dirname "$LEDGER")"
 
@@ -57,7 +57,7 @@ python3 scripts/zcode.py watch --once 2>&1 | tail -2
 python3 scripts/inject_thk_9router.py --kind zcode 2>&1 | tail -1
 python3 - <<'PY'
 import sqlite3, os
-db = sqlite3.connect(os.path.expanduser("~/.9router/db/data.sqlite"))
+db = sqlite3.connect(os.path.expanduser("os.path.expanduser("~/.9router/db/data.sqlite")"))
 n = db.execute('select count(*) from providerConnections where name like "Zcode%"').fetchone()[0]
 print(f"[zai-pull] 9router now serves {n} zcode connections")
 PY
