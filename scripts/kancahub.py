@@ -1014,6 +1014,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_abliteration(args)
     if g == "autoclaw":
         return cmd_autoclaw(args)
+    if g == "notrack":
+        return cmd_notrack(args)
     if g == "hunt":
         tool = AUTO_FREECF / "scripts" / "ai_key_hunt.py"
         if not tool.exists():
