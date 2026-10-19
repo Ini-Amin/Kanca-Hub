@@ -71,21 +71,35 @@ def _thk_vpngate_rotate(country, used: set[str], state: dict, tries: int = 5) ->
     per chunk or it stops after the first capped one. `state` carries the relay
     index across calls; freshness is verified by the exit IP, because up() picks
     the first working relay in a window of five.
+
+    Never raises: a rotation failure must stop the batch, not abort it with a
+    traceback (a relay fetch timeout once killed a whole farm run mid-batch).
     """
     import kancahub
     import vpngate
     for _ in range(tries):
         state["index"] = state.get("index", 0) + 1
-        if vpngate.up(country, state["index"]) != 0:
-            print(kancahub.col("yellow", f"  [thk] relay #{state['index']} did not come up; trying the next..."))
+        try:
+            if vpngate.up(country, state["index"]) != 0:
+                print(kancahub.col("yellow", f"  [thk] relay #{state['index']} did not come up; trying the next..."))
+                continue
+            ip = vpngate.exit_ip()
+        except Exception as exc:  # noqa: BLE001 - network/relay faults must not crash the batch
+            print(kancahub.col("yellow", f"  [thk] relay rotation error ({type(exc).__name__}); trying the next..."))
+            try:
+                vpngate.down()
+            except Exception:  # noqa: BLE001
+                pass
             continue
-        ip = vpngate.exit_ip()
         if ip and ip not in used:
             used.add(ip)
             print(kancahub.col("cyan", f"  [thk] fresh relay exit {ip}"))
             return True
         print(kancahub.col("yellow", f"  [thk] relay exit {ip or 'unknown'} already used; rotating again..."))
-        vpngate.down()
+        try:
+            vpngate.down()
+        except Exception:  # noqa: BLE001
+            pass
     return False
 
 

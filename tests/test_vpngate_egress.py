@@ -78,7 +78,52 @@ class TestApiProxySelection(unittest.TestCase):
         self.assertEqual(handler.proxies["https"], "http://p:1")
 
 
+class TestRelayCache(unittest.TestCase):
+    def setUp(self) -> None:
+        vpngate._RELAY_CACHE.clear()
+        self.addCleanup(vpngate._RELAY_CACHE.clear)
+
+    def test_second_call_does_not_refetch(self) -> None:
+        opener = _FakeOpener(CSV.encode())
+        with mock.patch.object(vpngate, "_api_opener", return_value=opener):
+            first = vpngate.relays("JP")
+            vpngate.relays("JP")
+        self.assertEqual(opener.used, 1, "rotating batches must not re-fetch per relay")
+        self.assertIs(first, vpngate.relays("JP"))
+
+    def test_cache_is_per_country(self) -> None:
+        opener = _FakeOpener(CSV.encode())
+        with mock.patch.object(vpngate, "_api_opener", return_value=opener):
+            vpngate.relays("JP")
+            vpngate.relays("KR")
+        self.assertEqual(opener.used, 2)
+
+
+class TestApiProxyWithTunnel(unittest.TestCase):
+    def test_tunnel_up_bypasses_the_warp_proxy(self) -> None:
+        """A live tunnel is the egress; the WARP proxy path stalls then."""
+        fake_pid = mock.MagicMock()
+        fake_pid.read_text.return_value = "4242\n"
+        with mock.patch.dict("os.environ", {}, clear=True), \
+             mock.patch.object(vpngate, "PID", fake_pid), \
+             mock.patch.object(vpngate.socket, "create_connection",
+                               side_effect=AssertionError("must not probe WARP while tunnelled")):
+            self.assertIsNone(vpngate._api_proxy())
+
+    def test_tunnel_down_uses_warp_proxy(self) -> None:
+        fake_pid = mock.MagicMock()
+        fake_pid.read_text.return_value = ""
+        with mock.patch.dict("os.environ", {}, clear=True), \
+             mock.patch.object(vpngate, "PID", fake_pid), \
+             mock.patch.object(vpngate.socket, "create_connection", return_value=mock.MagicMock()):
+            self.assertEqual(vpngate._api_proxy(), vpngate.WARP_PROXY)
+
+
 class TestRelays(unittest.TestCase):
+    def setUp(self) -> None:
+        vpngate._RELAY_CACHE.clear()
+        self.addCleanup(vpngate._RELAY_CACHE.clear)
+
     def test_parses_and_sorts_by_speed(self) -> None:
         opener = _FakeOpener(CSV.encode())
         with mock.patch.object(vpngate, "_api_opener", return_value=opener):

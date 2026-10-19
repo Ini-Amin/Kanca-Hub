@@ -26,10 +26,24 @@ API_PROXY_ENV = "VPNGATE_API_PROXY"
 WARP_PROXY = "http://127.0.0.1:25344"
 
 
+def _tunnel_up() -> bool:
+    """True while a relay tunnel is live (up() writes its pid on connect)."""
+    try:
+        return bool(PID.read_text().strip())
+    except OSError:
+        return False
+
+
 def _api_proxy() -> str | None:
     """Explicit VPNGATE_API_PROXY, else a locally listening WARP proxy, else None."""
     if os.environ.get(API_PROXY_ENV):
         return os.environ[API_PROXY_ENV]
+    # A live tunnel IS the egress: routing the API fetch through the WARP proxy
+    # then stalls (measured 2026-10-19: the farm's rotating chunk timed out in
+    # getresponse() and killed the batch). Go direct instead -- the tunnel
+    # carries it, and the relay's own egress reaches vpngate.net.
+    if _tunnel_up():
+        return None
     try:
         with socket.create_connection(("127.0.0.1", 25344), timeout=0.5):
             return WARP_PROXY
@@ -45,13 +59,23 @@ def _api_opener():
         urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
 
 
+# One fetch per country per process. A rotating batch calls up() per chunk;
+# re-fetching each time is both slow and fragile (see _api_proxy above).
+_RELAY_CACHE: dict = {}
+
+
 def relays(country=None):
+    key = (country or "").upper()
+    if key in _RELAY_CACHE:
+        return _RELAY_CACHE[key]
     raw = _api_opener().open(API, timeout=30).read().decode("utf-8", "ignore")
     rows = csv.DictReader(io.StringIO("\n".join(l for l in raw.splitlines()
                                                 if not l.startswith("*")).lstrip("#")))
     out = [r for r in rows if r.get("OpenVPN_ConfigData_Base64")
            and (not country or r["CountryShort"].upper() == country.upper())]
-    return sorted(out, key=lambda r: -int(r["Speed"] or 0))
+    out = sorted(out, key=lambda r: -int(r["Speed"] or 0))
+    _RELAY_CACHE[key] = out
+    return out
 
 
 # Several echo services: one being rate-limited on a shared egress must not be
