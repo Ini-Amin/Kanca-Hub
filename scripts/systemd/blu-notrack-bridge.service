@@ -1,0 +1,19 @@
+# /etc/systemd/system/blu-notrack-bridge.service (installed on blu)
+# Serves the notrack.ai session pool as one OpenAI-compatible endpoint on :8784.
+# The adapter owns the round-robin; 9Router holds ONE connection to it, added by
+# `python3 scripts/inject_thk_9router.py --kind notrack`.
+[Unit]
+Description=notrack.ai session pool adapter (OpenAI-compatible, :8784)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Auto-FreeCF-vendor-refs/notrack-bulk-9router
+Environment=PORT=8784
+ExecStart=/usr/bin/node src/adapter.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
