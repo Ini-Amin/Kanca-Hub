@@ -60,13 +60,11 @@ UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
     ("22", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"]),
     ("23", "ZCode: z.ai Start Plan -> glm pool", "zcode claim --connect", ["zcode", "claim", "--", "--connect"]),
     ("24", "AutoClaw: 1-click z.ai OAuth claim (+800)", "autoclaw claim", ["autoclaw", "claim"]),
-
-    # Group 10: Free-AI provider farms (radox / beatapi)
     ("28", "RadoxAI signup (10M tokens/mo free)", "freeai radox", ["freeai", "radox"]),
     ("29", "BeatAPI signup (free credits)", "freeai beatapi", ["freeai", "beatapi"]),
     ("30", "Free-AI farm status (radox + beatapi)", "freeai status", ["freeai", "status"]),
 
-    # Group 11: Free VPN-fleet egress
+    # Group 10: Free VPN-fleet egress
     ("25", "VPN pool: status + flag cooldowns", "vpn status", ["vpn", "status"]),
     ("26", "VPN pool: list entries", "vpn list", ["vpn", "list"]),
     ("27", "VPN pool: farm Windscribe accounts", "vpn farm", ["vpn", "farm"]),
@@ -81,9 +79,8 @@ MENU_STAGE_HEADERS: dict[str, str] = {
     "19": "[6] IDE Interception (MITM · Antigravity/Copilot/Kiro)",
     "20": "[7] Adapt Any Website (autofarm)",
     "21": "[8] OTP Mailboxes (Litensi)",
-    "22": "[9] Vendor Farms (abliteration · ZCode · AutoClaw)",
-    "28": "[10] Free-AI Provider Farms (radox · beatapi)",
-    "25": "[11] Free VPN-fleet egress",
+    "22": "[9] Vendor & Free-AI Farms (abliteration · ZCode · AutoClaw · radox · beatapi)",
+    "25": "[10] Free VPN-fleet egress",
 }
 
 # Menu keys that are account farms -> the menu asks for count/pace/egress in-CLI.
