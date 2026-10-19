@@ -108,8 +108,8 @@ class TestVpngateRotate(unittest.TestCase):
 
 
 class TestRunStepsForTunnel(unittest.TestCase):
-    def _plan(self, proxy, per_ip=1, n=4) -> str:
-        args = mock.Mock(proxy=proxy, per_ip=per_ip, max=n, apply=False)
+    def _plan(self, proxy, per_ip=1, n=4, farm_only=False) -> str:
+        args = mock.Mock(proxy=proxy, per_ip=per_ip, max=n, apply=False, farm_only=farm_only)
         buf = io.StringIO()
         with redirect_stdout(buf):
             r9_farm_loop.cmd_run(args)
@@ -121,6 +121,17 @@ class TestRunStepsForTunnel(unittest.TestCase):
         self.assertFalse([s for s in steps if s.startswith("kancahub proxy verify")],
                          f"tunnel must not run proxy verify; steps were {steps}")
         self.assertIn("skipping proxy verify", out)
+
+    def test_invocator_still_injects(self) -> None:
+        out = self._plan("vpngate:JP")
+        self.assertIn("kancahub thk inject --verify", out)
+        self.assertIn("kancahub thk sync --prune", out)
+
+    def test_farm_only_host_skips_inject_and_sync(self) -> None:
+        """The farm box has no 9Router DB; both steps failed there every run."""
+        out = self._plan("vpngate:JP", farm_only=True)
+        self.assertNotIn("kancahub thk inject", out)
+        self.assertNotIn("kancahub thk sync", out)
 
     def test_tunnel_batch_carries_egress_and_per_ip(self) -> None:
         out = self._plan("vpngate:JP", per_ip=1)

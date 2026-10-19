@@ -239,8 +239,12 @@ def cmd_run(a) -> int:
     if getattr(a, "per_ip", None):
         batch += ["--per-ip", str(a.per_ip)]
     steps.append(batch)
-    steps.append(["thk", "inject", "--verify"])
-    steps.append(["thk", "sync", "--prune"])
+    # The farm box has no 9Router DB, so inject/sync there fail ("9Router DB not
+    # found") and mark every run PARTIAL while producing nothing. The invoking
+    # host owns the router and runs both steps after collecting account.json.
+    if not getattr(a, "farm_only", False):
+        steps.append(["thk", "inject", "--verify"])
+        steps.append(["thk", "sync", "--prune"])
 
     # show the exact calls regardless of --apply, so the plan is inspectable
     for s in steps:
@@ -296,6 +300,9 @@ def main() -> int:
     r.add_argument("--per-ip", type=int, default=1, metavar="N",
                    help="accounts per egress IP before rotating (default 1: THK caps a "
                         "network after ~1-2 signups, so 1 relay = 1 account)")
+    r.add_argument("--farm-only", action="store_true",
+                   help="stop after the batch: this host has no 9Router DB, so the "
+                        "inject/sync steps would fail; the invoking host runs them")
     r.set_defaults(fn=cmd_run)
     args = ap.parse_args()
     return args.fn(args)

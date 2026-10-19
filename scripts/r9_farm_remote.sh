@@ -73,7 +73,7 @@ RLOG='$HOME/r9-farm.log'
 ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" \
   "cd ~/Auto-FreeCF || exit 11
    rm -f $RLOG
-   setsid nohup xvfb-run -a ~/venv/bin/python scripts/r9_farm_loop.py run --max $N --proxy '$P' --per-ip $PER_IP --apply > $RLOG 2>&1 < /dev/null &
+   setsid nohup xvfb-run -a ~/venv/bin/python scripts/r9_farm_loop.py run --max $N --proxy '$P' --per-ip $PER_IP --farm-only --apply > $RLOG 2>&1 < /dev/null &
    echo \"[farm] remote started pid=\$! log=$RLOG\"" \
   2>&1 || echo "[farm] WARN: start ssh failed (the farm may still be running detached)"
 
@@ -81,9 +81,19 @@ ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" \
 # contains this pattern, and an un-bracketed `pgrep -f` matches IT, so the poll
 # would never see the farm finish (measured: 2 self-matches vs 0).
 FARM_PAT='[r]9_farm_loop.py|[t]okenharbor.cli|[k]ancahub.py thk'
+# Wait for the remote farm to actually finish. The exit status distinguishes the
+# three cases that matter: 0 = still running, 1 = pgrep found nothing (done),
+# anything else = the connection itself failed (a relay bring-up can drop it),
+# which must NOT be read as "done" -- doing so collected account.json 80s into a
+# 20-minute batch and stranded the keys it made afterwards.
 WAITED=0
-for _ in $(seq 1 240); do
-  ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" "pgrep -f '$FARM_PAT' >/dev/null 2>&1" || break
+for _ in $(seq 1 300); do
+  ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" "pgrep -f '$FARM_PAT' >/dev/null 2>&1"
+  case $? in
+    0) ;;      # farm still running
+    1) break ;;  # no matching process: it is done
+    *) echo "[farm] poll ssh failed; retrying in 10s" ;;
+  esac
   sleep 10
   WAITED=$((WAITED + 10))
 done
