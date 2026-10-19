@@ -251,6 +251,8 @@ def _r9_models(a) -> int:
         cmd.append("--emit-fallbacks")
     if getattr(a, "concurrency", None):
         cmd += ["--concurrency", str(a.concurrency)]
+    if getattr(a, "timeout", None):
+        cmd += ["--timeout", str(a.timeout)]
     return kancahub.run(cmd, cwd=kancahub.AUTO_FREECF)
 
 
