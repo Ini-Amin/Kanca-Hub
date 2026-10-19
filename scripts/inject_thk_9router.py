@@ -39,6 +39,9 @@ NINE_ROUTER_HOME = Path(os.environ.get("NINE_ROUTER_HOME", Path.home() / ".9rout
 DB_PATH = NINE_ROUTER_HOME / "db" / "data.sqlite"
 REPO = Path(__file__).resolve().parent.parent
 
+# Vendored third-party tools, same location commands_vendor.py uses.
+VENDOR_HOME = Path(os.environ.get("AUTO_FREECF_VENDOR", Path.home() / "Auto-FreeCF-vendor-refs"))
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -87,6 +90,23 @@ def load_gemini(path: str) -> list[dict]:
     if isinstance(data, dict):
         return [{"key": v, "name": k, "email": None} for k, v in data.items() if v]
     return []
+
+
+def load_notrack(path: str) -> list[dict]:
+    """The notrack adapter pools every session itself and round-robins them, so
+    9Router needs exactly ONE connection to it -- the pool is behind the port, not
+    behind a key. The account count is only reported here for the log line."""
+    p = Path(path)
+    n = 0
+    if p.exists():
+        try:
+            d = json.loads(p.read_text() or "[]")
+            n = len(d if isinstance(d, list) else [d])
+        except Exception:  # noqa: BLE001
+            n = 0
+    if not n:
+        return []
+    return [{"key": "notrack-adapter", "name": f"adapter({n} acct)", "email": None}]
 
 
 def verify_http(base: str, key: str, model: str, timeout: int = 30) -> tuple[bool, str]:
@@ -141,6 +161,20 @@ SOURCES = {
         "model": "gemini-web",
         "default_input": str(Path.home() / ".gemini-bridge" / "keys.json"),
         "load": load_gemini,
+        "verify": True,
+        "one_per_email": False,
+    },
+    "notrack": {
+        # notrack.ai sessions pooled by its own adapter on :8784. No API keys --
+        # the adapter round-robins the session pool, so one connection is right.
+        # Cheapest farm measured 2026-10-19 (5s/account, no email, no CAPTCHA).
+        "node_id": "openai-compatible-chat-notrack-adapter",
+        "node_name": "notrack",
+        "prefix": "notrack",
+        "base": "http://127.0.0.1:8784/v1",
+        "model": "notrack/chatgpt",
+        "default_input": str(VENDOR_HOME / "notrack-bulk-9router" / "accounts.json"),
+        "load": load_notrack,
         "verify": True,
         "one_per_email": False,
     },
