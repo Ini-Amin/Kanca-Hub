@@ -285,6 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
     r9mo.add_argument("--models", default=None, help="comma-separated explicit ids")
     r9mo.add_argument("--concurrency", type=int, default=None, help="parallel probes (default 6)")
     r9mo.add_argument("--timeout", type=float, default=None, help="per-model timeout in seconds (default 45)")
+    r9mo.add_argument("--retries", type=int, default=None, help="attempts before a model is called dead (default 2)")
     r9mo.add_argument("--emit-fallbacks", action="store_true",
                       help="print only the live models as a comma list, for BOUNTY_MODEL_FALLBACKS")
     r9ks = r9k.add_subparsers(dest="kg_action")
