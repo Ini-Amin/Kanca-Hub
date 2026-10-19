@@ -78,8 +78,10 @@ for line in ledger.read_text(errors="replace").splitlines():
     email, pw, st = r.get("email"), r.get("password"), r.get("status")
     if st != "ok" or not email or not pw or email in known:
         continue
+    # "--" stops argparse eating passwords that start with "-" (3 of 66 in the
+    # lightvela ledger were silently skipped before this fix)
     rc = subprocess.call([sys.executable, str(repo / "scripts" / "zcode.py"),
-                          "account", "add", email, pw, "--no-mint"], cwd=str(repo))
+                          "account", "add", "--no-mint", email, "--", pw], cwd=str(repo))
     if rc == 0:
         known.add(email); ok += 1
         print("  + bridge: %s" % email)
