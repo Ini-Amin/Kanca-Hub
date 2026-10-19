@@ -17,7 +17,13 @@ Type=oneshot
 WorkingDirectory=/root/Auto-FreeCF
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=R9_FARM_HOST=lightvela
-Environment=R9_FARM_PROXY=http://127.0.0.1:25344
+# A VPN Gate relay, not the WARP wireproxy on 127.0.0.1:25344. THK refuses the
+# shared WARP range and caps signups per network; measured 2026-10-19 the same
+# box produced 0/4 on WARP and created a key per fresh relay. Per-ip 1 makes the
+# loop bring up a new relay for every account. Override R9_FARM_PROXY with a
+# residential proxy URL if you have a live pool.
+Environment=R9_FARM_PROXY=vpngate:JP
+Environment=R9_FARM_PER_IP=1
 Environment=R9_FARM_MAX=4
 ExecStart=/bin/bash /root/Auto-FreeCF/scripts/r9_farm_remote.sh
 
