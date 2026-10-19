@@ -399,8 +399,12 @@ if ssh -o BatchMode=yes "$BOX" 'git -C /root/Agentic-Bug-Hunter apply --reverse 
   say abh "already patched — skipped (re-running would reset --hard first)"
 elif ! ssh -o BatchMode=yes "$BOX" 'test -f /root/grokbot/router.key'; then
   say abh "SKIP (no /root/grokbot/router.key on $BOX)"
-elif ! ssh -o BatchMode=yes "$BOX" 'curl -sf -o /dev/null -m 8 http://127.0.0.1:20128/v1/models'; then
-  say abh "SKIP (9router not answering on :20128 — start blu-9router, then re-run)"
+elif ! ssh -o BatchMode=yes "$BOX" 'curl -sf -o /dev/null -m 8 http://127.0.0.1:20128/api/health'; then
+  # Probe /api/health, NOT /v1/models. /v1/models enumerates the entire model
+  # list and takes ~15 s to answer, so a short timeout there reports a healthy
+  # 9router as dead — which is exactly how this check first failed against a
+  # 9router that was up the whole time. /api/health is ~4 ms and returns {"ok":true}.
+  say abh "SKIP (9router not answering /api/health on :20128 — start blu-9router, then re-run)"
 elif ssh -o BatchMode=yes "$BOX" 'cd /root/Auto-FreeCF && bash scripts/abh_deploy.sh' >/tmp/abh_deploy.log 2>&1; then
   say abh "deployed ($(grep -c '^\[abh\]' /tmp/abh_deploy.log 2>/dev/null || echo 0) steps)"
 else

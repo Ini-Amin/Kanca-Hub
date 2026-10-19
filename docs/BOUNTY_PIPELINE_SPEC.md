@@ -353,16 +353,47 @@ box could not have run the pipeline at all**, plus a wrong backup path.
    existed only on the box. Both are now in `scripts/systemd/`, byte-identical to live
    (`md5` MATCH on both).
 
-**Step 2 — the backup did not exist.** The spec promised an `asus` pull into `~/.blu-backup/` and
-there was nothing behind it: no script anywhere, no cron entry, no push on `blu`, and not even
-`rsync` installed there. `scripts/blu_backup_pull.sh` is that missing half (tar over ssh, because
-installing packages on a box that gets thrown away is how a backup stops running).
+**Step 2 — one of the two requested paths was already backed up. An earlier draft of this section
+claimed "the backup did not exist" — that was wrong, corrected here after looking at `asus` itself
+rather than only at `blu` and this repo.**
 
-It also corrects the **path**: `recon/*/findings/` does not exist on `blu` — a hunt records its
-findings in `recon/<target>/sessions/<run>/agent_session.json` (`findings_log` + trace) and
-`recon/<target>/nuclei/findings.jsonl`. Backing up the documented path would have archived nothing
-and reported success. The real locations are in the list; the documented glob is kept so it still
-works if ABH ever creates that layout.
+What already runs: **`blu-keysync.timer` on `asus`**, every **12 minutes** (`OnUnitActiveSec=12m`),
+`Type=oneshot` → `~/.local/bin/blu-keysync.sh`. Its own description states the direction:
+
+```
+Description=Sync keys and bounty state from blu to asus
+```
+
+So the direction is **`blu` → `asus`**, pulling from `blu` — not `asus` pushing keys to `blu`:
+
+| What | Destination under `~/.blu-backup/` | Verified |
+|---|---|---|
+| `keys-export.json` (dumped from `blu`'s 9router SQLite: `apiKeys`, `providerConnections`, `providerNodes`, `combos`, `settings`) | `.9router/` | 227 KB ✓ |
+| `.config/auto-freecf/bounty` | `.config/auto-freecf/bounty` | **12 entries ✓ — the spec's second path was already covered** |
+| `.zcode-bridge` | `.zcode-bridge/` | 7.7 MB ✓ |
+
+It has no cron entry because it does not need one — it is a systemd user timer. There is still no
+`rsync` on `blu`, and `blu-keysync.sh` correctly does not need it (it is `tar` over ssh).
+
+**Therefore the genuinely missing part is only the ABH findings**, which no existing mechanism
+touches: `blu-keysync.sh` never mentions `Agentic-Bug-Hunter` at all, and `asus` has no
+`~/.blu-backup/recon` or `~/.blu-backup/Agentic-Bug-Hunter`. `scripts/blu_backup_pull.sh` adds
+that, and adds it *in addition to* what keysync already carries — it re-pulls `.config/auto-freecf/bounty`
+too (overlap is deliberate: it lets the verification below count jobs as one of its two
+non-zero assertions, so a broken pull fails loudly instead of leaving a partial tree).
+
+It also corrects the **path** for that missing part: `recon/*/findings/` does not exist on `blu` —
+a hunt records its findings in `recon/<target>/sessions/<run>/agent_session.json` (`findings_log` +
+trace) and `recon/<target>/nuclei/findings.jsonl`. Backing up the documented path would have
+archived nothing and reported success. The real locations are in the list; the documented glob is
+kept so it still works if ABH ever creates that layout.
+
+**Two naming/credential facts that made this hard to check and will bite the install step:**
+- `asus` is only an **ssh alias** for the box whose tailnet name is **`njhere`** (`100.104.217.54`).
+  `scripts/railgui.sh` spells it out: `$(hostname) = NJHERE && echo local || echo asus`.
+- It logs in as **`njborn2bebaddie`, not `root`** — `root@100.104.217.54` returns
+  `Permission denied (publickey,password)`, which is why an earlier attempt to reach it from here
+  failed. `ssh asus` works, because `~ssh/config` carries the right `User` and key.
 
 Verified against live `blu` data, both paths:
 
@@ -398,14 +429,26 @@ range, so the tested code is the shipped code): the repo tree is synced, all pip
 `active`, and `4c` refuses to touch the working ABH tree.
 
 **Not covered — remaining risks, out of Task 5's scope:**
-- The `asus` half could not be installed. `root@100.104.217.54` rejects my key
-  (`Permission denied (publickey,password)`), so `blu_backup_pull.sh` was verified by running the
-  same code path from the laptop against `blu`. **It must still be installed and scheduled on
-  `asus`** (cron/systemd timer) — that step is manual and blocked on credentials.
+- The `asus` half of `blu_backup_pull.sh` is **not yet installed or scheduled**, but this is no
+  longer a credentials problem: `ssh asus` reaches the box fine (the alias carries `User
+  njborn2bebaddie` + key), and `~/.blu-backup` already exists with `blu-keysync.timer` writing into
+  it. The script was verified by running the same code path from this machine against `blu`.
+  Installing it next to keysync as a second user timer is a mechanical step that has not been
+  taken yet. Note it must be installed as user `njborn2bebaddie`, and its `BOX=blu` relies on a
+  working `blu` alias from *that* account — which keysync already proves.
 - `blu-9router.service`, `blu-egress.service`, `blu-argon-bridge.service`, `blu-zcode-bridge.service`
   and the `grokbot-{gateway,coordinator}` units exist only on the box. They are model-farm plumbing
   outside this pipeline, and `4c` degrades loudly (SKIP with the reason) when 9router is absent
   rather than failing the provision.
-- 9router was **not answering on `:20128`** at the time of this check even though
-  `blu-9router.service` reports `active`, so `abh_deploy.sh` cannot currently run on `blu` — which
-  is precisely why `4c` refuses instead of resetting the tree.
+- **`4c`'s health probe was itself wrong at first, and that was found after Task 5 was committed.**
+  It checked `curl -m 8 /v1/models`, but that endpoint enumerates the whole model list and took
+  **14.6 s** for 292 KB — so a perfectly healthy 9router was reported as "not answering". `blu`'s
+  9router is up, local (`ExecStart=/usr/local/bin/9router --skip-update -p 20128`) and returns
+  `{"ok":true}` from `/api/health` in ~4 ms. The probe now uses `/api/health`; `abh_deploy.sh` was
+  always fine because it allows `-m 20` against `/v1/models`. **Lesson: a liveness probe must use
+  the cheap endpoint, not the one that answers the question you actually wanted answered.**
+- **Unresolved design discrepancy, deliberately not touched here:** `docs/re/grokbot-auth-and-transport.md`
+  documents the intended transport as `blu:20128 → desktop`, i.e. a reverse tunnel from `blu` to
+  this machine, but `blu-tunnel.service` is **inactive** and the port is held by `blu`'s own local
+  9router instead. So the box is serving its own model list rather than this machine's. Whether the
+  tunnel was retired on purpose or fell over is not knowable from the repo alone.
