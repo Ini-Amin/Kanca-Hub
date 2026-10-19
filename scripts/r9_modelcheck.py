@@ -68,33 +68,48 @@ def is_free(model: str) -> bool:
     return m.endswith(":free") or m.endswith("-free") or ":free/" in m or "/free" in m
 
 
-def probe(model: str, key: str, timeout: float) -> dict:
-    """One tiny non-streaming completion. Status is the only thing that matters."""
+def probe(model: str, key: str, timeout: float, retries: int = 2) -> dict:
+    """One tiny non-streaming completion, retried before calling a model dead.
+
+    A single probe is NOT enough to label a model dead: two consecutive sweeps
+    11 minutes apart scored the same catalogue 25/63 and 21/63, because
+    ocz/nemotron-3.5-lightning-free answered in 0.9s in the first and timed out
+    at 45s in the second. Without retries this tool would quietly delete healthy
+    models from the failover chain.
+    """
     body = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 1,
         "stream": False,
     }).encode()
-    req = urllib.request.Request(
-        f"{ROUTER}/v1/chat/completions", data=body,
-        headers={"content-type": "application/json", "authorization": f"Bearer {key}"},
-    )
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            r.read(2048)
-            return {"ok": True, "status": r.status, "ms": int((time.time() - t0) * 1000), "error": ""}
-    except urllib.error.HTTPError as e:
-        detail = ""
+    last: dict = {"ok": False, "status": 0, "ms": 0, "error": "not attempted"}
+    for attempt in range(1, max(1, retries) + 1):
+        req = urllib.request.Request(
+            f"{ROUTER}/v1/chat/completions", data=body,
+            headers={"content-type": "application/json", "authorization": f"Bearer {key}"},
+        )
+        t0 = time.time()
         try:
-            detail = e.read(300).decode("utf-8", "ignore").replace("\n", " ")
-        except Exception:  # noqa: BLE001
-            pass
-        return {"ok": False, "status": e.code, "ms": int((time.time() - t0) * 1000), "error": detail[:200]}
-    except Exception as e:  # noqa: BLE001 - timeouts, resets: all "does not answer"
-        return {"ok": False, "status": 0, "ms": int((time.time() - t0) * 1000),
-                "error": f"{type(e).__name__}: {e}"[:200]}
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                r.read(2048)
+                return {"ok": True, "status": r.status, "ms": int((time.time() - t0) * 1000),
+                        "error": "", "attempts": attempt}
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read(300).decode("utf-8", "ignore").replace("\n", " ")
+            except Exception:  # noqa: BLE001
+                pass
+            last = {"ok": False, "status": e.code, "ms": int((time.time() - t0) * 1000),
+                    "error": detail[:200]}
+        except Exception as e:  # noqa: BLE001 - timeouts, resets: all "does not answer"
+            last = {"ok": False, "status": 0, "ms": int((time.time() - t0) * 1000),
+                    "error": f"{type(e).__name__}: {e}"[:200]}
+        if attempt < retries:
+            time.sleep(2 * attempt)
+    last["attempts"] = retries
+    return last
 
 
 def main() -> int:
@@ -104,6 +119,7 @@ def main() -> int:
     ap.add_argument("--models", default=None, help="comma-separated explicit ids to probe")
     ap.add_argument("--concurrency", type=int, default=6, help="parallel probes (default 6)")
     ap.add_argument("--timeout", type=float, default=45.0, help="per-model timeout in seconds")
+    ap.add_argument("--retries", type=int, default=2, help="attempts before a model is called dead (default 2)")
     ap.add_argument("--limit", type=int, default=0, help="probe at most N (0 = no limit)")
     ap.add_argument("--out", default=str(OUT), help="health JSON path")
     ap.add_argument("--emit-fallbacks", action="store_true",
@@ -142,13 +158,13 @@ def main() -> int:
     results: dict[str, dict] = {}
     t0 = time.time()
     with cf.ThreadPoolExecutor(max_workers=max(1, a.concurrency)) as pool:
-        futs = {pool.submit(probe, m, key, a.timeout): m for m in models}
+        futs = {pool.submit(probe, m, key, a.timeout, a.retries): m for m in models}
         for fut in cf.as_completed(futs):
             m = futs[fut]
             results[m] = fut.result()
             if not a.quiet:
                 r = results[m]
-                mark = "OK  " if r["ok"] else "DEAD"
+                mark = "OK  " if r["ok"] else ("DEAD" if r.get("attempts", 1) > 1 else "ERR ")
                 print(f"  {mark} {m:<46} {r['ms']:>6}ms  {r['error'][:60]}")
 
     live = sorted([m for m, r in results.items() if r["ok"]], key=lambda m: results[m]["ms"])
