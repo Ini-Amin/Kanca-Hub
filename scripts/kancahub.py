@@ -126,7 +126,7 @@ _REEXPORTS = {
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
     "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw",
-    "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api cmd_9router",
+    "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api _r9_models cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
                       "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
                       "_proxy_native_harvest _proxy_native_health _proxy_native_gateway",
@@ -276,6 +276,16 @@ def build_parser() -> argparse.ArgumentParser:
     r9c.add_argument("--name", default="thk-fallback", help="combo name (default thk-fallback)")
     r9c.add_argument("--models", default=None, help="comma list of models (default: free THK models)")
     r9k = r9s.add_parser("keyguard", help="watch healthy 9Router keys; auto-farm when they run low")
+    r9mo = r9s.add_parser("models", help="probe every advertised model: which actually answer")
+    r9mo.add_argument("action", nargs="?", choices=["check"], default="check",
+                      help="check = probe and write ~/.config/auto-freecf/r9_model_health.json")
+    r9mo.add_argument("--all", dest="all_models", action="store_true",
+                      help="probe every catalogued model, not only the free ones (slow)")
+    r9mo.add_argument("--filter", default=None, help="only ids containing this substring (e.g. THK)")
+    r9mo.add_argument("--models", default=None, help="comma-separated explicit ids")
+    r9mo.add_argument("--concurrency", type=int, default=None, help="parallel probes (default 6)")
+    r9mo.add_argument("--emit-fallbacks", action="store_true",
+                      help="print only the live models as a comma list, for BOUNTY_MODEL_FALLBACKS")
     r9ks = r9k.add_subparsers(dest="kg_action")
     _kg_common = argparse.ArgumentParser(add_help=False)
     _kg_common.add_argument("--threshold", type=int, default=2,

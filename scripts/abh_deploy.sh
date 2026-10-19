@@ -98,14 +98,18 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
 # Model chain. Every entry must be PROBED live on :20128 before it lands here —
 # a dead model in the middle of the chain silently costs 65s per call and a
 # model at the END of it defeats failover entirely.
-#   verified live 2026-10-18: Zcode/GLM-5.3, ag/gemini-3.8-flash-high,
-#     THK/deepseek-v4.1-flash:free, nr/step-5-preview, ocz/mimo-v2.6-flash-free,
-#     ocz/space-bunny-free
+#   verified live 2026-10-19 (scripts/r9_modelcheck.py):
+#     Zcode/GLM-5.3, ag/gemini-3.8-flash-high, THK/deepseek-v4.1-flash:free,
+#     nr/step-5-preview, ocz/mimo-v2.6-flash-free, ocz/nemotron-3-ultra-free
 #   verified DEAD: cbai/deepseek-v4.1-flash (upstream 502 on all 3
 #     codebuddy-intl accounts) — deliberately absent from the chain.
+#   Also dead as of 2026-10-19, and removed: ocz/space-bunny-free (upstream 410
+#     Gone). It used to be the LAST hop, so every failover ended on a model that
+#     could not answer — the exact failure the paragraph above warns about.
+# Re-verify after any upstream change: python3 scripts/r9_modelcheck.py --models <list>
 # Read by LLMClient.chat() (brain.py) and OpenAICompatClient.chat() (agent.py);
 # both walk the chain on empty content, ReadTimeout, or HTTP error.
-FALLBACKS=${FALLBACKS:-"Zcode/GLM-5.3,ag/gemini-3.8-flash-high,THK/deepseek-v4.1-flash:free,nr/step-5-preview,ocz/mimo-v2.6-flash-free,ocz/space-bunny-free"}
+FALLBACKS=${FALLBACKS:-"Zcode/GLM-5.3,ag/gemini-3.8-flash-high,THK/deepseek-v4.1-flash:free,nr/step-5-preview,ocz/mimo-v2.6-flash-free,ocz/nemotron-3-ultra-free"}
 
 umask 077
 cat > "$ENVFILE" <<EOF

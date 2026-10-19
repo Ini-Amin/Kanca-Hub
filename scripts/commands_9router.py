@@ -197,7 +197,12 @@ def cmd_9router(a) -> int:
         if action == "make-thk-fallback":
             models = getattr(a, "models", None)
             if not models:
-                models = "THK/deepseek-v4.1-flash:free,THK/qwen3.8-flash:free,THK/mimo-v2.6-flash:free,THK/mimo-v2.5:free"
+                # Only the four free ids TokenHarbor actually serves. The old
+                # default carried THK/qwen3.8-flash:free, which measured HTTP 200
+                # only as a 38s failure on 2026-10-19 (r9_modelcheck.py): a combo
+                # is the LAST line of defence, so it must not hold a dead model.
+                models = ("THK/deepseek-v4.1-flash:free,THK/mimo-v2.6-flash:free,"
+                          "THK/mimo-v2.5:free,THK/deepseek-v4-flash:free")
             body = {"name": getattr(a, "name", "thk-fallback"), "models": [m.strip() for m in models.split(",") if m.strip()], "kind": "chat"}
             code, resp = kancahub._r9_api("POST", "/api/combos", body=body, base=base)
             ok = 200 <= code < 300
@@ -211,12 +216,42 @@ def cmd_9router(a) -> int:
     if sub == "keyguard":
         return _r9_keyguard(a, base)
 
+    if sub == "models":
+        return _r9_models(a)
+
     print(kancahub.col("bold", "\n  9Router CLI\n"))
     print("   [status] 9Router health")
     print("   mitm status|enable|disable|trust-cert   (route IDE traffic through 9Router)")
     print("   combo list|make-thk-fallback             (fallback model groups)")
+    print("   models check                             (probe every model: what actually answers)")
     print("   keyguard status|watch|farm|reset         (auto-farm when healthy keys run low)")
     return 0
+
+
+def _r9_models(a) -> int:
+    """Per-model health: the catalogue lists what is CONFIGURED, not what answers.
+
+    r9_conncheck.py proves each connection works with one cheap model; this asks
+    every model. Measured 2026-10-19: 25 of 63 advertised free models answered,
+    and two that DID answer were missing from the catalogue entirely.
+    """
+    import kancahub
+    tool = kancahub.AUTO_FREECF / "scripts" / "r9_modelcheck.py"
+    if not tool.exists():
+        print(kancahub.col("red", f"✗ {tool} not found"))
+        return 1
+    cmd = [kancahub.pick_python(), str(tool)]
+    if getattr(a, "all_models", False):
+        cmd.append("--all")
+    if getattr(a, "filter", None):
+        cmd += ["--filter", a.filter]
+    if getattr(a, "models", None):
+        cmd += ["--models", a.models]
+    if getattr(a, "emit_fallbacks", False):
+        cmd.append("--emit-fallbacks")
+    if getattr(a, "concurrency", None):
+        cmd += ["--concurrency", str(a.concurrency)]
+    return kancahub.run(cmd, cwd=kancahub.AUTO_FREECF)
 
 
 def _r9_keyguard(a, base: str) -> int:
