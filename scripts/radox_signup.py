@@ -35,16 +35,17 @@ from camoufox_helpers import js, type_into  # noqa: E402
 
 BASE = "https://radoxai.com"
 REGISTER = f"{BASE}/register"
-LOGIN = f"{BASE}/login"                      # [UNVERIFIED] path guessed, form shape same stack
+LOGIN = f"{BASE}/login"                      # verified 2026-10-19: Laravel form, #email #password, hidden _token
 LEDGER = Path.home() / ".config" / "auto-freecf" / "radox_accounts.jsonl"
 MAIL_DOMAIN = os.environ.get("ZAI_MAIL_DOMAIN", "kancalabs.my.id")
 
-# Dashboard key-page candidates, tried in order. [UNVERIFIED]
-KEY_PAGES = [f"{BASE}/dashboard/api-keys", f"{BASE}/dashboard/keys",
-             f"{BASE}/api-keys", f"{BASE}/dashboard"]
+# Verified: /dashboard/api-keys is the key page (302->login when anonymous);
+# docs say "Dashboard -> API Keys -> Create Key", key shown ONCE, format cc_+48.
+KEY_PAGES = [f"{BASE}/dashboard/api-keys", f"{BASE}/dashboard"]
+KEY_CREATE_LABELS = ["Create Key", "Create key", "Create API Key"]
 # Internal key-create API patterns watched on the network. [UNVERIFIED]
 KEY_API_RX = re.compile(r"(api[-_]keys?|keys?)", re.I)
-KEY_SECRET_RX = re.compile(r"\b(sk-[A-Za-z0-9_\-]{16,}|rad[A-Za-z0-9_\-]{16,})\b")
+KEY_SECRET_RX = re.compile(r"\b(cc_[A-Za-z0-9]{40,60}|sk-[A-Za-z0-9_\-]{16,})\b")
 
 
 def gen_password(n=14):
@@ -123,7 +124,7 @@ async def _grab_api_key(page, net_keys: list, log):
             if m:
                 return m.group(1), f"DOM {url}"
             # try clicking a create button, then re-scan body + network
-            for lbl in ("Create", "Generate", "New API Key", "Create API Key"):
+            for lbl in ("Create Key", "Create key", "Create API Key", "Generate"):
                 loc = page.get_by_text(lbl, exact=False).first
                 if await loc.count():
                     try:
