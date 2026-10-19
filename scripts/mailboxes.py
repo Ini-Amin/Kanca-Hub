@@ -149,6 +149,93 @@ def tempik_list() -> list[dict]:
         return []
 
 
+# ── provider: imap (a real consumer inbox you own) ──────────────
+# Radox and similar sites reject custom domains outright, so the disposable
+# stack (tempik/relay/mail.tm) cannot sign up there. This reads an existing
+# Outlook/Gmail/Proton-Bridge inbox over IMAP. Credentials come from the
+# environment, never a config file in the repo:
+#   KANCA_IMAP_USER, KANCA_IMAP_PASS, KANCA_IMAP_HOST (optional), KANCA_IMAP_FOLDER
+# Gmail/Outlook both require an APP PASSWORD (normal passwords fail AUTH).
+def _imap_env() -> tuple[str, str, str, str]:
+    import os
+    user = os.environ.get("KANCA_IMAP_USER", "").strip()
+    pw = os.environ.get("KANCA_IMAP_PASS", "").strip()
+    host = os.environ.get("KANCA_IMAP_HOST", "").strip()
+    folder = os.environ.get("KANCA_IMAP_FOLDER", "INBOX").strip() or "INBOX"
+    if not host and user:
+        d = user.rsplit("@", 1)[-1].lower()
+        host = {"gmail.com": "imap.gmail.com", "googlemail.com": "imap.gmail.com",
+                "outlook.com": "outlook.office365.com", "hotmail.com": "outlook.office365.com",
+                "live.com": "outlook.office365.com"}.get(d, "")
+    return user, pw, host, folder
+
+
+def _imap(user: str = "", password: str = "", host: str = "", folder: str = "",
+          log=print, **_) -> Mailbox:
+    """Read-only IMAP inbox. `user`/`password` win over the env vars.
+
+    Only the newest 25 messages are parsed, and only headers + a plain-text
+    body are kept — a farm needs the code/link, not the mailbox contents.
+    """
+    import email
+    import imaplib
+    import ssl
+    from email.header import decode_header, make_header
+
+    env_user, env_pw, env_host, env_folder = _imap_env()
+    user = (user or env_user).strip()
+    password = (password or env_pw).strip()
+    host = (host or env_host).strip()
+    folder = (folder or env_folder).strip() or "INBOX"
+    if not (user and password and host):
+        raise RuntimeError("imap: set KANCA_IMAP_USER/KANCA_IMAP_PASS (+host if not gmail/outlook)")
+
+    def read() -> list[dict]:
+        m = imaplib.IMAP4_SSL(host, 993, ssl_context=ssl.create_default_context())
+        try:
+            m.login(user, password)
+            m.select(folder, readonly=True)
+            typ, data = m.search(None, "ALL")
+            if typ != "OK":
+                return []
+            ids = (data[0] or b"").split()[-25:]
+            out = []
+            for i in reversed(ids):
+                typ, parts = m.fetch(i, "(RFC822)")
+                if typ != "OK" or not parts:
+                    continue
+                raw = next((p[1] for p in parts if isinstance(p, tuple)), None)
+                if not raw:
+                    continue
+                msg = email.message_from_bytes(raw)
+                subject = str(make_header(decode_header(msg.get("Subject", ""))))
+                body = ""
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        if part.get_content_type() in ("text/plain", "text/html"):
+                            try:
+                                body += part.get_payload(decode=True).decode(
+                                    part.get_content_charset() or "utf-8", "replace")
+                            except Exception:
+                                pass
+                else:
+                    try:
+                        body = msg.get_payload(decode=True).decode(
+                            msg.get_content_charset() or "utf-8", "replace")
+                    except Exception:
+                        body = str(msg.get_payload())
+                out.append({"subject": subject, "text": body[:20000],
+                            "from": msg.get("From", "")})
+            return out
+        finally:
+            try:
+                m.logout()
+            except Exception:
+                pass
+
+    return Mailbox(user, read)
+
+
 # ── provider: relay (KancaHub Supabase) ─────────────────────────
 def _relay(domain: str = "kancalabs.biz.id", log=print) -> Mailbox:
     import github_farm as g
@@ -331,7 +418,7 @@ def _gmail_chain(local_part: str = "", log=print) -> Mailbox:
 
 _PROVIDERS = {"tempik": _tempik, "relay": _relay, "litensi": _litensi, "static": _static,
               "emailmux": _emailmux, "emailnator": _emailnator, "mailtm": _mailtm,
-              "gmail": _gmail_chain}
+              "gmail": _gmail_chain, "imap": _imap}
 
 
 def route_for(domain: str) -> str:
@@ -380,6 +467,8 @@ def open_mailbox(provider: str = "auto", *, domain: str = "", local_part: str = 
             return _mailtm(local_part, log, domain)
         if provider == "gmail":
             return _gmail_chain(local_part, log)
+        if provider == "imap":
+            return _imap(local_part, log=log)
         return _static(domain, local_part, log)
     except Exception as exc:  # network/keys/stock — never fatal to a farm run
         log(f"  [mail] {provider} unavailable ({exc}); using a static address")
