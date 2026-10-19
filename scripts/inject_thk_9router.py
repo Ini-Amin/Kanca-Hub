@@ -136,6 +136,7 @@ SOURCES = {
         "load": load_harbor,
         "verify": True,
         "one_per_email": False,
+        "round_robin": True,
     },
     "zcode": {
         "node_id": "openai-compatible-chat-357dffc2-100b-4534-86e4-78cab29ba14b",

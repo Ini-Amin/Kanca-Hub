@@ -145,6 +145,7 @@ def cmd_thk(a) -> int:
         # Harbor picks its own proxy from tools/tokenharbor/proxy_list.txt, so an
         # explicit/auto hop is only inherited through the environment.
         env = None
+        choice = None
         if sub in ("setup", "batch", "create-key"):
             mode = getattr(a, "proxy", None) or kancahub.PROXY_AUTO
             if getattr(a, "no_proxy", False):
