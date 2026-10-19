@@ -26,7 +26,7 @@ set -u
 H=${R9_FARM_HOST:-lightvela}
 P=${R9_FARM_PROXY:-http://127.0.0.1:25344}   # wireproxy (Cloudflare WARP) on the farm box
 N=${R9_FARM_MAX:-4}
-REPO=$HOME/Auto-FreeCF
+REPO=${R9_FARM_REPO:-${HOME:-/root}/Auto-FreeCF}
 BRANCH=${R9_FARM_BRANCH:-main}
 
 # The slider solver is the one file whose drift is both silent and fatal: an old
