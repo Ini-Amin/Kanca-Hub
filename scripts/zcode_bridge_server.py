@@ -535,13 +535,19 @@ def call_upstream(payload, email="", timeout=600):
     return None, Exception("upstream retries exhausted")
 
 
-# Backstop, not a ceiling. The client (opencode) auto-compacts on its own near
-# the model's advertised context: abliterated 200k -> ~720 KB, GLM-5.3 1M -> 3.6 M.
-# This guard must sit ABOVE those triggers, or it fires first and the user is
-# told to compact by hand (measured 2026-10-15: 512 KB blocked a session that
-# opencode would have compacted itself). 900 KB clears the 200k-model case;
-# the 1,4 MB dumps that die upstream are still rejected, just later.
-MAX_BODY_BYTES = 900 * 1024
+# Backstop, not a ceiling. The client auto-compacts near the model's advertised
+# context, so this guard must sit ABOVE that trigger or it fires first and the
+# user is told to compact by hand (measured 2026-10-15: 512 KB blocked a session
+# opencode would have compacted itself).
+#
+# The advertised context is what makes this work: clients that know the window
+# compact at ~80% of it. We advertise 180k tokens for the Zcode models (see
+# opencode.json `limit`), which is ~650 KB — comfortably under this guard.
+# Measured 2026-10-19: the upstream edge accepts a 1.2 MB body (401, not 413),
+# so size alone is not the upstream failure; the guard protects against the
+# 1.4 MB dumps that WAF-reset AFTER burning quota on every failover account.
+# Raise only together with the advertised context, never alone.
+MAX_BODY_BYTES = int(os.environ.get("ZCODE_MAX_BODY_KB", "900")) * 1024
 
 
 class UpstreamBusy(Exception):
