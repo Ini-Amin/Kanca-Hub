@@ -267,14 +267,15 @@ async def _once(*, headless=True, promo=None, log=print) -> dict:
     import mailboxes as M
     from camoufox.async_api import AsyncCamoufox
 
-    box = M.open_mailbox("auto", domain=MAIL_DOMAIN, log=log)
+    provider = os.environ.get("RADOX_MAIL_PROVIDER", "").strip().lower() or "auto"
+    box = M.open_mailbox(provider, domain=MAIL_DOMAIN, log=log)
     email, password, name = box.address, gen_password(), gen_name()
     if not _is_consumer_address(email):
         # Radox rejects custom domains; waiting for a verify mail that cannot
         # come wastes 150 s per attempt. Refuse up front with a usable message.
         log(f"  ✗ {email} is a custom domain; radox only accepts "
             f"{', '.join(CONSUMER_DOMAINS[:5])}...")
-        log("    set RADOX_MAIL_PROVIDER=gmail (needs a working provider) or pass --email")
+        log("    set RADOX_MAIL_PROVIDER=imap + KANCA_IMAP_USER/PASS (a real consumer inbox)")
         return {"email": email, "password": password, "name": name,
                 "provider": "radox", "status": "custom_domain_rejected",
                 "api_key": None}
