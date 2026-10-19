@@ -190,23 +190,32 @@ class TokenHarborClient:
     def _generate_action_key(self) -> str:
         return "k" + uuid.uuid4().hex[:31]
 
+    # Next.js prefixes the fields of a bound server action with "_<n>_", where n
+    # is the form index. Captured from a real browser on 2026-10-19 (camoufox,
+    # POST /login?mode=signup): the body carries "_1_$ACTION_REF_1", "_1_email",
+    # "_1_password", ... Our builder used a bare "1_" prefix, so the action ran
+    # but read empty form data and answered "Email and password are required."
+    # -- which is why the farm produced 0 accounts.
+    _FORM_PREFIX = "_1_"
+
     def _build_multipart_body(self, action_hash: str, fields: list[tuple[str, str]]) -> tuple[bytes, str]:
         """Build a Next.js Server Action multipart/form-data body."""
         boundary = "----WebKitFormBoundary" + uuid.uuid4().hex[:16]
         action_key = self._generate_action_key()
         sep = f"--{boundary}"
+        pfx = self._FORM_PREFIX
 
         parts: list[str] = []
-        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="1_$ACTION_REF_1"\r\n\r\n\r\n')
-        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="1_$ACTION_1:0"\r\n\r\n{{"id":"{action_hash}","bound":"$@1"}}\r\n')
-        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="1_$ACTION_1:1"\r\n\r\n["$undefined"]\r\n')
-        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="1_$ACTION_KEY"\r\n\r\n{action_key}\r\n')
-        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="1_device_fingerprint"\r\n\r\n{self._fingerprint}\r\n')
-        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="1_timezone"\r\n\r\n{self._timezone}\r\n')
-        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="1_next"\r\n\r\n\r\n')
+        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="{pfx}$ACTION_REF_1"\r\n\r\n\r\n')
+        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="{pfx}$ACTION_1:0"\r\n\r\n{{"id":"{action_hash}","bound":"$@1"}}\r\n')
+        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="{pfx}$ACTION_1:1"\r\n\r\n["$undefined"]\r\n')
+        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="{pfx}$ACTION_KEY"\r\n\r\n{action_key}\r\n')
+        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="{pfx}device_fingerprint"\r\n\r\n{self._fingerprint}\r\n')
+        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="{pfx}timezone"\r\n\r\n{self._timezone}\r\n')
+        parts.append(f'{sep}\r\nContent-Disposition: form-data; name="{pfx}next"\r\n\r\n\r\n')
 
         for name, value in fields:
-            parts.append(f'{sep}\r\nContent-Disposition: form-data; name="1_{name}"\r\n\r\n{value}\r\n')
+            parts.append(f'{sep}\r\nContent-Disposition: form-data; name="{pfx}{name}"\r\n\r\n{value}\r\n')
 
         parts.append(f'{sep}\r\nContent-Disposition: form-data; name="0"\r\n\r\n["$undefined","$K1"]\r\n')
         parts.append(f'{sep}--\r\n')
