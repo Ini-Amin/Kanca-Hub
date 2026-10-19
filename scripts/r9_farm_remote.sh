@@ -62,10 +62,33 @@ if [ -n "$LOCAL_SLIDER" ] && [ -n "$BOX_SLIDER" ] && [ "$LOCAL_SLIDER" != "$BOX_
   exit 1
 fi
 
-# 2. farm remotely (camoufox needs a display -> xvfb-run)
+# 2. farm remotely (camoufox needs a display -> xvfb-run), DETACHED.
+#    The batch rotates egress IPs, and every relay bring-up replaces the box's
+#    default route. That has killed this ssh channel mid-batch ("client_loop:
+#    send disconnect: Broken pipe"), which SIGHUPs the remote loop: the run
+#    produced 2 of 4 keys and 1 of them was stranded because step 3 collected
+#    while the batch was still going. So: start it with setsid, log on the box,
+#    and poll over FRESH connections until nothing is left running.
+RLOG='$HOME/r9-farm.log'
 ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" \
-  "cd ~/Auto-FreeCF && xvfb-run -a ~/venv/bin/python scripts/r9_farm_loop.py run --max $N --proxy '$P' --per-ip $PER_IP --apply" \
-  2>&1 | tail -24
+  "cd ~/Auto-FreeCF || exit 11
+   rm -f $RLOG
+   setsid nohup xvfb-run -a ~/venv/bin/python scripts/r9_farm_loop.py run --max $N --proxy '$P' --per-ip $PER_IP --apply > $RLOG 2>&1 < /dev/null &
+   echo \"[farm] remote started pid=\$! log=$RLOG\"" \
+  2>&1 || echo "[farm] WARN: start ssh failed (the farm may still be running detached)"
+
+# Bracket the first letter of each alternative: the remote shell's own cmdline
+# contains this pattern, and an un-bracketed `pgrep -f` matches IT, so the poll
+# would never see the farm finish (measured: 2 self-matches vs 0).
+FARM_PAT='[r]9_farm_loop.py|[t]okenharbor.cli|[k]ancahub.py thk'
+WAITED=0
+for _ in $(seq 1 240); do
+  ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" "pgrep -f '$FARM_PAT' >/dev/null 2>&1" || break
+  sleep 10
+  WAITED=$((WAITED + 10))
+done
+echo "[farm] remote farm finished (waited ${WAITED}s)"
+ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" "tail -24 $RLOG" 2>&1 | tail -24
 
 # 3. pull the farm's account store and merge it into ours (dedupe on email+key)
 mkdir -p "$REPO/harbor"
