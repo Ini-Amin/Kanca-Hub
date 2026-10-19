@@ -47,6 +47,20 @@ _JS_CLICK = """(text) => {
 _KEY_RE = r'(?:sk-|bk-|beat-)?[A-Za-z0-9_-]{28,}'
 
 
+def _proxy_kwargs():
+    """Honor HTTP(S)_PROXY like radox_signup/zai_signup.
+
+    Camoufox needs {"server","username","password"}; a bare URL string makes
+    its internals call .get() on a str and die (that bug cost a live run).
+    """
+    p = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+         or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy"))
+    if not p:
+        return {}
+    from camoufox_helpers import to_camoufox_proxy
+    return {"proxy": to_camoufox_proxy(p)}
+
+
 def gen_password(n=14):
     a = string.ascii_letters + string.digits + "!%*+-_"
     return "".join(random.choice(a) for _ in range(n))
@@ -119,13 +133,15 @@ async def _once(*, headless=True, log=print, puzzles=20) -> dict:
     import mailboxes as M
     from camoufox.async_api import AsyncCamoufox
 
-    box = M.open_mailbox("auto", domain=MAIL_DOMAIN, log=log)
+    provider = os.environ.get("BEATAPI_MAIL_PROVIDER", "").strip().lower() or "auto"
+    box = M.open_mailbox(provider, domain=MAIL_DOMAIN, log=log)
     email, password, name = box.address, gen_password(), gen_name()
     rec = {"email": email, "password": password, "name": name,
            "provider": "beatapi", "api_key": None, "status": "start"}
     log(f"  email: {email}  password: {password}  name: {name}")
 
-    async with AsyncCamoufox(headless=headless, humanize=True, os="windows") as browser:
+    async with AsyncCamoufox(headless=headless, humanize=True, os="windows",
+                             **_proxy_kwargs()) as browser:
         page = await browser.new_page()
         api_hits: list[tuple[str, int, str]] = []
 
