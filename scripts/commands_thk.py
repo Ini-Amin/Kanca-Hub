@@ -59,7 +59,33 @@ def _thk_fresh_ip(used: set[str], tries: int = 3) -> bool:
         if ip and ip not in used:
             used.add(ip)
             return True
-        print(kancahub.col("yellow", f"  [thk] carrier returned {'the same' if ip else 'no'} IP; rotating again…"))
+        print(kancahub.col("yellow", f"  [thk] carrier returned {'the same' if ip else 'no'} IP; rotating again..."))
+    return False
+
+
+def _thk_vpngate_rotate(country, used: set[str], state: dict, tries: int = 5) -> bool:
+    """Move to a VPN Gate relay whose exit IP we have not used this run.
+
+    Same job as _thk_fresh_ip, for the tunnel egress: THK caps signups per IP
+    (measured 2026-10-19: ~1-2 per relay), so a batch must present a NEW relay
+    per chunk or it stops after the first capped one. `state` carries the relay
+    index across calls; freshness is verified by the exit IP, because up() picks
+    the first working relay in a window of five.
+    """
+    import kancahub
+    import vpngate
+    for _ in range(tries):
+        state["index"] = state.get("index", 0) + 1
+        if vpngate.up(country, state["index"]) != 0:
+            print(kancahub.col("yellow", f"  [thk] relay #{state['index']} did not come up; trying the next..."))
+            continue
+        ip = vpngate.exit_ip()
+        if ip and ip not in used:
+            used.add(ip)
+            print(kancahub.col("cyan", f"  [thk] fresh relay exit {ip}"))
+            return True
+        print(kancahub.col("yellow", f"  [thk] relay exit {ip or 'unknown'} already used; rotating again..."))
+        vpngate.down()
     return False
 
 
@@ -138,6 +164,15 @@ def cmd_thk(a) -> int:
             env = dict(env or {})
             before = kancahub._thk_account_count()
             used_ips: set[str] = {kancahub._current_ip() or ""}
+            # Tunnel egress (`--proxy vpngate[:CC]`): a tunnel carries the traffic
+            # directly, so chunks rotate by bringing up a DIFFERENT relay instead
+            # of toggling a carrier modem. Verified 2026-10-19: blu->box ssh
+            # survives relay up/down, so rotating mid-batch is safe.
+            vg_mode = getattr(choice, "source", "") == "vpngate"
+            vg_country = None
+            if vg_mode and ":" in str(mode):
+                vg_country = str(mode).split(":", 1)[1].strip() or None
+            vg_state: dict = {}
             # Batches run in per-IP chunks; the carrier IP rotates between chunks
             # (--mobile-rotate does its own rotation before each chunk's run).
             chunks = kancahub.thk_chunks(a.count, getattr(a, "per_ip", kancahub.THK_PER_IP_DEFAULT)) if sub == "batch" else [None]
@@ -162,15 +197,21 @@ def cmd_thk(a) -> int:
                                              + (" for ~1h — rotate to a NEW IP" if why == "netcap" else "")))
                     rc = rc or 1
                     if n is not None:
+                        if vg_mode and i < len(chunks) and _thk_vpngate_rotate(vg_country, used_ips, vg_state):
+                            continue  # fresh relay: this chunk's cap does not apply to the next
                         break  # retrying a capped IP only extends the lockout
                 elif crc != 0:
                     rc = crc
                     if n is not None:
+                        if vg_mode and i < len(chunks) and _thk_vpngate_rotate(vg_country, used_ips, vg_state):
+                            continue
                         break  # a failed chunk means this IP/egress is burnt: stop, don't hammer
                 elif short:
                     rc = rc or 1  # chunk "succeeded" but short: some signups were throttled
                 if n is not None and i < len(chunks):
                     if not mobile:
+                        if vg_mode and _thk_vpngate_rotate(vg_country, used_ips, vg_state):
+                            continue
                         print(kancahub.col("yellow", "  [thk] per-IP cap reached; re-run on a fresh IP "
                                                     "(or use --mobile-rotate to rotate automatically)."))
                         break

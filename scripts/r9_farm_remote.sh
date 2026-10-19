@@ -24,8 +24,14 @@
 # silent stale-code run is exactly the failure this farm cannot afford.
 set -u
 H=${R9_FARM_HOST:-lightvela}
-P=${R9_FARM_PROXY:-http://127.0.0.1:25344}   # wireproxy (Cloudflare WARP) on the farm box
+# Egress: a VPN Gate relay, NOT the WARP wireproxy. THK refuses the shared WARP
+# range and caps signups per network; a fresh relay per account is what lets the
+# batch finish (measured 2026-10-19: WARP -> 0/4, vpngate -> account created,
+# 1 key injected). A URL here still works if you have a residential pool.
+# WARP is still what the box uses for everything else, on 127.0.0.1:25344.
+P=${R9_FARM_PROXY:-vpngate:JP}
 N=${R9_FARM_MAX:-4}
+PER_IP=${R9_FARM_PER_IP:-1}   # rotate relay every N accounts (THK caps after ~1-2)
 REPO=${R9_FARM_REPO:-${HOME:-/root}/Auto-FreeCF}
 BRANCH=${R9_FARM_BRANCH:-main}
 
@@ -58,8 +64,8 @@ fi
 
 # 2. farm remotely (camoufox needs a display -> xvfb-run)
 ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" \
-  "cd ~/Auto-FreeCF && xvfb-run -a ~/venv/bin/python scripts/r9_farm_loop.py run --max $N --proxy '$P' --apply" \
-  2>&1 | tail -20
+  "cd ~/Auto-FreeCF && xvfb-run -a ~/venv/bin/python scripts/r9_farm_loop.py run --max $N --proxy '$P' --per-ip $PER_IP --apply" \
+  2>&1 | tail -24
 
 # 3. pull the farm's account store and merge it into ours (dedupe on email+key)
 mkdir -p "$REPO/harbor"

@@ -216,15 +216,28 @@ def cmd_run(a) -> int:
     print(f"target: farm {n} TokenHarbor account(s), then inject into 9Router")
     print()
 
+    # A tunnel egress (`vpngate[:CC]`) carries the traffic on the system route,
+    # so there is no proxy URL for `proxy verify` to probe -- it would exit 1 and
+    # abort the run before farming. The batch own-relay check proves the exit IP
+    # instead (see _thk_vpngate_rotate).
+    tunnel = (a.proxy or "").lower().startswith("vpngate")
+
     # The verify gate must prove the SAME egress the batch will use, otherwise it
     # probes the default :8888 gateway and aborts even when --proxy is masked.
-    verify = ["proxy", "verify"]
-    if a.proxy:
-        verify += ["--proxy", a.proxy]
-    steps: list[list[str]] = [verify]
+    steps: list[list[str]] = []
+    if not tunnel:
+        verify = ["proxy", "verify"]
+        if a.proxy:
+            verify += ["--proxy", a.proxy]
+        steps.append(verify)
+    else:
+        print(f"  [farm] tunnel egress ({a.proxy}): skipping proxy verify (no proxy URL to probe)")
+        print()
     batch = ["thk", "batch", str(n)]
     if a.proxy:
         batch += ["--proxy", a.proxy]
+    if getattr(a, "per_ip", None):
+        batch += ["--per-ip", str(a.per_ip)]
     steps.append(batch)
     steps.append(["thk", "inject", "--verify"])
     steps.append(["thk", "sync", "--prune"])
@@ -280,6 +293,9 @@ def main() -> int:
                    help="egress for the batch: vpngate[:CC] (free relay, never our own IP), "
                         "WARP, freepool, or a proxy URL. Recommended: vpngate:JP")
     r.add_argument("--apply", action="store_true", help="actually run the pipeline")
+    r.add_argument("--per-ip", type=int, default=1, metavar="N",
+                   help="accounts per egress IP before rotating (default 1: THK caps a "
+                        "network after ~1-2 signups, so 1 relay = 1 account)")
     r.set_defaults(fn=cmd_run)
     args = ap.parse_args()
     return args.fn(args)
