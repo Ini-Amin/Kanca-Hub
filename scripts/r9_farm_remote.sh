@@ -12,7 +12,7 @@
 #
 #   r9_farm_remote.sh                    farm N accounts on LightVela, inject here
 #   R9_FARM_HOST=lightvela r9_farm_remote.sh
-#   R9_FARM_PROXY=http://127.0.0.1:25344 R9_FARM_MAX=4
+#   R9_FARM_PROXY=vpngate:JP R9_FARM_MAX=4
 #
 # The remote box must already have a working masked egress; proxy_verify on the
 # box proves it before the batch runs (r9_farm_loop does that itself).
