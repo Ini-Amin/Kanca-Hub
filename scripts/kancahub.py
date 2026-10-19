@@ -20,8 +20,9 @@ features (not just pass-throughs):
             run · web · gui · retry · pool · inject (SSO tokens -> 9Router via grok2api)
   github  GitHub account farm (our domain / BINUS)
             farm · check
-  mail    School mailbox (BINUS M365) via browser — read signup OTPs
-            test (selftest) · otp (--timeout) · login
+  freeai free-tier LLM provider farms (radox 10M/mo, beatapi free credits)
+            radox · beatapi · status · keys
+  yowes   13-country teacher document generator
   gmail   Gmail account farm (gmail-account-creator, nodriver)
             farm (--count/--headless/--proxy/--out) · check
   yowes   13-country teacher document generator
@@ -137,8 +138,8 @@ _REEXPORTS = {
     "commands_farm": "cmd_warp cmd_yowes",
     "commands_vpn": "cmd_vpn",
     "commands_zmine": "cmd_zmine",
-    "commands_otp": "cmd_otp cmd_scrape cmd_autofarm",
-    "doctor": "cmd_doctor",
+    "commands_freeai": "cmd_freeai",
+    "commands_farm": "cmd_warp cmd_yowes",
     "menu": "MENU_BACKGROUND MENU_BACKGROUND_CMD UNIFIED_MENU MENU_STAGE_HEADERS MENU_FARM_KEYS "
             "render_menu run_end_to_end_flow _farm_kind _menu_ask_farm_options _jobs_menu "
             "interactive_mode beginner_entry menu_entry",
@@ -179,7 +180,7 @@ def cmd_session(a) -> int:
         print()
         print("   [g] start/refresh gateway      [s] stop gateway        [i] gateway info")
         print("   [1] github farm      [2] thk batch    [3] grok run    [4] gmail farm")
-        print("   [5] stack signup     [6] autofarm     [d] doctor")
+        print("   [5] stack signup     [6] autofarm     [7] freeai (radox/beatapi)   [d] doctor")
         print("   [q] quit (stops the gateway)")
         try:
             ch = input(f"\n  {col('bold', 'session')}> ").strip().lower()
@@ -216,7 +217,7 @@ def cmd_session(a) -> int:
             "3": ["grok", "run", "-n", "1", "--proxy", proxy_arg],
             "4": ["gmail", "farm", "--proxy", proxy_arg],
             "5": ["stack", "signup", "-n", "1"],
-            "6": [],  # autofarm prompts for a URL
+            "7": ["freeai", "radox", "--attempts", "1"],  # freeai farms run WITHOUT the gateway by default
             "d": ["doctor"],
         }
         if ch == "6":
@@ -445,6 +446,18 @@ def build_parser() -> argparse.ArgumentParser:
     tse.add_argument("--no-proxies", action="store_true", help="skip refreshing harbor's proxy list")
     tse.add_argument("--status", action="store_true", help="only report current harbor config")
     tse.add_argument("--dry-run", action="store_true", help="show actions without writing")
+
+
+    # ---- freeai (free-tier LLM providers) ----
+    fa = sub.add_parser("freeai", help="free-tier LLM provider farms (radox 10M/mo, beatapi free credits)")
+    fas = fa.add_subparsers(dest="freeai_cmd")
+    for _prov, _help in (("radox", "radox signups (10M tokens/mo free tier)"),
+                         ("beatapi", "beatapi signups (free credits)")):
+        _fp = fas.add_parser(_prov, help=_help)
+        _fp.add_argument("--attempts", type=int, default=1, metavar="N", help="signup attempts (default 1)")
+        _fp.add_argument("--headless", action="store_true", help="run the browser headless")
+    fas.add_parser("status", help="ledger counts + last status + captured api_key count")
+    fas.add_parser("keys", help="print captured api_keys (masked)")
 
     # ---- grok (xAI) ----
     gp = sub.add_parser("grok", help="Grok xAI farm: automated account creation with multi-provider mail")
@@ -939,6 +952,10 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             p.parse_args(["github", "--help"])
             return 1
         return cmd_github(args)
+    if g == "freeai":
+        if not getattr(args, "freeai_cmd", None):
+            p.parse_args(["freeai", "--help"]); return 1
+        return cmd_freeai(args)
     if g == "mail":
         if not getattr(args, "mail_cmd", None):
             p.parse_args(["mail", "--help"])
