@@ -242,7 +242,7 @@ def cmd_thk(a) -> int:
             kancahub._ledger_record(
                 "thk",
                 target=kancahub.EGRESS_TARGETS["thk"],
-                egress=("mobile" if mobile else (choice.source if 'choice' in dir() else "")),
+                egress=("mobile" if mobile else (getattr(choice, "source", "") if choice else "")),
                 stage=("created" if made else "failed"),
                 ok=bool(made) if sub == "batch" else (rc == 0),
                 count=made,
