@@ -36,7 +36,9 @@ REPO=${REPO:-https://github.com/awarexone/Agentic-Bug-Hunter.git}
 PATCH=${PATCH:-/root/Auto-FreeCF/patches/agentic-bug-hunter-blu.patch}
 ENVFILE=${ENVFILE:-/root/abh.env}
 ROUTER_KEY=${ROUTER_KEY:-/root/grokbot/router.key}
-MODEL=${MODEL:-Zcode/GLM-5.3}
+# Must be a model that actually answers RIGHT NOW, because it is the first
+# attempt of every call. See the FALLBACKS note below.
+MODEL=${MODEL:-ag/gemini-3.8-flash-high}
 
 say() { printf '\n\033[1;36m[abh]\033[0m %s\n' "$*"; }
 die() { printf '\n\033[1;31m[abh] FATAL:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -109,7 +111,15 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
 # Re-verify after any upstream change: python3 scripts/r9_modelcheck.py --models <list>
 # Read by LLMClient.chat() (brain.py) and OpenAICompatClient.chat() (agent.py);
 # both walk the chain on empty content, ReadTimeout, or HTTP error.
-FALLBACKS=${FALLBACKS:-"Zcode/GLM-5.3,ag/gemini-3.8-flash-high,THK/deepseek-v4.1-flash:free,nr/step-5-preview,ocz/mimo-v2.6-flash-free,ocz/nemotron-3-ultra-free"}
+# ORDER MATTERS AND WAS WRONG. Measured on the laptop 2026-10-21 20:20 WIB
+# against the same 9router build: Zcode/GLM-5.3 -> HTTP 503 after 12.4s,
+# ag/gemini-3.8-flash-high -> 3.1s, THK/deepseek-v4.1-flash:free -> timeout at
+# 60s. The GLM-5.3 failure is quota, not config: all 10 accounts holding a
+# model:glm-5.3 bucket sit at 3,000,000/3,000,000 units. Leading the chain with
+# a model that cannot answer costs every call 12s before failover, and a hunt
+# makes dozens of calls. Put the model that answers first; keep GLM-5.3 second
+# so it is used again the moment the farm restores its quota.
+FALLBACKS=${FALLBACKS:-"ag/gemini-3.8-flash-high,Zcode/GLM-5.3,ocz/mimo-v2.6-flash-free,nr/step-5-preview,THK/deepseek-v4.1-flash:free"}
 
 # Cross-check the chain against the last model-health sweep (r9_modelcheck.py).
 # Not fatal: the snapshot can be stale and a deploy must not be blocked by a
@@ -171,6 +181,20 @@ PY
 ); then
   die "brain round-trip failed — check blu-9router and the model id"
 fi
+
+# ── 6. CVE intel inputs ──────────────────────────────────────────────────────
+# run_cve_intel is the step that turns "nginx 1.18.0" into a testable shortlist.
+# Without the databases it returns an explicit "not found" message, and the hunt
+# proceeds blind — a missing input that looks like "no candidates" in the digest.
+CVEDIR=${HOME:-/root}/.config/auto-freecf
+for db in cve.db cve_research.db; do
+  if [ -f "$CVEDIR/$db" ]; then
+    say "cve intel: $db present ($(du -h "$CVEDIR/$db" | cut -f1))"
+  else
+    printf '\033[1;33m[abh] cve intel: %s MISSING\033[0m — run_cve_intel will report "not found".\n' "$db"
+    printf '  Pull it from the laptop backup, or rebuild with scripts/build_cve_index.py.\n'
+  fi
+done
 
 say "done. Run a hunt with:"
 printf '  source %s && cd %s && python3 bughunter/agent.py --target HOST -d HOST\n' "$ENVFILE" "$ABH_DIR"
