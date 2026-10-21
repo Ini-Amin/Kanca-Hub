@@ -1,24 +1,172 @@
-From 66325f1d3718f6a912bf54d4b1e950424a43b711 Mon Sep 17 00:00:00 2001
+From 5b872de9993242e97dca5d875b9bcda47f869046 Mon Sep 17 00:00:00 2001
 From: amen <amen@local>
 Date: Wed, 21 Oct 2026 20:57:23 +0700
-Subject: [PATCH] blu overlay: tool contracts, budget clamp, CVE intel, SSE +
- base URL
+Subject: [PATCH] blu overlay: tool contracts, budget clamp, CVE intel, OpenAI
+ backend, SSE
 
 ---
- bughunter/agent.py           |  75 ++++-
+ bughunter/agent.py           | 267 +++++++++++++++--
  bughunter/brain.py           |  84 +++++-
  bughunter/tools/cve_intel.py | 566 +++++++++++++++++++++++++++++++++++
  bughunter/tools/cve_match.py | 416 +++++++++++++++++++++++++
  bughunter/tools/hunt.py      |  79 ++++-
- 5 files changed, 1206 insertions(+), 14 deletions(-)
+ 5 files changed, 1385 insertions(+), 27 deletions(-)
  create mode 100755 bughunter/tools/cve_intel.py
  create mode 100755 bughunter/tools/cve_match.py
 
 diff --git a/bughunter/agent.py b/bughunter/agent.py
-index 5e24e74..e9a1b17 100644
+index 5e24e74..3bcf3e6 100644
 --- a/bughunter/agent.py
 +++ b/bughunter/agent.py
-@@ -150,11 +150,6 @@ TOOLS: list[dict] = [
+@@ -78,6 +78,147 @@ except ImportError:
+     _ollama_lib = None
+     _OLLAMA_OK = False
+ 
++class OpenAICompatClient:
++    """Minimal Ollama-shaped client over an OpenAI-compatible /chat/completions.
++
++    The ReAct loop only ever calls `.list()` and `.chat(model=, messages=,
++    tools=, options=)`, so this returns the same shape and the loop stays
++    unaware of which backend it is talking to.
++
++    WHY THIS EXISTS: the loop was written against the Ollama Python package and
++    refuses to start without it. On blu there is no Ollama — every model lives
++    behind 9router on :20128 — so every hunt died at startup with
++    "Ollama Python package not installed".
++    """
++
++    def __init__(self, base_url: str, api_key: str, timeout: int = 180):
++        import requests
++        self.base_url = base_url.rstrip("/")
++        self.timeout = timeout
++        self._http = requests.Session()
++        self._http.headers.update({
++            "Authorization": f"Bearer {api_key}",
++            "Content-Type": "application/json",
++        })
++
++    def list(self):
++        """Return an object with `.models` of `.model` names, like ollama.list()."""
++        class _M:
++            def __init__(self, name): self.model = name
++        class _L:
++            def __init__(self, names): self.models = [_M(n) for n in names]
++        try:
++            r = self._http.get(f"{self.base_url}/models", timeout=30)
++            r.raise_for_status()
++            payload = _decode_json(r.text)
++            return _L([m.get("id", "") for m in payload.get("data", []) if m.get("id")])
++        except Exception:
++            # A failed model listing must not abort the hunt: the caller only
++            # uses it to validate an explicitly requested model, and the model
++            # may well work even when /models is slow or blocked.
++            return _L([])
++
++    def chat(self, *, model, messages, tools=None, options=None):
++        """Ollama-shaped chat with BOUNTY_MODEL_FALLBACKS failover.
++
++        Failover is per-ATTEMPT, not per-hunt: one spent or retired model costs
++        one HTTP error, not the whole session. The chain comes from the env so
++        the same code runs against different gateways without edits.
++        """
++        raw_fb = os.environ.get(
++            "BOUNTY_MODEL_FALLBACKS",
++            "Zcode/GLM-5.3,THK/deepseek-v4.1-flash:free",
++        )
++        chain = [model] + [m.strip() for m in raw_fb.split(",")
++                           if m.strip() and m.strip() != model]
++        last_err = None
++        for attempt, m in enumerate(chain):
++            try:
++                body = {"model": m, "messages": messages, "temperature": 0.1}
++                if options:
++                    if options.get("num_predict"):
++                        body["max_tokens"] = options["num_predict"]
++                    if options.get("temperature") is not None:
++                        body["temperature"] = options["temperature"]
++                if tools:
++                    body["tools"] = tools
++                    body["tool_choice"] = "auto"
++                r = self._http.post(f"{self.base_url}/chat/completions",
++                                    data=json.dumps(body), timeout=self.timeout)
++                r.raise_for_status()
++                payload = _decode_json(r.text)
++                if "choices" not in payload and isinstance(payload.get("data"), dict):
++                    payload = payload["data"]
++                if "choices" not in payload:
++                    raise RuntimeError(
++                        "no 'choices' in response (keys: %s)" % sorted(payload)[:10])
++                msg = payload["choices"][0].get("message") or {}
++                if attempt:
++                    print(f"[Agent] failed over to {m}", file=sys.stderr, flush=True)
++                return {
++                    "message": {
++                        "content": msg.get("content") or "",
++                        "tool_calls": msg.get("tool_calls") or [],
++                    }
++                }
++            except Exception as e:  # noqa: BLE001 - any failure means "try next"
++                last_err = e
++                continue
++        raise last_err or RuntimeError("all models failed")
++
++
++def _decode_json(text: str) -> dict:
++    """Parse a completion body that may be SSE, or JSON with an SSE trailer.
++
++    9router answers a NON-streaming request with `content-type:
++    text/event-stream` and a body of `data: {...}` lines. `json.loads` raises
++    "Expecting value: line 1 column 1", which reads like a malformed model
++    reply — and because callers catch broadly, the symptom is an empty string
++    from a model that answered correctly.
++
++    Three shapes handled: plain JSON; JSON with an appended `data: [DONE]`;
++    and a full SSE stream (delta.content fragments are concatenated).
++    """
++    text = (text or "").strip()
++    if not text:
++        raise RuntimeError("empty response body")
++
++    try:
++        return json.loads(text)
++    except json.JSONDecodeError:
++        pass
++
++    if text.startswith("data:"):
++        parts: list[str] = []
++        last: dict | None = None
++        for line in text.splitlines():
++            line = line.strip()
++            if not line.startswith("data:"):
++                continue
++            chunk = line[5:].strip()
++            if not chunk or chunk == "[DONE]":
++                continue
++            try:
++                obj = json.loads(chunk)
++            except json.JSONDecodeError:
++                continue
++            last = obj
++            for ch in obj.get("choices") or []:
++                delta = ch.get("delta") or {}
++                if delta.get("content"):
++                    parts.append(delta["content"])
++                msg = ch.get("message") or {}
++                if msg.get("content"):
++                    parts.append(msg["content"])
++        if parts or last is not None:
++            merged = dict(last or {})
++            merged["choices"] = [{"message": {"content": "".join(parts)}}]
++            return merged
++        raise RuntimeError("SSE response carried no content chunks")
++
++    return json.JSONDecoder().raw_decode(text)[0]
++
++
+ # ── hunt.py lazy imports (avoids running main()) ───────────────────────────────
+ _hunt = None
+ def _h():
+@@ -150,11 +291,6 @@ TOOLS: list[dict] = [
                          "description": "If true, skip subdomain enum and only probe the exact target given.",
                          "default": False,
                      },
@@ -30,7 +178,7 @@ index 5e24e74..e9a1b17 100644
                  },
                  "required": [],
              },
-@@ -187,6 +182,39 @@ TOOLS: list[dict] = [
+@@ -187,6 +323,39 @@ TOOLS: list[dict] = [
              },
          },
      },
@@ -70,7 +218,7 @@ index 5e24e74..e9a1b17 100644
      {
          "type": "function",
          "function": {
-@@ -808,10 +836,17 @@ class ToolDispatcher:
+@@ -808,10 +977,17 @@ class ToolDispatcher:
  
          try:
              if name == "run_recon":
@@ -89,7 +237,7 @@ index 5e24e74..e9a1b17 100644
                  )
                  obs = self._summarize_recon(domain, ok)
  
-@@ -820,6 +855,7 @@ class ToolDispatcher:
+@@ -820,6 +996,7 @@ class ToolDispatcher:
                      domain,
                      quick=bool(args.get("quick", False)),
                      full=bool(args.get("full", False)),
@@ -97,7 +245,7 @@ index 5e24e74..e9a1b17 100644
                  )
                  obs = self._summarize_findings(domain, "scan", ok)
  
-@@ -844,6 +880,17 @@ class ToolDispatcher:
+@@ -844,6 +1021,17 @@ class ToolDispatcher:
                  ok = h.run_api_fuzz(domain)
                  obs = self._summarize_findings(domain, "api", ok)
  
@@ -115,7 +263,7 @@ index 5e24e74..e9a1b17 100644
              elif name == "run_cors_check":
                  ok = h.run_cors_check(domain)
                  obs = self._summarize_findings(domain, "cors", ok)
-@@ -937,6 +984,22 @@ class ToolDispatcher:
+@@ -937,6 +1125,22 @@ class ToolDispatcher:
  
          return obs_full
  
@@ -138,6 +286,75 @@ index 5e24e74..e9a1b17 100644
      def _time_remaining_fraction(self) -> float:
          """Fraction (0.0-1.0) of `time_budget_hours` left, based on when
          this dispatcher was constructed. Mirrors the elapsed/remaining
+@@ -1448,22 +1652,44 @@ class ReActAgent:
+         # racing models (analysis + triage) — baron-llm races qwen3 on quick decisions
+         self._race_models: list[str] = []
+ 
+-        if not _OLLAMA_OK:
+-            raise RuntimeError("Ollama Python package not installed: pip install ollama")
+-
+-        self.client = _ollama_lib.Client(host=OLLAMA_HOST)
++        # Backend selection. An OpenAI-compatible gateway (9router) is used
++        # whenever OPENAI_BASE_URL is set; Ollama remains the fallback for
++        # local-only installs. The old code required the Ollama package
++        # unconditionally, so a box whose every model lives behind 9router
++        # could not start a hunt at all.
++        openai_base = (os.environ.get("OPENAI_BASE_URL")
++                       or os.environ.get("OPENAI_API_BASE") or "").strip()
++        self.backend = "openai-compat" if openai_base else "ollama"
+         requested_model = model or os.environ.get("BRAIN_MODEL") or None
+-        self.model  = requested_model or self._pick_tool_capable_model()
+-        if not self.model:
+-            raise RuntimeError("No Ollama model available. Pull one: ollama pull qwen2.5:32b")
+ 
+-        if requested_model:
+-            available = [m.model for m in self.client.list().models]
+-            if requested_model not in available:
++        if self.backend == "openai-compat":
++            api_key = os.environ.get("OPENAI_API_KEY", "")
++            if not api_key:
+                 raise RuntimeError(
+-                    f"Requested Ollama model '{requested_model}' is not installed. "
+-                    f"Run: ollama pull {requested_model}"
+-                )
++                    "OPENAI_BASE_URL is set but OPENAI_API_KEY is empty; the "
++                    "gateway will reject every call")
++            self.client = OpenAICompatClient(openai_base, api_key)
++            self.model = requested_model
++            if not self.model:
++                raise RuntimeError(
++                    "OPENAI_BASE_URL is set but no model was given; set "
++                    "BRAIN_MODEL or pass --model")
++        else:
++            if not _OLLAMA_OK:
++                raise RuntimeError(
++                    "No LLM backend: set OPENAI_BASE_URL + OPENAI_API_KEY for an "
++                    "OpenAI-compatible gateway (e.g. 9router), or pip install ollama")
++            self.client = _ollama_lib.Client(host=OLLAMA_HOST)
++            self.model = requested_model or self._pick_tool_capable_model()
++            if not self.model:
++                raise RuntimeError("No Ollama model available. Pull one: ollama pull qwen2.5:32b")
++            if requested_model:
++                available = [m.model for m in self.client.list().models]
++                if available and requested_model not in available:
++                    raise RuntimeError(
++                        f"Requested Ollama model '{requested_model}' is not installed. "
++                        f"Run: ollama pull {requested_model}"
++                    )
+ 
+         # Respect an explicit choice exclusively; only auto-race in automatic mode.
+         try:
+@@ -2005,7 +2231,10 @@ def run_agent_hunt(
+ 
+         result = agent.run()
+         tracer.close()
++        # Name the LOOP backend; the model transport is reported separately so
++        # "which model actually answered" is not lost in a fixed string.
+         result["backend"]    = "builtin-react"
++        result["llm_backend"] = getattr(agent, "backend", "unknown")
+         result["trace_path"] = log_path
+         result["bump_path"]  = bump_path
+         return result
 diff --git a/bughunter/brain.py b/bughunter/brain.py
 index c983d30..459a3a2 100644
 --- a/bughunter/brain.py
