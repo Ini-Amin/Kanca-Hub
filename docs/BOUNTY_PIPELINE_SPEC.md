@@ -166,7 +166,20 @@ Confirm `steps > 0` in stdout and `agent_trace.jsonl` shows tool calls completin
 | 5 Report + Telegram | `stage5_report()` writes `~/.config/auto-freecf/bounty/<job>/report.md`, appends `_ledger.json`, alerts via `notify.send()`; refuses to run without a 4/4 gate log | same test file |
 
 **Remaining risks (out of Task 1 scope, logged not fixed):**
-- Upstream `awarexone/Agentic-Bug-Hunter` **force-pushed** (`cd58a40` → `40b03ee`, 16 commits). `scripts/abh_deploy.sh` clones upstream then `git apply`s the patch, so on a *fresh* box it may now fail with "Re-derive it". `blu` is deployed by `scp` of the individual files instead, which is verified working; the patch is regenerated from the local tree as the reviewable artifact.
+- Upstream `awarexone/Agentic-Bug-Hunter` **force-pushed** (`cd58a40` → `40b03ee`, 16 commits). Our base commit `93aa1fe` no longer exists, so the old patch could not apply anywhere — `git apply` failed at `agent.py:575` and `brain.py:521`.
+  - **RESOLVED 2026-10-21:** the overlay was re-derived against `40b03ee` and verified on a clean clone (applies cleanly; all five files parse; all 18 advertised tools match their implementations). `scripts/abh_deploy.sh` now runs end to end on `blu` and ends with `brain says: OK`.
+  - The `scp`-of-individual-files workaround is **retired**. `blu` is a git checkout of `Kanca-Hub` (`git pull --ff-only`), and the ABH tree is cloned from upstream + patched. Deploy path: push → `git pull` on blu → `bash scripts/abh_deploy.sh`.
+
+### Deploy defects found while restoring that path (all fixed)
+
+| # | Symptom | Cause |
+|---|---|---|
+| 1 | `FATAL: 9router not healthy (got 000)` on a healthy router | probe used `/v1/models` (18.4s, 292KB, 666 models) against a 20s timeout; switched to `/api/health` (8ms) with a models fallback for diagnosis |
+| 2 | `FATAL: patch does not apply... upstream changed` on every retry after a failed run | `reset --hard` restores tracked files but leaves patch-CREATED files (`cve_intel.py`, `cve_match.py`) as untracked, so the next `apply` failed "already exists". Now only paths whose diff says `new file` are cleared — never `git clean`, because `recon/` is gitignored and holds the findings |
+| 3 | deploy would have deleted 272MB of recon artifacts | `recon/` is gitignored and blu had no `.git`, so the clone branch `rm -rf`'d the only unrecoverable data on the box. Now copied aside and restored (12 sessions preserved) |
+| 4 | `brain says: empty` with `401 from api.openai.com` | `brain.py` hardcoded the OpenAI base URL and ignored `OPENAI_BASE_URL` |
+| 5 | `JSONDecodeError: Expecting value: line 1 column 1` | 9router answers non-streaming requests with SSE (`data: {...}` lines); `r.json()` cannot parse it |
+| 6 | `RuntimeError: Ollama Python package not installed` | `agent.py` required the Ollama package unconditionally; now selects an OpenAI-compatible client whenever `OPENAI_BASE_URL` is set, Ollama as local fallback |
 - `blu` had no `pytest`, so the dispatcher gate could not run there. Installed to `~/.local` only (`pip3 install --user --break-system-packages pytest`) — system site-packages untouched.
 - `tests/test_hackerone_server.py` has 2 pre-existing failures from an uncommitted `server.py` change dated 2026-10-07 (`hacktivity_items` → `reports`) that the tests were not updated for, and `test_safe_http_redirects.py::test_redirect_to_public_host_is_followed` hangs under the tailnet resolver. Both are unrelated to Task 1; the suite runs with that test deselected (858 passed, 2 pre-existing failures).
 
