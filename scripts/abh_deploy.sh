@@ -51,13 +51,35 @@ die() { printf '\n\033[1;31m[abh] FATAL:\033[0m %s\n' "$*" >&2; exit 1; }
 # skipped and the rest of the tree is fetched shallow.
 if [ -d "$ABH_DIR/.git" ]; then
   say "updating existing checkout at $ABH_DIR"
-  git -C "$ABH_DIR" fetch --depth 1 origin >/dev/null 2>&1 || true
-  git -C "$ABH_DIR" reset --hard origin/HEAD >/dev/null 2>&1 || true
+  # Upstream rewrote history on 2026-10-21 (our base commit 93aa1fe no longer
+  # exists), so a shallow fetch can leave origin/HEAD pointing at a commit the
+  # new history cannot reach. Fetching the branch by name and resetting to
+  # FETCH_HEAD is what actually lands on current upstream.
+  git -C "$ABH_DIR" fetch --depth 1 origin main >/dev/null 2>&1 \
+    || git -C "$ABH_DIR" fetch --depth 1 origin master >/dev/null 2>&1 || true
+  git -C "$ABH_DIR" reset --hard FETCH_HEAD >/dev/null 2>&1 \
+    || git -C "$ABH_DIR" reset --hard origin/HEAD >/dev/null 2>&1 || true
 else
   say "cloning $REPO -> $ABH_DIR (skipping cvelistV5)"
+  # recon/ is GITIGNORED, so `git clone` into a fresh dir is the only way to
+  # lose it — and it is the one thing on this box that cannot be rebuilt: every
+  # session trace, every nuclei result, every finding. blu's tree is a scp'd
+  # copy with no .git, so this branch IS the normal path after a rebuild, not an
+  # edge case. Preserve the artifacts across the swap.
+  KEEP=$(mktemp -d)
+  if [ -d "$ABH_DIR/bughunter/recon" ]; then
+    say "preserving $(du -sh "$ABH_DIR/bughunter/recon" 2>/dev/null | cut -f1) of recon artifacts"
+    cp -a "$ABH_DIR/bughunter/recon" "$KEEP/recon" || die "could not preserve recon/"
+  fi
   rm -rf "$ABH_DIR"
   git clone --depth 1 "$REPO" "$ABH_DIR" >/dev/null 2>&1 \
     || die "clone failed (is the repo still public?)"
+  if [ -d "$KEEP/recon" ]; then
+    mkdir -p "$ABH_DIR/bughunter"
+    cp -a "$KEEP/recon/." "$ABH_DIR/bughunter/recon/"
+    say "restored recon artifacts ($(find "$ABH_DIR/bughunter/recon" -name 'agent_session.json' | wc -l) sessions)"
+  fi
+  rm -rf "$KEEP"
 fi
 
 # ── 2. patches ────────────────────────────────────────────────────────────────
