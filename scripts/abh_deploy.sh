@@ -36,9 +36,19 @@ REPO=${REPO:-https://github.com/awarexone/Agentic-Bug-Hunter.git}
 PATCH=${PATCH:-/root/Auto-FreeCF/patches/agentic-bug-hunter-blu.patch}
 ENVFILE=${ENVFILE:-/root/abh.env}
 ROUTER_KEY=${ROUTER_KEY:-/root/grokbot/router.key}
-# Must be a model that actually answers RIGHT NOW, because it is the first
-# attempt of every call. See the FALLBACKS note below.
-MODEL=${MODEL:-ag/gemini-3.8-flash-high}
+# Must be a model that actually answers AND emits tool calls, because it is
+# the first attempt of every call. Probed on blu 2026-10-21 with a real
+# tool-calling prompt:
+#   tia/glm-5.3-flash:free      6.1s  tool_calls=1   <- chosen
+#   nr/step-5-preview          24.8s  tool_calls=1
+#   ag/gemini-3.8-flash-high   11.7s  tool_calls=0, content empty (safety filter
+#                                            blocks the whole security prompt)
+#   ocz/mimo-v2.6-flash-free    8.0s  tool_calls=0 (describes the call instead
+#                                            of making it)
+# A model that answers but never calls a tool is useless to a ReAct loop: the
+# agent burns every step on "(LLM produced no tool call)". That is what happened
+# on the first successful end-to-end run: 8 steps, 0 tools executed.
+MODEL=${MODEL:-tia/glm-5.3-flash:free}
 
 say() { printf '\n\033[1;36m[abh]\033[0m %s\n' "$*"; }
 die() { printf '\n\033[1;31m[abh] FATAL:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -167,7 +177,11 @@ fi
 # a model that cannot answer costs every call 12s before failover, and a hunt
 # makes dozens of calls. Put the model that answers first; keep GLM-5.3 second
 # so it is used again the moment the farm restores its quota.
-FALLBACKS=${FALLBACKS:-"ag/gemini-3.8-flash-high,Zcode/GLM-5.3,ocz/mimo-v2.6-flash-free,nr/step-5-preview,THK/deepseek-v4.1-flash:free"}
+# Ordered by measured tool-calling reliability, not by benchmark score. Every
+# entry here was probed with the same tool-calling prompt; see the MODEL note
+# above. Zcode/GLM-5.3 stays in the chain but late: its buckets are spent, so it
+# costs 12s to fail, and it is only useful again once the farm restores quota.
+FALLBACKS=${FALLBACKS:-"tia/glm-5.3-flash:free,nr/step-5-preview,ocz/mimo-v2.6-flash-free,Zcode/GLM-5.3,THK/deepseek-v4.1-flash:free"}
 
 # Cross-check the chain against the last model-health sweep (r9_modelcheck.py).
 # Not fatal: the snapshot can be stale and a deploy must not be blocked by a
