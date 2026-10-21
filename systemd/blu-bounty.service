@@ -1,0 +1,34 @@
+[Unit]
+Description=Autonomous bug-bounty pipeline on blu (discover -> scope -> dispatch -> triage -> report)
+Documentation=https://github.com/Ini-Amin/Kanca-Hub/blob/main/scripts/bounty_loop.sh
+Requires=blu-9router.service
+After=blu-9router.service network-online.target
+Wants=network-online.target
+
+[Service]
+# Type=simple, NOT oneshot: this is the 24/7 loop. It used to be a oneshot that
+# blu-bounty.timer fired every 3h, which left the box idle ~20h a day and capped
+# each program at 0.5h - less than the 6.3 min a single run_recon needs, leaving
+# one step for every judgement call after it.
+Type=simple
+WorkingDirectory=/root/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=BOUNTY_JOBS=/root/.config/auto-freecf/bounty
+Environment=HOME=/root
+Environment=PATH=/root/go/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=BOUNTY_REMOTE=1
+Environment=BOUNTY_PY=/root/.local/share/auto-freecf/venv/bin/python
+Environment=ABH_DIR=/root/Agentic-Bug-Hunter
+Environment=ABH_ENV=/root/abh.env
+# Backoff, not a hard failure: a hunt tick that exits nonzero (missing deploy,
+# unreadable env) must not become a restart storm. Restart=always with this
+# delay means one log line per failure, not one per second.
+Restart=always
+RestartSec=60
+ExecStart=/bin/bash /root/Auto-FreeCF/scripts/bounty_loop.sh
+TimeoutStopSec=120
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

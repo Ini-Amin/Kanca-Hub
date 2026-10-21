@@ -1,0 +1,25 @@
+[Unit]
+Description=Probe every model the bounty chain can use
+Documentation=https://github.com/Ini-Amin/Kanca-Hub/blob/main/scripts/model_health_watch.py
+# The router must be up: probing a dead 9router reports every model unhealthy,
+# which is indistinguishable from an exhausted quota and would make the hunt
+# loop back off for no reason.
+Requires=blu-9router.service
+After=blu-9router.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HOME=/root
+Environment=AUTO_FREECF_STATE=/root/.config/auto-freecf
+EnvironmentFile=/root/abh.env
+ExecStart=/usr/bin/python3 /root/Auto-FreeCF/scripts/model_health_watch.py
+# 90s per model, 5 models, worst case ~8 min. Two hours bounds it without
+# cutting a healthy probe short.
+TimeoutStartSec=7200
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

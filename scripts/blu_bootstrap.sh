@@ -355,17 +355,29 @@ tar -C "$D/.." --exclude='__pycache__' --exclude='.git' -cf - $PIPE \
       'mkdir -p /root/Auto-FreeCF && rm -rf /root/Auto-FreeCF/scripts/__pycache__ && tar -C /root/Auto-FreeCF -xf -'
 say code "$(ssh -o BatchMode=yes "$BOX" 'du -sh /root/Auto-FreeCF 2>/dev/null | cut -f1') ($PIPE)"
 
-# 4b. the pipeline's units. blu-bounty and blu-r9-farm are the 24/7 loop;
-#     blu-gigs-api is the control API and grokbot-shim the chat surface that
-#     drives it. All four existed only on the box, so a rebuild came back with
-#     a pipeline nobody could steer. Installed from the repo copies on every
-#     provision, so the repo and the box cannot drift apart again.
+# 4b. the pipeline's units. blu-bounty is the 24/7 loop (a long-running service
+#     now, not a timer tick); blu-model-health probes the model chain every 30
+#     minutes; blu-r9-farm refills quota; blu-gigs-api is the control API and
+#     grokbot-shim the chat surface that drives it. All of them existed only on
+#     the box, so a rebuild came back with a pipeline nobody could steer.
+#     Installed from the repo copies on every provision, so the repo and the box
+#     cannot drift apart again.
+#
+# blu-bounty.timer is gone on purpose: it fired the hunt every 3h with up to 40
+# min of randomized delay, which left the box idle ~20h a day and capped each
+# program at 0.5h. The service now runs continuously and takes its own lock, so
+# a leftover timer invocation exits quietly instead of racing the loop.
 SYS=/etc/systemd/system
-scp -o BatchMode=yes "$D/systemd/blu-bounty.service" "$D/systemd/blu-bounty.timer" \
+scp -o BatchMode=yes "$D/systemd/blu-bounty.service" \
+                     "$D/systemd/blu-model-health.service" "$D/systemd/blu-model-health.timer" \
                      "$D/systemd/blu-r9-farm.service" "$D/systemd/blu-r9-farm.timer" \
                      "$D/systemd/blu-gigs-api.service" "$BOX:$SYS/"
-ssh -o BatchMode=yes "$BOX" 'systemctl daemon-reload && systemctl enable --now blu-bounty.timer blu-r9-farm.timer blu-gigs-api.service'
-say bounty "$(ssh -o BatchMode=yes "$BOX" 'systemctl is-active blu-bounty.timer blu-r9-farm.timer blu-gigs-api.service' | tr '\n' ' ')"
+# blu-bounty.timer is disabled, not merely un-enabled: a box provisioned by an
+# older run of this script still has it, and an enabled timer on a Type=simple
+# service starts a second copy every 3h. The lock makes that harmless, but the
+# journal fills with "another bounty loop holds ..." noise.
+ssh -o BatchMode=yes "$BOX" 'systemctl disable --now blu-bounty.timer 2>/dev/null; rm -f /etc/systemd/system/blu-bounty.timer; systemctl daemon-reload && systemctl enable --now blu-bounty.service blu-model-health.timer blu-r9-farm.timer blu-gigs-api.service'
+say bounty "$(ssh -o BatchMode=yes "$BOX" 'systemctl is-active blu-bounty.service blu-model-health.timer blu-r9-farm.timer blu-gigs-api.service' | tr '\n' ' ')"
 
 # The shim's ExecStart points into /root/grokbot (proxy.js + router.key), which
 # is NOT part of this repo, so its unit is installed only when that tree is
