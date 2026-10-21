@@ -77,6 +77,42 @@ three are fixed; the first two are verified on `blu`.
    units (reset 22:59). `zcode.py autofarm` is `enabled: false`, and the farm
    only triggers when usable accounts ≤ `min_active`.
 
+   **Re-measured 2026-10-21 23:00 WIB, with a tool-calling prompt.** The bar is
+   not "does it answer" but "does it answer *and* emit a tool call" — a model
+   that 200s with prose instead of a tool call costs a ReAct loop the same wall
+   clock as a dead one and produces the same zero findings:
+
+   | model | latency | tool_calls | verdict |
+   |---|---|---|---|
+   | `THK/deepseek-v4.1-flash:free` | 3.4s | 1 | usable (flaky: 90s timeout on a later probe) |
+   | `tia/glm-5.3-flash:free` | 4.9s | 1 | usable |
+   | `nr/step-5-preview` | 12.9s | 1 | usable (strong tier) |
+   | `ocz/mimo-v2.6-flash-free` | 6.0s | 0 | **unusable** — 200, empty content |
+   | `Zcode/GLM-5.3` | 90.0s | timeout | **unusable** — needs the farm |
+   | `ag/gemini-3.8-flash-high` | ~10s | 0 | **retired** — safety filter blocks the prompt |
+
+   `ag/gemini-3.8-flash-high` and `ocz/mimo-v2.6-flash-free` were both wired as
+   model *tiers* while being unable to call a tool; the first successful
+   end-to-end run spent all 8 steps on "(LLM produced no tool call)". Tiers now
+   name only models that answer and call: strong=`nr/step-5-preview`,
+   standard=`tia/glm-5.3-flash:free`, cheap=`THK/deepseek-v4.1-flash:free`.
+
+   **Watcher:** `thk-quota-watchdog.timer` (hourly) watches zcode *account
+   buckets*, a different quantity, and does not cover the 9router models the
+   hunt actually calls. `scripts/model_health_watch.py` + `blu-model-health.timer`
+   (30 min) close that gap: they probe every model in the chain with the
+   tool-calling prompt and write `~/.config/auto-freecf/model-health.json`.
+   `bounty_loop.sh` reads it and backs off when nothing is usable rather than
+   spending ticks on a dead chain. The first probe already earned its keep: it
+   is the only reason the ocz/mimo tier was discovered to be dead.
+
+   **Known-broken:** `blu-r9-farm.service` — the thing that refills
+   `Zcode/GLM-5.3`. It runs, verifies egress (Proxyma NL → HTTP 200), then
+   every signup exits 1, so it merges 0 new keys; the injection phase that
+   follows then exceeds `TimeoutStartSec=3600` and the unit is killed
+   `status=15/TERM`. The harbor store sits at 57 keys and GLM-5.3 still times
+   out, so the two halves of the farm are each broken independently.
+
 **Consequence for reading the logs:** `steps=N findings=0` is not a verdict.
 Only `steps>0` *with every attempted tool returning a real observation* is.
 The digest currently prints the first number and hides the second.
