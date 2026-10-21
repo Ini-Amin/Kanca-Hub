@@ -13,8 +13,13 @@ WorkingDirectory=/root/Auto-FreeCF
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=HOME=/root
 Environment=AUTO_FREECF_STATE=/root/.config/auto-freecf
-EnvironmentFile=/root/abh.env
-ExecStart=/usr/bin/python3 /root/Auto-FreeCF/scripts/model_health_watch.py
+# /root/abh.env is a SHELL file: every line is `export VAR=value`. systemd's
+# EnvironmentFile is declarative and rejects that syntax, logging "Ignoring
+# invalid environment assignment" for each line and then starting with none of
+# them set - which made this unit exit 2 with "OPENAI_BASE_URL not set" on a box
+# where the router was fine. Source it in a shell instead, the same way
+# bounty_loop.sh does.
+ExecStart=/bin/bash -c 'set -a; . /root/abh.env; exec /usr/bin/python3 /root/Auto-FreeCF/scripts/model_health_watch.py'
 # 90s per model, 5 models, worst case ~8 min. Two hours bounds it without
 # cutting a healthy probe short.
 TimeoutStartSec=7200
