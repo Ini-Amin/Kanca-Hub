@@ -71,11 +71,17 @@ echo "[backup] pulling from $BOX -> $DEST"
 # "succeeded" carrying the two NON-glob paths and ZERO session records: a
 # backup that reports ok and contains none of the findings. Absolute paths make
 # the glob independent of the remote cwd. tar strips the leading / on its own.
+# The CVE databases are here because they are INPUT, not cache: a rebuilt box
+# without them makes run_cve_intel return "not found", and every hunt then runs
+# without the intel that decides which version to test. They are also the two
+# largest files that are expensive to rebuild (a 408k-file NVD parse).
 ssh -o BatchMode=yes "$BOX" 'tar -cf - --ignore-failed-read \
     /root/Agentic-Bug-Hunter/bughunter/recon/*/sessions \
     /root/Agentic-Bug-Hunter/bughunter/recon/*/nuclei \
     /root/Agentic-Bug-Hunter/bughunter/recon/*/findings \
     /root/.config/auto-freecf/bounty \
+    /root/.config/auto-freecf/cve.db \
+    /root/.config/auto-freecf/cve_research.db \
     /root/Auto-FreeCF/patches 2>/dev/null' | tar -C "$INCOMING" -xf -
 
 # ── verify ───────────────────────────────────────────────────────────────────
@@ -92,7 +98,9 @@ PATCH=$(find "$INCOMING/root/Auto-FreeCF/patches" -name '*.patch' 2>/dev/null | 
 printf '  %-12s %s\n' sessions "$SESS agent_session.json (findings_log + trace)"
 printf '  %-12s %s\n' nuclei "$NUC findings.jsonl"
 printf '  %-12s %s\n' jobs "$JOBS job.json"
+CVE=$(find "$INCOMING/root/.config/auto-freecf" -maxdepth 1 -name 'cve*.db' 2>/dev/null | wc -l)
 printf '  %-12s %s\n' patches "$PATCH patch file(s)"
+printf '  %-12s %s\n' cvedb "$CVE database file(s)"
 
 if [ "$SESS" -eq 0 ] || [ "$JOBS" -eq 0 ]; then
   echo "[backup] FAILED — nothing durable came across (sessions=$SESS jobs=$JOBS)" >&2
