@@ -1,16 +1,16 @@
-From 4b280d936673117d2b9c27e4b0b314707d2ec4a0 Mon Sep 17 00:00:00 2001
+From 66325f1d3718f6a912bf54d4b1e950424a43b711 Mon Sep 17 00:00:00 2001
 From: amen <amen@local>
 Date: Wed, 21 Oct 2026 20:57:23 +0700
-Subject: [PATCH] blu overlay: tool-contract fixes, budget clamp, CVE intel,
- brain base URL
+Subject: [PATCH] blu overlay: tool contracts, budget clamp, CVE intel, SSE +
+ base URL
 
 ---
  bughunter/agent.py           |  75 ++++-
- bughunter/brain.py           |  20 +-
+ bughunter/brain.py           |  84 +++++-
  bughunter/tools/cve_intel.py | 566 +++++++++++++++++++++++++++++++++++
  bughunter/tools/cve_match.py | 416 +++++++++++++++++++++++++
  bughunter/tools/hunt.py      |  79 ++++-
- 5 files changed, 1142 insertions(+), 14 deletions(-)
+ 5 files changed, 1206 insertions(+), 14 deletions(-)
  create mode 100755 bughunter/tools/cve_intel.py
  create mode 100755 bughunter/tools/cve_match.py
 
@@ -139,10 +139,81 @@ index 5e24e74..e9a1b17 100644
          """Fraction (0.0-1.0) of `time_budget_hours` left, based on when
          this dispatcher was constructed. Mirrors the elapsed/remaining
 diff --git a/bughunter/brain.py b/bughunter/brain.py
-index c983d30..8b6ac4e 100644
+index c983d30..459a3a2 100644
 --- a/bughunter/brain.py
 +++ b/bughunter/brain.py
-@@ -346,7 +346,15 @@ class LLMClient:
+@@ -166,6 +166,70 @@ if _ollama_lib is None:
+ # ── Multi-provider LLM client ──────────────────────────────────────────────────
+ # Wraps Ollama, Claude, OpenAI, Grok behind a single .chat() interface.
+ 
++def _decode_completion(text: str) -> dict:
++    """Decode a chat-completion body that may be SSE or carry an SSE trailer.
++
++    9router answers a NON-streaming request with `content-type:
++    text/event-stream` and a body that looks like:
++
++        data: {"id":..., "choices":[{"message":{...}}]}
++        data: [DONE]
++
++    `r.json()` raises `JSONDecodeError: Expecting value: line 1 column 1`,
++    which is easy to mistake for a malformed model reply — and because the
++    caller catches broadly, the symptom is an EMPTY string from a model that
++    answered correctly. Handled three ways, in order of cheapness:
++
++      1. plain JSON (a well-behaved gateway);
++      2. JSON with an appended `data: [DONE]` trailer (decode first value);
++      3. full SSE stream — concatenate the `delta.content` fragments, which is
++         what a streamed completion actually is.
++    """
++    text = (text or "").strip()
++    if not text:
++        raise RuntimeError("empty response body")
++
++    try:
++        return json.loads(text)
++    except json.JSONDecodeError:
++        pass
++
++    if text.startswith("data:"):
++        content_parts: list[str] = []
++        last_obj: dict | None = None
++        for line in text.splitlines():
++            line = line.strip()
++            if not line.startswith("data:"):
++                continue
++            chunk = line[5:].strip()
++            if not chunk or chunk == "[DONE]":
++                continue
++            try:
++                obj = json.loads(chunk)
++            except json.JSONDecodeError:
++                continue
++            last_obj = obj
++            for ch in obj.get("choices") or []:
++                delta = ch.get("delta") or {}
++                if delta.get("content"):
++                    content_parts.append(delta["content"])
++                # Some gateways send the final message instead of a delta.
++                msg = ch.get("message") or {}
++                if msg.get("content"):
++                    content_parts.append(msg["content"])
++        if content_parts or last_obj is not None:
++            merged = dict(last_obj or {})
++            merged["choices"] = [{"message": {"content": "".join(content_parts)}}]
++            return merged
++        raise RuntimeError("SSE response carried no content chunks")
++
++    # JSON with a trailing SSE marker appended to the document.
++    try:
++        return json.JSONDecoder().raw_decode(text)[0]
++    except json.JSONDecodeError as exc:
++        raise RuntimeError(f"unparseable completion body: {exc}") from exc
++
++
+ class LLMClient:
+     """
+     Unified chat interface for Ollama, Groq, DeepSeek, Claude, OpenAI, and Grok.
+@@ -346,7 +410,15 @@ class LLMClient:
              self._http = requests.Session()
              self._http.headers.update({"Authorization": f"Bearer {key}",
                                         "Content-Type": "application/json"})
@@ -159,12 +230,12 @@ index c983d30..8b6ac4e 100644
              self.available   = True
              self.description = "OpenAI API"
  
-@@ -668,7 +676,15 @@ class LLMClient:
+@@ -668,7 +740,15 @@ class LLMClient:
                  f"to a supported one."
              )
          r.raise_for_status()
 -        return r.json()["choices"][0]["message"]["content"].strip()
-+        payload = r.json()
++        payload = _decode_completion(r.text)
 +        # Some OpenAI-compatible gateways (9router among them) wrap the standard
 +        # chat-completion body in {"data": {...}, "success": true}. Reading
 +        # payload["choices"] then raises KeyError, the caller's broad except
