@@ -1,0 +1,18 @@
+[Unit]
+Description=Probe bounty chain models every 30 minutes
+Documentation=https://github.com/Ini-Amin/Kanca-Hub/blob/main/scripts/model_health_watch.py
+
+[Timer]
+# OnUnitActiveSec, not OnCalendar: the probe takes 2-8 minutes, and a calendar
+# schedule that fires at :00/:30 would start a second probe while the first is
+# still running. ActiveSec counts from the last completion instead.
+OnUnitActiveSec=1800
+# A box that was down for an hour runs one catch-up probe on boot, then resumes
+# the cadence. Without this the health file goes stale and the hunt loop treats
+# staleness as "unknown" rather than "broken".
+Persistent=true
+AccuracySec=1min
+Unit=blu-model-health.service
+
+[Install]
+WantedBy=timers.target

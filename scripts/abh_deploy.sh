@@ -179,9 +179,13 @@ fi
 # so it is used again the moment the farm restores its quota.
 # Ordered by measured tool-calling reliability, not by benchmark score. Every
 # entry here was probed with the same tool-calling prompt; see the MODEL note
-# above. Zcode/GLM-5.3 stays in the chain but late: its buckets are spent, so it
-# costs 12s to fail, and it is only useful again once the farm restores quota.
-FALLBACKS=${FALLBACKS:-"tia/glm-5.3-flash:free,nr/step-5-preview,ocz/mimo-v2.6-flash-free,Zcode/GLM-5.3,THK/deepseek-v4.1-flash:free"}
+# above. The order is by seconds-to-tool-call, because a slow-but-working model
+# in front of a fast one costs the whole hunt a minute per step.
+#
+# ocz/mimo-v2.6-flash-free is LAST and is expected to fail: HTTP 200, empty
+# content, zero tool_calls. It stays in the chain only so that a provider-side
+# fix revives it without a deploy, and it is cheap to try last.
+FALLBACKS=${FALLBACKS:-"THK/deepseek-v4.1-flash:free,tia/glm-5.3-flash:free,nr/step-5-preview,Zcode/GLM-5.3,ocz/mimo-v2.6-flash-free"}
 
 # Cross-check the chain against the last model-health sweep (r9_modelcheck.py).
 # Not fatal: the snapshot can be stale and a deploy must not be blocked by a

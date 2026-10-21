@@ -219,13 +219,29 @@ def run_delegate(target: str, flags: list[str], hours: float, steps: int,
 # calls (what to try next, is this a real finding). Paying the strong model for
 # the cheap steps is the main avoidable cost, so the tier is chosen per program
 # from what actually makes a program hard: surface size and what it pays.
-# Measured on blu 2026-10-20: Zcode/GLM-5.3-Flash did not answer within 90s and
-# GLM-5.3 returned 503, while ag/gemini-3.8-flash-high answered in 3.7s and the
-# THK free tier in 3.3s. Tiers therefore name models that are known to answer,
-# with the Zcode pair left in the fallback chain where a slow failure is cheap.
+#
+# Every default below was probed with a real tool-calling prompt on blu
+# 2026-10-21 (scripts/model_health_watch.py, which is what keeps this table
+# honest from now on):
+#   THK/deepseek-v4.1-flash:free   3.4s  tool_calls=1   -> cheap
+#   tia/glm-5.3-flash:free        4.9s  tool_calls=1   -> standard
+#   nr/step-5-preview            12.9s  tool_calls=1   -> strong
+#   ocz/mimo-v2.6-flash-free      6.0s  tool_calls=0   UNUSABLE: HTTP 200, empty
+#                                        content, no call. Retired as a tier and
+#                                        demoted to the tail of the chain.
+#   Zcode/GLM-5.3               90.0s  timeout        UNUSABLE right now; blu-r9-farm
+#                                        is the thing that refills it.
+# ag/gemini-3.8-flash-high used to be "strong" and is gone: it answers 200 in
+# ~10s but returns empty content - Gemini's safety filter blocks the security
+# prompt outright - and the first successful end-to-end run burned all 8 steps
+# on "(LLM produced no tool call)".
+#
+# "Answers" is not the bar. A model that 200s without emitting a tool call costs
+# the same wall clock as a dead one and produces the same zero findings, so the
+# tiers only name models that both answer AND call tools.
 MODEL_TIERS = {
-    "strong": os.environ.get("ABH_MODEL_STRONG", "ag/gemini-3.8-flash-high"),
-    "standard": os.environ.get("ABH_MODEL_STANDARD", "ocz/mimo-v2.6-flash-free"),
+    "strong": os.environ.get("ABH_MODEL_STRONG", "nr/step-5-preview"),
+    "standard": os.environ.get("ABH_MODEL_STANDARD", "tia/glm-5.3-flash:free"),
     "cheap": os.environ.get("ABH_MODEL_CHEAP", "THK/deepseek-v4.1-flash:free"),
 }
 
