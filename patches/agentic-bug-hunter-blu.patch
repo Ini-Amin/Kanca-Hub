@@ -1,14 +1,16 @@
-From c19059d5b572a76eba79bae5d3e1280b24f43ffd Mon Sep 17 00:00:00 2001
+From 4b280d936673117d2b9c27e4b0b314707d2ec4a0 Mon Sep 17 00:00:00 2001
 From: amen <amen@local>
 Date: Wed, 21 Oct 2026 20:57:23 +0700
-Subject: [PATCH] blu overlay: tool-contract fixes + CVE intel
+Subject: [PATCH] blu overlay: tool-contract fixes, budget clamp, CVE intel,
+ brain base URL
 
 ---
  bughunter/agent.py           |  75 ++++-
+ bughunter/brain.py           |  20 +-
  bughunter/tools/cve_intel.py | 566 +++++++++++++++++++++++++++++++++++
  bughunter/tools/cve_match.py | 416 +++++++++++++++++++++++++
  bughunter/tools/hunt.py      |  79 ++++-
- 4 files changed, 1124 insertions(+), 12 deletions(-)
+ 5 files changed, 1142 insertions(+), 14 deletions(-)
  create mode 100755 bughunter/tools/cve_intel.py
  create mode 100755 bughunter/tools/cve_match.py
 
@@ -136,6 +138,44 @@ index 5e24e74..e9a1b17 100644
      def _time_remaining_fraction(self) -> float:
          """Fraction (0.0-1.0) of `time_budget_hours` left, based on when
          this dispatcher was constructed. Mirrors the elapsed/remaining
+diff --git a/bughunter/brain.py b/bughunter/brain.py
+index c983d30..8b6ac4e 100644
+--- a/bughunter/brain.py
++++ b/bughunter/brain.py
+@@ -346,7 +346,15 @@ class LLMClient:
+             self._http = requests.Session()
+             self._http.headers.update({"Authorization": f"Bearer {key}",
+                                        "Content-Type": "application/json"})
+-            self._api_base   = "https://api.openai.com/v1"
++            # Honour OPENAI_BASE_URL. Without this, an "openai" provider always
++            # dials api.openai.com even when the key belongs to a local gateway
++            # — on blu that produced a 401 from OpenAI for a 9router key, and
++            # the deploy's brain round-trip check failed against a healthy
++            # router. OPENAI_API_BASE is accepted because LiteLLM and several
++            # gateways set that spelling instead.
++            self._api_base   = (os.environ.get("OPENAI_BASE_URL", "")
++                                or os.environ.get("OPENAI_API_BASE", "")
++                                or "https://api.openai.com/v1").rstrip("/")
+             self.available   = True
+             self.description = "OpenAI API"
+ 
+@@ -668,7 +676,15 @@ class LLMClient:
+                 f"to a supported one."
+             )
+         r.raise_for_status()
+-        return r.json()["choices"][0]["message"]["content"].strip()
++        payload = r.json()
++        # Some OpenAI-compatible gateways (9router among them) wrap the standard
++        # chat-completion body in {"data": {...}, "success": true}. Reading
++        # payload["choices"] then raises KeyError, the caller's broad except
++        # swallows it, and every consumer sees an empty string — which is how a
++        # working model looks like a dead one.
++        if "choices" not in payload and isinstance(payload.get("data"), dict):
++            payload = payload["data"]
++        return payload["choices"][0]["message"]["content"].strip()
+ 
+     def list_models(self) -> list[str]:
+         """List available models for the current provider."""
 diff --git a/bughunter/tools/cve_intel.py b/bughunter/tools/cve_intel.py
 new file mode 100755
 index 0000000..22b6c7f
