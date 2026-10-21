@@ -84,6 +84,19 @@ fi
 
 # ── 2. patches ────────────────────────────────────────────────────────────────
 [ -f "$PATCH" ] || die "patch not found: $PATCH (copy patches/agentic-bug-hunter-blu.patch to blu first)"
+
+# Files the patch CREATES. `reset --hard` restores tracked files but leaves
+# these behind as untracked, so a second run fails with "already exists in
+# working directory" — the deploy then reports "upstream changed" and stops,
+# which is the wrong diagnosis for a half-finished run. Remove exactly the
+# files this patch adds, never a wildcard: recon/ lives under the same tree and
+# is gitignored, so `git clean -fd` would take the findings with it.
+# Only paths whose hunk header says "new file".
+NEWFILES=$(awk '/^diff --git/{path=$4; sub(/^b\//,"",path)} /^new file mode/{print path}' "$PATCH")
+for f in $NEWFILES; do
+  [ -e "$ABH_DIR/$f" ] && rm -f "$ABH_DIR/$f" && say "cleared stale $f (added by this patch)"
+done
+
 if git -C "$ABH_DIR" apply --check "$PATCH" 2>/dev/null; then
   git -C "$ABH_DIR" apply "$PATCH"
   say "applied $(basename "$PATCH")"
