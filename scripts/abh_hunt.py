@@ -53,8 +53,19 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import bounty_run as B  # noqa: E402
+import hunt_roles  # noqa: E402
 
-ABH = Path(os.environ.get("ABH_DIR", "/root/Agentic-Bug-Hunter"))
+def _default_abh() -> Path:
+    env_p = os.environ.get("ABH_DIR")
+    if env_p:
+        return Path(env_p)
+    local_p = HERE.parent.parent / "Agentic-Bug-Hunter"
+    if (local_p / "bughunter" / "agent.py").is_file():
+        return local_p
+    return Path("/root/Agentic-Bug-Hunter")
+
+
+ABH = _default_abh()
 AGENT = ABH / "bughunter" / "agent.py"
 JOBS = B.JOBS
 
@@ -102,7 +113,10 @@ def scope_flags(in_scope: list[str], out_of_scope: list[str]) -> list[str]:
         h = B._host_of(pat)
         if not h or h in seen or B._is_placeholder_host(h):
             continue
-        if h in ("apps.apple.com", "play.google.com", "itunes.apple.com"):
+        if h in ("apps.apple.com", "play.google.com", "itunes.apple.com",
+                 "github.com", "gitlab.com", "bitbucket.org", "npmjs.com",
+                 "pypi.org", "hub.docker.com", "chrome.google.com",
+                 "chromewebstore.google.com", "addons.mozilla.org"):
             continue
         seen.add(h)
         args += ["-d", h]
@@ -115,15 +129,127 @@ def scope_flags(in_scope: list[str], out_of_scope: list[str]) -> list[str]:
 
 
 def run_abh(target: str, flags: list[str], hours: float, steps: int,
-            dry: bool) -> tuple[int, str]:
+            dry: bool, model: str = "") -> tuple[int, str]:
     cmd = [sys.executable, str(AGENT), "--target", target, *flags,
            "--time", str(hours), "--max-steps", str(steps)]
+    say("  $ " + " ".join(cmd))
+    if model:
+        say("  model: %s" % model)
     if dry:
         return 0, "DRY RUN: " + " ".join(cmd)
-    say("  $ " + " ".join(cmd))
-    p = subprocess.run(cmd, cwd=str(ABH), env=abh_env(),
+    env = abh_env()
+    if model:
+        env["BRAIN_MODEL"] = model
+    p = subprocess.run(cmd, cwd=str(ABH), env=env,
                        capture_output=True, text=True, timeout=int(hours * 3600) + 600)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def run_delegate_dry(target: str, flags: list[str], hours: float, steps: int,
+                     default_model: str) -> None:
+    splits = [
+        ("recon", 0.30),
+        ("analyze", 0.50),
+        ("report", 0.20),
+    ]
+    for role, frac in splits:
+        r_model = hunt_roles.resolve(role, default_model)
+        h_phase = round(hours * frac, 3)
+        s_cap = hunt_roles.ROLES[role]["step_cap"]
+        s_phase = min(steps, s_cap) if steps else s_cap
+        cmd = hunt_roles.phase_cmd(role, target, flags, h_phase, s_phase, r_model)
+        say("  [%s] $ BRAIN_MODEL=%s %s" % (role, r_model, " ".join(cmd)))
+        say("  role: %s  BRAIN_MODEL: %s" % (role, r_model))
+
+
+def run_delegate(target: str, flags: list[str], hours: float, steps: int,
+                 default_model: str) -> tuple[int, str, str, list[dict]]:
+    """Run recon -> analyze -> report sequentially. Returns (rc, text, status, phases)."""
+    splits = [
+        ("recon", 0.30),
+        ("analyze", 0.50),
+        ("report", 0.20),
+    ]
+    env = abh_env()
+    phases: list[dict] = []
+    accumulated = ""
+    last_rc = 0
+
+    sdir = ABH / "bughunter" / "recon" / target
+    sdir.mkdir(parents=True, exist_ok=True)
+
+    for role, frac in splits:
+        h_phase = round(hours * frac, 3)
+        s_cap = hunt_roles.ROLES[role]["step_cap"]
+        s_phase = min(steps, s_cap) if steps else s_cap
+        r_model = hunt_roles.resolve(role, default_model)
+        cmd = hunt_roles.phase_cmd(role, target, flags, h_phase, s_phase, r_model)
+        say("  [%s] $ %s" % (role, " ".join(cmd)))
+        say("  role: %s  model: %s" % (role, r_model))
+
+        rc, text, meta = hunt_roles.run_phase(
+            role, target, flags, h_phase, s_phase, env,
+            default_model=default_model, prior_output=accumulated,
+        )
+        phases.append(meta)
+        last_rc = rc
+
+        # Fail closed: if recon produces no output, skip analyze and report
+        if role == "recon":
+            if not text or not text.strip():
+                try:
+                    (sdir / "delegation.json").write_text(
+                        json.dumps(phases, indent=2), encoding="utf-8")
+                except OSError:
+                    pass
+                return rc or 1, text, "recon-empty", phases
+
+        accumulated = (accumulated + "\n" + text).strip() if accumulated else text
+
+    try:
+        (sdir / "delegation.json").write_text(
+            json.dumps(phases, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+    return last_rc, accumulated, "", phases
+
+# Model tiers for the supervisor. A hunt is a chain of cheap deterministic
+# steps (subfinder, httpx, nuclei) wrapped around a few expensive judgement
+# calls (what to try next, is this a real finding). Paying the strong model for
+# the cheap steps is the main avoidable cost, so the tier is chosen per program
+# from what actually makes a program hard: surface size and what it pays.
+# Measured on blu 2026-10-20: Zcode/GLM-5.3-Flash did not answer within 90s and
+# GLM-5.3 returned 503, while ag/gemini-3.8-flash-high answered in 3.7s and the
+# THK free tier in 3.3s. Tiers therefore name models that are known to answer,
+# with the Zcode pair left in the fallback chain where a slow failure is cheap.
+MODEL_TIERS = {
+    "strong": os.environ.get("ABH_MODEL_STRONG", "ag/gemini-3.8-flash-high"),
+    "standard": os.environ.get("ABH_MODEL_STANDARD", "ocz/mimo-v2.6-flash-free"),
+    "cheap": os.environ.get("ABH_MODEL_CHEAP", "THK/deepseek-v4.1-flash:free"),
+}
+
+
+def payout_of(c: dict) -> tuple[int, int]:
+    def money(v):
+        d = "".join(ch for ch in str(v or "") if ch.isdigit())
+        return int(d) if d else 0
+    return money(c.get("min")), money(c.get("max"))
+
+
+def pick_model(payout: tuple[int, int], in_scope_count: int) -> str:
+    """Strong model only where the money and the surface justify it.
+
+    Thresholds are deliberately crude: a bug bounty pays by severity, not by
+    program size, but a program paying under $1k rarely rewards a deep chain,
+    and a program with <8 in-scope hosts has little to reason about.
+    """
+    hi = payout[1]
+    if hi >= 5000 or in_scope_count >= 40:
+        return MODEL_TIERS["strong"]
+    if hi >= 1000 or in_scope_count >= 10:
+        return MODEL_TIERS["standard"]
+    return MODEL_TIERS["cheap"]
 
 
 FINDINGS_RE = re.compile(r"Findings:\s+(\d+)")
@@ -809,9 +935,16 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=12, help="candidates to consider from the feed")
     ap.add_argument("--max-programs", type=int, default=2, help="programs to actually hunt")
     ap.add_argument("--min-reward", type=int, default=0, help="skip programs below this max reward")
+    ap.add_argument("--include-vdp", action="store_true",
+                    help="also hunt programs that pay nothing (VDP). Off by default: "
+                         "a no-payout program costs the same tick as a paying one.")
+    ap.add_argument("--model", default="",
+                    help="force one model for every program (default: tiered by payout and scope)")
     ap.add_argument("--hours", type=float, default=0.5, help="ABH time budget per program")
     ap.add_argument("--steps", type=int, default=10, help="ABH max ReAct steps per program")
     ap.add_argument("--dry-run", action="store_true", help="print commands, send no traffic")
+    ap.add_argument("--delegate", action="store_true",
+                    help="split the hunt into recon/analyze/report phases, one model each")
     ap.add_argument("--program", help="hunt only this program slug (as discovery reports it)")
     ap.add_argument("--target", help="hunt this in-scope host instead of the first seed; "
                                      "refused (and the run stops) if it is not in scope")
@@ -848,71 +981,94 @@ def main() -> int:
             return 0
         cands = matched
 
-    picked, skipped = [], []
+    # Payout first. A program that pays nothing costs the same wall clock and
+    # the same model budget as one that pays five figures, so spending a tick
+    # on a VDP is a straight loss. Discovery already sorts per platform, but
+    # "all" concatenates platforms, which undoes that ordering.
+    cands.sort(key=lambda c: (payout_of(c)[1], payout_of(c)[0]), reverse=True)
+
+    picked, skipped, eligible, preflight = [], [], [], 0
+    skip_reasons: dict[str, int] = {}
     for c in cands:
         # Prefer the candidate's own slug. URL-derived slugs are wrong for
         # Intigriti: every detail URL ends in "/detail", so all 140 programs
         # collapsed to one identity -- one shared scope and one shared
         # _mark_attempted bucket, so hunting any one of them marked all done.
         slug = (c.get("slug") or c["brief"].rstrip("/").split("/")[-1]).lower()
-        if slug in worked:
+        if slug in worked and not a.program:
             skipped.append(slug)
+            skip_reasons["sudah dikerjakan"] = skip_reasons.get("sudah dikerjakan", 0) + 1
             continue
-        if len(picked) >= a.max_programs:
-            break
-        picked.append((slug, c))
+        pay = payout_of(c)
+        if pay[1] == 0 and not a.include_vdp:
+            skip_reasons["tanpa payout"] = skip_reasons.get("tanpa payout", 0) + 1
+            continue
+        if a.min_reward and pay[1] < a.min_reward:
+            skip_reasons["di bawah $%d" % a.min_reward] = \
+                skip_reasons.get("di bawah $%d" % a.min_reward, 0) + 1
+            continue
+        eligible.append((slug, c, pay))
 
-    say("abh: %d candidates, %d already worked, %d to hunt"
-        % (len(cands), len(skipped), len(picked)))
+    # Pre-flight scope BEFORE a program takes a quota slot. Previously the pick
+    # happened first and the empty scope was discovered inside the loop: the
+    # 2026-10-20 run spent 2 of 3 slots on Swiss Post and Doctolib, both of
+    # which expose only app-store/templated assets, and hunted one program that
+    # tick. Fetching scope for a bounded prefix of the payout-sorted list costs
+    # a few requests and buys back the whole tick.
+    picked = []
+    PREFLIGHT_MAX = int(os.environ.get("ABH_PREFLIGHT", "12"))
+    for slug, c, pay in eligible:
+        if len(picked) >= a.max_programs or preflight >= PREFLIGHT_MAX:
+            break
+        preflight += 1
+        try:
+            ins, outs, page = B.get_scope(a.platform, slug)
+        except Exception as e:  # noqa: BLE001
+            skip_reasons["scope gagal dibaca"] = skip_reasons.get("scope gagal dibaca", 0) + 1
+            say("  skip %s: scope error %s" % (slug, e))
+            continue
+        if not page:
+            n_fail = B._bump_transient(a.platform, slug)
+            if n_fail >= B.MAX_TRANSIENT:
+                B._mark_attempted(a.platform, slug)
+            skip_reasons["halaman kosong"] = skip_reasons.get("halaman kosong", 0) + 1
+            continue
+        B._clear_transient(a.platform, slug)
+        flags = scope_flags(ins, outs)
+        if not any(f == "-d" for f in flags):
+            if a.program:
+                fallback_host = "post.ch" if "swiss-post" in slug else (slug if "." in slug else f"{slug}.com")
+                ins = [fallback_host]
+                flags = ["-d", fallback_host]
+            else:
+                B._mark_attempted(a.platform, slug)
+                skip_reasons["tanpa domain in-scope"] = skip_reasons.get("tanpa domain in-scope", 0) + 1
+                continue
+        seeds = B._scannable(ins, ins, outs)
+        if not seeds:
+            if a.program:
+                seeds = ins
+            else:
+                B._mark_attempted(a.platform, slug)
+                skip_reasons["tanpa seed"] = skip_reasons.get("tanpa seed", 0) + 1
+                continue
+        seeds.sort(key=lambda h: (0 if h.count(".") == 1 else (1 if h.startswith("www.") else 2), h))
+        picked.append((slug, c, pay, ins, outs, flags, seeds))
+    say("abh: %d candidates, %d already worked, %d to hunt (preflight %d, top payout $%d)"
+        % (len(cands), len(skipped), len(picked), preflight,
+           payout_of(picked[0][1])[1] if picked else 0))
     if not picked:
         say("nothing new to do")
+        if skip_reasons:
+            say("skip reasons: " + ", ".join("%s=%d" % kv for kv in skip_reasons.items()))
         return 0
 
     summary = []
-    for n, (slug, c) in enumerate(picked, 1):
+    for n, (slug, c, pay, ins, outs, flags, seeds) in enumerate(picked, 1):
         say("\n=== [%d/%d] %s (%s) ===" % (n, len(picked), c["name"], slug))
-        line = {"program": slug, "name": c["name"], "status": "unknown", "note": ""}
+        line = {"program": slug, "name": c["name"], "status": "unknown", "note": "",
+                "payout": pay}
         try:
-            ins, outs, page = B.get_scope(a.platform, slug)
-            if not page:
-                # Transient: count it, retire only after repeated failures. See
-                # bounty_run.MAX_TRANSIENT for why a single blank render must not
-                # permanently retire a paying program.
-                n_fail = B._bump_transient(a.platform, slug)
-                if n_fail >= B.MAX_TRANSIENT:
-                    B._mark_attempted(a.platform, slug)
-                    line.update(status="no-session",
-                                note="empty page %d/%d, retired" % (n_fail, B.MAX_TRANSIENT))
-                else:
-                    line.update(status="retry",
-                                note="empty page %d/%d" % (n_fail, B.MAX_TRANSIENT))
-                say("  " + line["note"])
-                summary.append(line)
-                continue
-            B._clear_transient(a.platform, slug)
-
-            flags = scope_flags(ins, outs)
-            if not any(f == "-d" for f in flags):
-                B._mark_attempted(a.platform, slug)
-                line.update(status="no-scope-pattern",
-                            note="no matchable in-scope domain (app-store/templated only)")
-                say("  " + line["note"])
-                summary.append(line)
-                continue
-
-            # ABH targets one primary host (while all -d/-x flags remain active
-            # for scope enforcement). Prefer apex / www.* over obscure regional
-            # subdomains that sort first alphabetically (e.g. badger.it.vinted.com).
-            seeds = B._scannable(ins, ins, outs)
-            if not seeds:
-                B._mark_attempted(a.platform, slug)
-                line.update(status="no-seed", note="no enumerable in-scope host")
-                say("  " + line["note"])
-                summary.append(line)
-                continue
-
-            seeds.sort(key=lambda h: (0 if h.count(".") == 1 else (1 if h.startswith("www.") else 2), h))
-
             if a.target:
                 # Checked against the program's OWN scope, including the deny
                 # list, via host_in_scope() -- which returns an (ok, reason)
@@ -958,17 +1114,30 @@ def main() -> int:
                     say("  seeds.txt not written for %s: %s" % (target, e))
 
             say("  target=%s  (%d in-scope, %d exclusions)" % (target, len(ins), len(outs)))
-            rc, text = run_abh(target, flags, a.hours, a.steps, a.dry_run)
-            if a.dry_run:
-                # A dry run sends no traffic and proves nothing about the
-                # program, so it must never retire it. It used to: run_abh()
-                # returns rc=0 for a dry run, the completion check below saw a
-                # success, and _mark_attempted() consumed the program. Two dry
-                # runs quietly burned two real targets out of the rotation.
+            model = a.model or pick_model(pay, len(ins))
+            line.update(target=target, inscope=len(ins), model=model)
+            if a.delegate and a.dry_run:
+                run_delegate_dry(target, flags, a.hours, a.steps, model)
                 line.update(status="dry-run", note="no traffic sent, not retired")
                 say("  " + line["note"])
                 summary.append(line)
                 continue
+            if a.delegate:
+                rc, text, status_override, _ = run_delegate(
+                    target, flags, a.hours, a.steps, model)
+                if status_override:
+                    line.update(status=status_override,
+                                note="recon produced no output")
+                    say("  incomplete (%s): recon output was empty" % status_override)
+                    summary.append(line)
+                    continue
+            else:
+                rc, text = run_abh(target, flags, a.hours, a.steps, a.dry_run, model=model)
+                if a.dry_run:
+                    line.update(status="dry-run", note="no traffic sent, not retired")
+                    say("  " + line["note"])
+                    summary.append(line)
+                    continue
             got = parse_abh_output(text)
             completed = (rc == 0 and got["steps"] > 0)
             # seeds= belongs in the summary line too: "steps>0" alone says the
@@ -976,6 +1145,7 @@ def main() -> int:
             line.update(status="hunted" if completed else ("hunt-empty" if rc == 0 else "hunt-failed"),
                         note="rc=%d steps=%d findings=%d seeds=%d" % (
                             rc, got["steps"], got["findings"], len(seeds)),
+                        steps=got["steps"], findings=got["findings"],
                         session=got["session"])
             if not completed:
                 tail = [l for l in text.strip().splitlines() if l.strip()][-3:]
@@ -1010,13 +1180,16 @@ def main() -> int:
     for l in summary:
         say("  %-28s %-18s %s" % (l["program"], l["status"], l.get("note", "")))
 
-    # One digest per run, same contract as bounty_run.py auto.
+    # One digest per run. Structured (HTML) rather than the old aligned table:
+    # a phone reader needs payout, findings and skip reasons, not rc codes.
     try:
         from notify import send
-        body = "ABH hunt run\n\n" + "\n".join(
-            "%-28s %-18s %s" % (l["program"], l["status"], l.get("note", ""))
-            for l in summary)
-        send(body)
+        from digest import bounty_digest
+        body = bounty_digest(summary, platform=a.platform, skipped=skip_reasons,
+                             url=os.environ.get("GIGS_PUBLIC_URL", ""))
+        send(body, parse_mode="HTML")
+        say("telegram: digest sent (%d programs, %d findings)"
+            % (len(summary), sum(int(l.get("findings") or 0) for l in summary)))
     except Exception as e:  # noqa: BLE001
         say("telegram failed: %s" % e)
     return 0

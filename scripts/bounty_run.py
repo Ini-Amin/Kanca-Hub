@@ -864,7 +864,10 @@ def _scannable(targets, in_scope, out_of_scope):
     out = []
     for t in targets:
         h = _host_of(t)
-        if not h or h in ("apps.apple.com", "play.google.com", "itunes.apple.com"):
+        if not h or h in ("apps.apple.com", "play.google.com", "itunes.apple.com",
+                          "github.com", "gitlab.com", "bitbucket.org", "npmjs.com",
+                          "pypi.org", "hub.docker.com", "chrome.google.com",
+                          "chromewebstore.google.com", "addons.mozilla.org"):
             continue
         if h.startswith("*."):
             h = h[2:]
