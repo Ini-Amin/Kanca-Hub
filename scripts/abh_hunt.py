@@ -257,8 +257,16 @@ SESSION_RE = re.compile(r"Session:\s+(\S+)")
 
 
 def parse_abh_output(text: str) -> dict:
-    """Pull the summary numbers out of ABH's stdout."""
-    out = {"findings": 0, "session": "", "steps": 0}
+    """Pull the summary numbers out of ABH's stdout.
+
+    `tool_errors` is the number that makes the rest readable. `steps=12
+    findings=0` looks identical whether the agent tested twelve things and
+    found nothing, or called one broken tool twelve times — and that second
+    case is exactly what happened on 2026-10-21 (run_vuln_scan raised TypeError
+    on every call). ABH already prints the failing tools in its tool list, so
+    the count comes from there rather than a second parse of the trace.
+    """
+    out = {"findings": 0, "session": "", "steps": 0, "tool_errors": 0}
     m = FINDINGS_RE.search(text)
     if m:
         out["findings"] = int(m.group(1))
@@ -268,6 +276,12 @@ def parse_abh_output(text: str) -> dict:
     m = re.search(r"Steps executed:\s+(\d+)", text)
     if m:
         out["steps"] = int(m.group(1))
+    # ABH's per-step tool list prints "[!] name — raised/blocked/failed".
+    out["tool_errors"] = len(re.findall(r"^\s*\[!\]", text, re.M))
+    if not out["tool_errors"]:
+        # Older builds only say "Completed tools: N"; anything else that shows
+        # up under a failure header still counts.
+        out["tool_errors"] = len(re.findall(r"\b(?:raised exception|Tool .* (?:failed|blocked))\b", text))
     return out
 
 
@@ -1140,11 +1154,28 @@ def main() -> int:
                     continue
             got = parse_abh_output(text)
             completed = (rc == 0 and got["steps"] > 0)
+            # A run where every tool call errored is INCONCLUSIVE, not hunted.
+            # Both look like steps>0 findings=0, and retiring the program on the
+            # first reading is how a broken tool silently cleans the queue.
+            inconclusive = completed and got["steps"] > 0 and got["tool_errors"] >= got["steps"]
+            if inconclusive:
+                line.update(status="hunt-inconclusive",
+                            note="rc=%d steps=%d tool_errors=%d findings=%d seeds=%d" % (
+                                rc, got["steps"], got["tool_errors"],
+                                got["findings"], len(seeds)),
+                            steps=got["steps"], findings=got["findings"],
+                            session=got["session"])
+                say("  INCONCLUSIVE: every one of %d step(s) errored — nothing was "
+                    "actually tested, so this is not a clean program"
+                    % got["steps"])
+                summary.append(line)
+                continue
             # seeds= belongs in the summary line too: "steps>0" alone says the
             # hunt ran, not how much surface it was handed.
             line.update(status="hunted" if completed else ("hunt-empty" if rc == 0 else "hunt-failed"),
-                        note="rc=%d steps=%d findings=%d seeds=%d" % (
-                            rc, got["steps"], got["findings"], len(seeds)),
+                        note="rc=%d steps=%d findings=%d seeds=%d%s" % (
+                            rc, got["steps"], got["findings"], len(seeds),
+                            (" tool_errors=%d" % got["tool_errors"]) if got["tool_errors"] else ""),
                         steps=got["steps"], findings=got["findings"],
                         session=got["session"])
             if not completed:
