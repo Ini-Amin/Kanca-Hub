@@ -24,6 +24,23 @@
 # silent stale-code run is exactly the failure this farm cannot afford.
 set -u
 H=${R9_FARM_HOST:-lightvela}
+# H=local farms on the box this script runs on instead of sshing elsewhere.
+# Needed because relay ports are not reachable from every host: measured
+# 2026-10-21, lightvela refuses all six fastest JP relays ("No route to host")
+# while blu connects to them instantly. Farming from blu therefore works when
+# the split does not; the script keeps ONE code path via rsh/rcp.
+LOCAL=0; [ "$H" = "local" ] && LOCAL=1
+# Interpreter with camoufox. lightvela keeps it in ~/venv; a blu-local run must
+# use blu's own (measured: hardcoding ~/venv on blu died with
+# "xvfb-run: /root/venv/bin/python: not found").
+PYBIN=${R9_FARM_PY:-}
+if [ -z "$PYBIN" ]; then
+  if [ -x "$HOME/.local/share/auto-freecf/venv/bin/python" ]; then PYBIN="$HOME/.local/share/auto-freecf/venv/bin/python"
+  elif [ -x "$HOME/venv/bin/python" ]; then PYBIN="$HOME/venv/bin/python"
+  else PYBIN=$(command -v python3); fi
+fi
+rsh() { if [ "$LOCAL" = 1 ]; then bash -c "$1"; else ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" "$1"; fi; }
+rcp() { if [ "$LOCAL" = 1 ]; then cat > "$2"; else ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" "cat > $2"; fi; }
 # Egress: a VPN Gate relay, NOT the WARP wireproxy. THK refuses the shared WARP
 # range and caps signups per network; a fresh relay per account is what lets the
 # batch finish (measured 2026-10-19: WARP -> 0/4, vpngate -> account created,
@@ -42,16 +59,16 @@ LOCAL_SLIDER=$(md5sum "$REPO/scripts/captcha_slider.py" 2>/dev/null | cut -d' ' 
 
 echo "[farm] host=$H egress=$P n=$N branch=$BRANCH  $(date '+%F %T')"
 
-# 1. sync the farm box to our commit and prove the solver matches
-ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" \
-  "cd ~/Auto-FreeCF || exit 11
-   git fetch -q origin || exit 12
-   git reset --hard -q origin/$BRANCH || exit 13
-   echo \"[farm] box commit: \$(git log --oneline -1)\"
-   echo \"[farm] box slider: \$(md5sum scripts/captcha_slider.py | cut -d' ' -f1)\"" 2>&1 | tee /tmp/r9-sync.$$ 
+# 1. sync the farm box to our working tree via tar-over-ssh (repo is private on
+#    GitHub and rsync is not installed on blu) and prove the solver matches.
+tar -C "$REPO" --exclude='.git' --exclude='harbor/account.json*' --exclude='__pycache__' --exclude='*.pyc' \
+  -czf - scripts harbor | rsh "mkdir -p ~/Auto-FreeCF && tar -C ~/Auto-FreeCF -xzf -" > /tmp/r9-sync.$$ 2>&1 \
+  || { cat /tmp/r9-sync.$$; rm -f /tmp/r9-sync.$$; echo "[farm] ABORT: tar sync failed"; exit 1; }
+rsh "cd ~/Auto-FreeCF || exit 11
+   echo \"[farm] box slider: \$(md5sum scripts/captcha_slider.py | cut -d' ' -f1)\"" 2>&1 | tee -a /tmp/r9-sync.$$
 SYNC_RC=${PIPESTATUS[0]}
 if [ "$SYNC_RC" -ne 0 ]; then
-  echo "[farm] ABORT: could not sync $H to origin/$BRANCH (rc=$SYNC_RC)"
+  echo "[farm] ABORT: could not sync $H (rc=$SYNC_RC)"
   rm -f /tmp/r9-sync.$$; exit 1
 fi
 BOX_SLIDER=$(grep -o 'box slider: [0-9a-f]*' /tmp/r9-sync.$$ | tail -1 | cut -d' ' -f3)
@@ -70,10 +87,9 @@ fi
 #    while the batch was still going. So: start it with setsid, log on the box,
 #    and poll over FRESH connections until nothing is left running.
 RLOG='$HOME/r9-farm.log'
-ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" \
-  "cd ~/Auto-FreeCF || exit 11
+rsh "cd ~/Auto-FreeCF || exit 11
    rm -f $RLOG
-   setsid nohup xvfb-run -a ~/venv/bin/python scripts/r9_farm_loop.py run --max $N --proxy '$P' --per-ip $PER_IP --farm-only --apply > $RLOG 2>&1 < /dev/null &
+   setsid nohup xvfb-run -a $PYBIN scripts/r9_farm_loop.py run --max $N --proxy '$P' --per-ip $PER_IP --farm-only --apply > $RLOG 2>&1 < /dev/null &
    echo \"[farm] remote started pid=\$! log=$RLOG\"" \
   2>&1 || echo "[farm] WARN: start ssh failed (the farm may still be running detached)"
 
@@ -88,7 +104,7 @@ FARM_PAT='[r]9_farm_loop.py|[t]okenharbor.cli|[k]ancahub.py thk'
 # 20-minute batch and stranded the keys it made afterwards.
 WAITED=0
 for _ in $(seq 1 300); do
-  ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" "pgrep -f '$FARM_PAT' >/dev/null 2>&1"
+  rsh "pgrep -f '$FARM_PAT' >/dev/null 2>&1"
   case $? in
     0) ;;      # farm still running
     1) break ;;  # no matching process: it is done
@@ -98,12 +114,17 @@ for _ in $(seq 1 300); do
   WAITED=$((WAITED + 10))
 done
 echo "[farm] remote farm finished (waited ${WAITED}s)"
-ssh -o BatchMode=yes -o ConnectTimeout=20 "$H" "tail -24 $RLOG" 2>&1 | tail -24
+rsh "tail -24 $RLOG" 2>&1 | tail -24
 
 # 3. pull the farm's account store and merge it into ours (dedupe on email+key)
 mkdir -p "$REPO/harbor"
-scp -q "$H:~/Auto-FreeCF/harbor/account.json" "$REPO/harbor/account.json.remote" 2>/dev/null \
-  || { echo "[farm] no remote account.json yet"; exit 0; }
+if [ "$LOCAL" = 1 ]; then
+  cp "$REPO/harbor/account.json" "$REPO/harbor/account.json.remote" 2>/dev/null \
+    || { echo "[farm] no account.json yet"; exit 0; }
+else
+  scp -q "$H:~/Auto-FreeCF/harbor/account.json" "$REPO/harbor/account.json.remote" 2>/dev/null \
+    || { echo "[farm] no remote account.json yet"; exit 0; }
+fi
 python3 - "$REPO" <<'PY'
 import json, pathlib, sys
 repo = pathlib.Path(sys.argv[1])

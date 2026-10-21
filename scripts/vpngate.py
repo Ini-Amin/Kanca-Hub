@@ -73,7 +73,18 @@ def relays(country=None):
                                                 if not l.startswith("*")).lstrip("#")))
     out = [r for r in rows if r.get("OpenVPN_ConfigData_Base64")
            and (not country or r["CountryShort"].upper() == country.upper())]
-    out = sorted(out, key=lambda r: -int(r["Speed"] or 0))
+    # Rank by sustained quality, not raw speed. Speed-only ordering picked
+    # fast relays that reset a second later (measured 2026-10-21: five relays
+    # in a row exited with "Connection reset" mid-signup, and every one of them
+    # ranked near the top on Speed). Uptime is the field that predicts survival;
+    # Speed is the tie-break because it only matters between living relays.
+    def _rank(r):
+        try:
+            return (-int(r.get("Uptime") or 0), -int(r.get("Speed") or 0))
+        except ValueError:
+            return (0, 0)
+    out = sorted(out, key=_rank)
+    out = [r for r in out if int(r.get("Uptime") or 0) >= 86400] or out
     _RELAY_CACHE[key] = out
     return out
 
@@ -96,9 +107,21 @@ def exit_ip():
 
 
 def down():
+    """Stop the relay if one is running.
+
+    `unlink()` is now unconditional-but-tolerant: openvpn exits by itself when a
+    relay is unreachable, leaving no pid file, and the old `if PID.exists()`
+    guard still raced that (measured 2026-10-21: FileNotFoundError on
+    .cache/vpngate.pid after "relay failed", which aborted the whole batch at
+    1 of 4 accounts)."""
     if PID.exists():
-        subprocess.run(["sudo", "-n", "kill", PID.read_text().strip()])
-        PID.unlink()
+        try:
+            subprocess.run(["sudo", "-n", "kill", PID.read_text().strip()])
+        except Exception:  # noqa: BLE001
+            pass
+        PID.unlink(missing_ok=True)
+    else:
+        PID.unlink(missing_ok=True)
     print("down; exit", exit_ip())
 
 
@@ -109,9 +132,30 @@ def up(country, index):
     down() if PID.exists() else None
     for r in rs[index:index + 5]:  # relays die often; try a few
         cfg = base64.b64decode(r["OpenVPN_ConfigData_Base64"]).decode()
+        # Reachability first. A dead relay costs the full 15 s exit-IP wait, and
+        # on a host whose provider filters relay ports (measured: lightvela
+        # refuses all six JP relays while blu connects fine) a batch spent
+        # 75 s per account failing without ever saying why. A 4 s TCP probe
+        # makes the reason explicit and skips the wait.
+        m_remote = re.search(r"^remote\s+(\S+)\s+(\d+)", cfg, re.M)
+        if m_remote:
+            probe = socket.socket(); probe.settimeout(4)
+            try:
+                probe.connect((m_remote.group(1), int(m_remote.group(2))))
+            except OSError as e:
+                probe.close()
+                print("relay unreachable", r["IP"], m_remote.group(2), type(e).__name__)
+                continue
+            probe.close()
         # untrusted volunteer config runs as root: drop anything that can execute or load code
         cfg = "\n".join(l for l in cfg.splitlines()
                         if not re.match(r"\s*(script-security|up|down|route-up|route-pre-down|ipchange|client-connect|tls-verify|auth-user-pass-verify|learn-address|plugin|setenv|push-peer-info|management|ifconfig-noexec|dev-node|cd|chroot|daemon|log|log-append|writepid)\b", l, re.I))
+        # Keep the tailnet and LAN out of the tunnel. The pushed config redirects
+        # 0.0.0.0/1 + 128.0.0.0/1, which swallows 100.64.0.0/10 — a farm run on a
+        # Tailscale box therefore cut ssh to the box itself for the whole batch
+        # (measured 2026-10-21: host unreachable until the batch ended).
+        cfg += ("\nroute 100.64.0.0 255.192.0.0 net_gateway"
+                "\nroute 192.168.0.0 255.255.0.0 net_gateway\n")
         auth = Path(tempfile.mkstemp()[1]); auth.write_text("vpn\nvpn\n")
         f = Path(tempfile.mkstemp(suffix=".ovpn")[1]); f.write_text(cfg)
         PID.parent.mkdir(parents=True, exist_ok=True)

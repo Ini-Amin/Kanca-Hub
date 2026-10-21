@@ -556,7 +556,63 @@ def call_upstream(payload, email="", timeout=600):
 # so size alone is not the upstream failure; the guard protects against the
 # 1.4 MB dumps that WAF-reset AFTER burning quota on every failover account.
 # Raise only together with the advertised context, never alone.
-MAX_BODY_BYTES = int(os.environ.get("ZCODE_MAX_BODY_KB", "900")) * 1024
+MAX_BODY_BYTES = int(os.environ.get("ZCODE_MAX_BODY_KB", "1280")) * 1024
+
+# Hard read ceiling. Anything under this is READ and compacted by the bridge
+# instead of being refused: a client that keeps one growing session open (the
+# ZCode desktop app does exactly this — it has no compaction of its own) would
+# otherwise be told "compact the session" by hand, once per request, forever.
+# Measured 2026-10-21: a 1367 KB body is a normal long session, not abuse.
+MAX_ACCEPT_BYTES = int(os.environ.get("ZCODE_MAX_ACCEPT_KB", "4096")) * 1024
+# Compact down to this, leaving headroom under MAX_BODY_BYTES for the
+# system-block prefix and persona that get added after compaction.
+COMPACT_TARGET_BYTES = int(os.environ.get("ZCODE_COMPACT_KB", "1100")) * 1024
+KEEP_TAIL = int(os.environ.get("ZCODE_COMPACT_KEEP", "6"))
+
+
+def _msg_bytes(m):
+    try:
+        return len(json.dumps(m, ensure_ascii=False).encode()) + 1
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def compact_payload(payload, target=COMPACT_TARGET_BYTES, keep_tail=KEEP_TAIL):
+    """Drop old middle turns until the payload fits `target`.
+
+    Keeps, in order: the system prompt, the FIRST user turn (that is where the
+    task statement lives), and the last `keep_tail` messages (the live working
+    set). Everything between is replaced by one marker message, so the model can
+    see that history was elided instead of silently believing the conversation
+    started six turns ago.
+
+    Returns (payload, dropped_count, before_bytes, after_bytes).
+    """
+    msgs = payload.get("messages")
+    if not isinstance(msgs, list) or len(msgs) <= keep_tail + 1:
+        return payload, 0, 0, 0
+    before = len(json.dumps(payload, ensure_ascii=False).encode())
+    if before <= target:
+        return payload, 0, before, before
+
+    head = msgs[:1]
+    tail = msgs[-keep_tail:]
+    middle = msgs[1:-keep_tail]
+    dropped = 0
+    # Drop from the oldest middle turn, but keep pairs intact where possible:
+    # an assistant turn whose tool_use is gone leaves an orphan tool_result.
+    while middle and len(json.dumps({"messages": head + middle + tail}, ensure_ascii=False).encode()) > target:
+        middle.pop(0)
+        dropped += 1
+    marker = {"role": "user", "content": (
+        "[bridge] %d pesan sebelumnya dipotong agar permintaan muat di batas "
+        "ukuran. Ringkas ulang bila perlu; konteks lama tidak lagi tersedia."
+        % dropped)}
+    new_msgs = head + ([marker] if dropped else []) + middle + tail
+    out = dict(payload)
+    out["messages"] = new_msgs
+    after = len(json.dumps(out, ensure_ascii=False).encode())
+    return out, dropped, before, after
 
 
 class UpstreamBusy(Exception):
@@ -627,14 +683,14 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("content-length") or 0)
         except (TypeError, ValueError):
             n = 0
-        if n <= MAX_BODY_BYTES:
+        if n <= MAX_ACCEPT_BYTES:
             return True
         try:  # drain so a keep-alive connection stays in sync
             self.rfile.read(n)
         except Exception:  # noqa: BLE001
             pass
         bridge_event("reject", "payload %dKB > %dKB on %s: 413, nothing sent upstream"
-                     % (n // 1024, MAX_BODY_BYTES // 1024, self.path.split("?")[0]))
+                     % (n // 1024, MAX_ACCEPT_BYTES // 1024, self.path.split("?")[0]))
         self._send(413, {"error": {"type": "invalid_request_error", "code": "payload_too_large",
                                    "message": "request body %dKB exceeds bridge limit %dKB — compact the session or split the work; nothing was sent upstream"
                                    % (n // 1024, MAX_BODY_BYTES // 1024)}})
@@ -818,6 +874,10 @@ class Handler(BaseHTTPRequestHandler):
         model = self.model
         body["model"] = model
         body["system"] = merge_system(body.get("system"), force_p, req_model, model)
+        body, dropped, b0, b1 = compact_payload(body)
+        if dropped:
+            bridge_event("compact", "%d pesan dipotong %dKB -> %dKB on /messages"
+                         % (dropped, b0 // 1024, b1 // 1024))
         resp, err = self._call_chain(body, chain, model)
         if err is not None:
             return self._relay_error(err, raw=err if hasattr(err, "read") else None)
@@ -889,6 +949,10 @@ class Handler(BaseHTTPRequestHandler):
         payload["model"] = model
         payload["system"] = merge_system(payload.get("system"), force_p,
                                          req.get("model"), model)
+        payload, dropped, b0, b1 = compact_payload(payload)
+        if dropped:
+            bridge_event("compact", "%d pesan dipotong %dKB -> %dKB on /chat/completions"
+                         % (dropped, b0 // 1024, b1 // 1024))
         resp, err = self._call_chain(payload, chain, model)
         if err is not None:
             return self._relay_error(err, raw=err if hasattr(err, "read") else None)

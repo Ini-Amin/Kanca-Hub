@@ -65,6 +65,8 @@ PY = os.environ.get("BOUNTY_PY", sys.executable)
 ROUTER = os.environ.get("BOUNTY_R9_BASE", "http://127.0.0.1:20128/v1")
 BOUNTY = str(REPO / "scripts" / "bounty_run.py")
 GIGS = str(REPO / "scripts" / "gig_finder.py")
+GIG_EXEC = str(REPO / "scripts" / "gig_exec.py")
+GIGS_HOME = HOME / ".config" / "auto-freecf" / "gigs"
 ABH = Path(os.environ.get("ABH_DIR", "/root/Agentic-Bug-Hunter"))
 ABH_HUNT = str(REPO / "scripts" / "abh_hunt.py")
 ABH_PLATFORMS = ("bugcrowd", "hackerone", "intigriti", "yeswehack", "both", "all")
@@ -81,6 +83,9 @@ COOLDOWN = {
     "triage": int(os.environ.get("GIGS_CD_TRIAGE", "300")),
     "report": int(os.environ.get("GIGS_CD_REPORT", "120")),
     "discover": int(os.environ.get("GIGS_CD_DISCOVER", "300")),
+    "find": int(os.environ.get("GIGS_CD_FIND", "300")),
+    # Executing a gig runs a coding CLI or a model draft: minutes, not seconds.
+    "execute": int(os.environ.get("GIGS_CD_EXECUTE", "300")),
     "new": int(os.environ.get("GIGS_CD_NEW", "30")),
     # One hunt at a time. A run is minutes of recon plus model calls, so a
     # double-tap would double the spend against the same program.
@@ -198,15 +203,15 @@ def router_models(max_age=60) -> dict:
     if cached and time.time() - at < max_age:
         return cached
     import urllib.request
+    base_root = ROUTER.rstrip("/")
+    if base_root.endswith("/v1"):
+        base_root = base_root[:-3]
     out = {"base": ROUTER, "ok": False}
     try:
-        key = os.environ.get("BOUNTY_R9_KEY", "")
-        req = urllib.request.Request(ROUTER.rstrip("/") + "/models",
-                                     headers={"Authorization": "Bearer " + key} if key else {})
-        with urllib.request.urlopen(req, timeout=25) as r:
+        req = urllib.request.Request(base_root + "/api/health")
+        with urllib.request.urlopen(req, timeout=5) as r:
             body = json.loads(r.read().decode("utf-8", "replace"))
-        out["ok"] = True
-        out["models"] = [m.get("id") for m in (body.get("data") or [])][:12]
+        out["ok"] = bool(body.get("ok", True))
     except Exception as e:
         out["error"] = str(e)[:160]
     _router_cache = (time.time(), out)
@@ -399,6 +404,28 @@ def abh_active_session() -> Path:
 
 
 _last_hunt: dict = {}
+_last_exec: dict = {}
+
+
+def _exec_bg(argv: list) -> None:
+    """Run one gig to completion in the background; a CLI run is minutes."""
+    say("exec start", argv[2:])
+    rc, out, err = run(argv, timeout=3000)
+    state = "done" if rc == 0 else "failed"
+    try:
+        started = _last_exec.get("started", 0)
+        wd = None
+        for a, b in zip(argv, argv[1:]):
+            if a == "--id":
+                wd = GIGS_HOME / "work" / b
+        status = {}
+        if wd and (wd / "status.json").exists():
+            status = json.loads((wd / "status.json").read_text())
+    except Exception:
+        status = {}
+    say("exec done rc=%s state=%s" % (rc, status.get("state", state)))
+    _last_exec.update(rc=rc, state=status.get("state", state), ended=int(time.time()),
+                      status=status, stdout=out[-4000:], stderr=err[-2000:])
 
 
 def _hunt_bg(argv: list) -> None:
@@ -469,6 +496,33 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, {"count": len(jobs), "jobs": jobs})
             if path == "/gigs/router":
                 return self._json(200, router_models())
+            if path == "/gigs/feed":
+                rdir = REPO / "reports"
+                files = sorted(rdir.glob("gigs-*.md"), reverse=True) if rdir.is_dir() else []
+                latest = files[0].read_text(encoding="utf-8", errors="replace")[-15000:] if files else ""
+                return self._json(200, {
+                    "latest_file": files[0].name if files else None,
+                    "reports": [f.name for f in files[:10]],
+                    "content": latest,
+                })
+            if path == "/gigs/work":
+                work = GIGS_HOME / "work"
+                rows = []
+                if work.is_dir():
+                    for wd in sorted(work.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:40]:
+                        if not wd.is_dir():
+                            continue
+                        row = {"id": wd.name}
+                        try:
+                            row.update(json.loads((wd / "status.json").read_text()))
+                        except Exception:
+                            row["state"] = "unknown"
+                        row["files"] = sorted(p.name for p in wd.iterdir() if p.is_file())
+                        rows.append(row)
+                return self._json(200, {"count": len(rows), "work_dir": str(work), "items": rows})
+            if path == "/gigs/execute":
+                return self._json(200, _last_exec or
+                                  {"note": "no gig executed from this API yet"})
             if path == "/gigs/abh/sessions":
                 q = dict(kv.split("=", 1) for kv in
                          (self.path.split("?", 1)[1].split("&")
@@ -525,6 +579,38 @@ class H(BaseHTTPRequestHandler):
                         "--limit", str(int(body.get("limit") or 25))]
                 rc, out, err = run(argv, timeout=420)
                 return self._json(200, {"cmd": argv[2:], "rc": rc, "stdout": out, "stderr": err})
+
+            if path == "/gigs/find":
+                if (d := self._deny("find")):
+                    return d
+                argv = [PY, GIGS]
+                rc, out, err = run(argv, timeout=300)
+                return self._json(200, {"cmd": ["gig_finder.py"], "rc": rc, "stdout": out, "stderr": err})
+
+            if path == "/gigs/execute":
+                # Validate before the cooldown is stamped (see /gigs/abh/hunt):
+                # a request that does no work must not lock the runner out.
+                gid = str(body.get("id") or "").strip()
+                gurl = str(body.get("url") or "").strip()
+                if not gid and not gurl:
+                    return self._json(400, {"error": "id or url is required"})
+                if gid and not SAFE_ID.match(gid):
+                    return self._json(400, {"error": "bad gig id"})
+                if (d := self._deny("execute")):
+                    return d
+                argv = [PY, GIG_EXEC]
+                argv += ["--id", gid] if gid else ["--url", gurl]
+                if body.get("dry_run"):
+                    argv.append("--dry-run")
+                if body.get("timeout"):
+                    argv += ["--timeout", str(int(body["timeout"]))]
+                _last_exec.clear()
+                _last_exec.update(argv=argv[2:], started=int(time.time()), state="running")
+                threading.Thread(target=_exec_bg, args=(argv,), daemon=True).start()
+                return self._json(202, {"accepted": True, "cmd": argv[2:],
+                                        "cooldown_s": COOLDOWN["execute"],
+                                        "status_url": "/gigs/execute",
+                                        "work_url": "/gigs/work"})
 
             if path == "/gigs/new":
                 if (d := self._deny("new")):

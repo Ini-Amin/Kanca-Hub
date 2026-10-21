@@ -14,7 +14,7 @@ Sources:
   * Algora bounties                    — GitHub issue bounties (claim by PR)
 
 Usage: gig_finder.py [--test]   -> reports/gigs-YYYY-MM-DD.md with only gigs not seen before."""
-import json, re, sys, time, urllib.parse, urllib.request
+import json, os, re, sys, time, urllib.parse, urllib.request
 from datetime import date
 from html import unescape
 from pathlib import Path
@@ -24,8 +24,15 @@ FIT = re.compile(r"scrap|crawl|automat|bot|n8n|zapier|make\.com|python|selenium|
 NOPE = re.compile(r"\b(wordpress theme|logo|video edit|voice|translation|writer|seo backlinks|onsite|full[- ]time)\b", re.I)
 # Work an autonomous agent can actually finish on its own: code, audits, testing, docs.
 FIT_ST = re.compile(r"audit|securit|develop|build|code|contract|program|test|bug|feedback|review|doc|integration|sdk|api|smart contract|repo", re.I)
-MIN_USD, MAX_USD, MAX_BIDS = 10, 500, 40
+# MIN_USD is a real filter, not a cosmetic one: at $10 the Freelancer feed
+# produced 685 "new" gigs in a single run, burying the handful worth a bid and
+# turning the Telegram digest into noise. Raise with GIG_MIN_USD when the queue
+# is crowded; the floor that makes a gig worth an agent's time is time-cost,
+# not taste.
+MIN_USD = int(os.environ.get("GIG_MIN_USD", "50"))
+MAX_USD, MAX_BIDS = 5000, 40
 SEEN = Path.home() / ".config/auto-freecf/gigs_seen.json"
+GIGS_JSON = Path.home() / ".config/auto-freecf/gigs/latest.json"
 OUT = Path(__file__).resolve().parent.parent / "reports"
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) gigfinder/0.1"}
 
@@ -262,6 +269,7 @@ def good(g):
 def main():
     seen = set(json.loads(SEEN.read_text())) if SEEN.exists() else set()
     gigs = {}
+    allgigs = {}
     sources = ([(q, lambda q=q: freelancer(q)) for q in QUERIES]
                + [(s, lambda s=s: reddit(s)) for s in ("forhire", "slavelabour")]
                + [("superteam", superteam), ("algora", algora),
@@ -270,13 +278,23 @@ def main():
     for name, it in sources:
         try:
             for g in it():
-                if g["id"] not in seen and good(g):
-                    gigs[g["id"]] = g
+                if not good(g):
+                    continue
+                allgigs[g["id"]] = g          # full current offer set
+                if g["id"] not in seen:
+                    gigs[g["id"]] = g         # new this run
         except Exception as e:
             print(f"{name}: {e}", file=sys.stderr)
         time.sleep(2)
     SEEN.parent.mkdir(parents=True, exist_ok=True)
     SEEN.write_text(json.dumps(sorted(seen | gigs.keys())[-5000:]))
+    # Structured store: the executor (gig_exec.py) and the /gigs/execute
+    # endpoint need the fields, not the rendered prose. It must hold the FULL
+    # current offer set, not only "new this run": with only-new, a second run
+    # overwrote 685 gigs with 3 leftovers, and the executor could no longer see
+    # the bounty programs the first run had found.
+    GIGS_JSON.parent.mkdir(parents=True, exist_ok=True)
+    GIGS_JSON.write_text(json.dumps(allgigs, indent=1, ensure_ascii=False))
     if not gigs:
         return print("no new gigs")
     OUT.mkdir(exist_ok=True)
@@ -303,20 +321,15 @@ def notify(f, rows):
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from notify import send
+        from digest import gigs_digest
     except Exception as e:
         print(f"telegram: import failed ({e}) - report left at {f}", file=sys.stderr)
         return
-    lines = [f"GIGS {len(rows)} new"]
-    for g in rows[:12]:
-        money = f"${g['usd'][0]}-{g['usd'][1]}" if g["usd"][1] else "budget ?"
-        flag = " [agent]" if g.get("agent") else ""
-        lines.append(f"- {g['title'][:70]} | {money} | {g['bids']} bids | {g['src']}{flag}")
-        lines.append(f"  {g['url']}")
-    if len(rows) > 12:
-        lines.append(f"... +{len(rows) - 12} more in {f.name}")
     try:
-        send("\n".join(lines)[:3800])
-        print("telegram: sent")
+        body = gigs_digest(rows, found=len(rows),
+                           url=os.environ.get("GIGS_PUBLIC_URL", ""))
+        send(body, parse_mode="HTML")
+        print(f"telegram: sent {len(rows)} gigs")
     except Exception as e:
         print(f"telegram: send failed ({e}) - report left at {f}", file=sys.stderr)
 

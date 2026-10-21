@@ -66,14 +66,24 @@ def _api(method: str, payload: dict) -> dict:
         return json.loads(r.read() or b"{}")
 
 
-def send(text: str, chat: str = "") -> list[int]:
-    """Send, chunked. Returns message ids. Raises on missing config/API error."""
+def send(text: str, chat: str = "", parse_mode: str = "") -> list[int]:
+    """Send, chunked. Returns message ids. Raises on missing config/API error.
+
+    parse_mode="HTML" lets a digest carry bold labels and links. Callers that
+    use it MUST escape user-controlled text (program names, gig titles): an
+    unescaped '<' makes Telegram reject the whole message, which for an
+    unattended digest means silence instead of an error anyone sees.
+    """
     target = chat or CHAT
     if not target:
         raise RuntimeError("TELEGRAM_CHAT_ID not set (run: notify.py setup)")
     ids = []
     for i in range(0, max(1, len(text)), CHUNK):
-        j = _api("sendMessage", {"chat_id": target, "text": text[i:i + CHUNK] or "."})
+        payload = {"chat_id": target, "text": text[i:i + CHUNK] or ".",
+                   "disable_web_page_preview": True}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        j = _api("sendMessage", payload)
         if not j.get("ok"):
             raise RuntimeError(f"sendMessage failed: {j}")
         ids.append((j.get("result") or {}).get("message_id", 0))
