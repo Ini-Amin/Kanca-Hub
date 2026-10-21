@@ -48,6 +48,71 @@ This document specifies the current state, flaws audited and fixed, and the rema
 
 ---
 
+### Session 2026-10-21: why every hunt ended `steps=1 findings=0`
+
+Three separate defects, each of which alone was enough to end a run early. All
+three are fixed; the first two are verified on `blu`.
+
+1. **`run_vuln_scan` rejected the `full` kwarg the schema advertised.**
+   `hunt.run_vuln_scan(domain, quick=False)` vs the tool schema's
+   `{quick, full}`. Every dispatch raised
+   `TypeError: unexpected keyword argument 'full'`; the agent retried, `loop_warn`
+   tripped at 3, and the session ended. Trace evidence:
+   `sessions/20261021T190258282048-47ba9301/agent_trace.jsonl`.
+   *This is the one that made "no findings" indistinguishable from "no scan".*
+
+2. **A single tool could consume the entire budget.**
+   `run_recon` had a 3600s internal cap against a 540s agent budget. Measured:
+   one `run_recon` took **338.5s** of a 540s run and the loop stopped at
+   `steps=1` with 60s left. `run_recon`/`run_vuln_scan` now take a `timeout`
+   argument, and `agent.py` passes a slice of the *remaining* budget (55% for
+   recon, 70% for scans). A clamped recon returns True with its partial
+   artifacts instead of being reported as a failure.
+
+3. **The model chain started with a model that cannot answer.**
+   `BOUNTY_MODEL_FALLBACKS` begins with `Zcode/GLM-5.3`. Measured 2026-10-21
+   20:20 WIB: GLM-5.3 → HTTP 503 after 12.4s; `ag/gemini-3.8-flash-high` → 3.1s;
+   `THK/deepseek-v4.1-flash:free` → timeout at 60s. Cause is quota, not config:
+   all 10 accounts holding a `model:glm-5.3` bucket are at 3,000,000/3,000,000
+   units (reset 22:59). `zcode.py autofarm` is `enabled: false`, and the farm
+   only triggers when usable accounts ≤ `min_active`.
+
+**Consequence for reading the logs:** `steps=N findings=0` is not a verdict.
+Only `steps>0` *with every attempted tool returning a real observation* is.
+The digest currently prints the first number and hides the second.
+
+### `cve.db` is now a hunting input, not just a rejection filter
+
+`~/.config/auto-freecf/cve.db` (390,221 CVEs, FTS5, 494 MB) was read only by
+`abh_hunt.gate_dupcheck()`, and only to reject a finding that claimed an
+already-published CVE. The hunt itself never consulted it.
+
+`bughunter/tools/cve_intel.py` (new) turns recon fingerprints into ranked
+hypotheses, exposed to the agent as `run_cve_intel`:
+
+- Reads `live/httpx_full.txt` tech blocks (`Nginx:1.31.1`) and `technologies.txt`.
+- Ranks by **testability** (server-side > client library > unknown), then exact
+  version match, then CVSS. Third-party services the target merely *uses*
+  (Amazon S3, Google Analytics, Vercel) are dropped and counted.
+- `version-unmatched` is a distinct state: the observed version appears in no
+  advisory text, so the product's CVEs are returned for manual range checking
+  rather than silently dropped.
+- `cwe_history` / `patterns`: the CWE distribution of a product's high-severity
+  CVEs (nginx → CWE-22 x16, CWE-20 x15, CWE-434 x10; Apache httpd → CWE-476 x9,
+  CWE-444 x8). This is the part that supports *pattern* work: it says where to
+  look even when no single advisory matches.
+
+Measured failure mode that shaped the ranking: a naive
+`description LIKE '%nginx%'` returned four Nginx-UI CVEs and zero real nginx
+CVEs; `amazon s3` returned MinIO and a WordPress plugin. On `bitso.com` that
+produced 33 fingerprints and 0 usable candidates before the fix.
+
+**Deployment note:** the DB is not on `blu` by default. A slim build
+(`year>=2015 AND cvss31>=4`, 250,916 rows, 131 MB, FTS mirrors dropped) is what
+`blu` now holds at `/root/.config/auto-freecf/cve.db`. Without it
+`run_cve_intel` returns an explicit "cve.db not found" message — a missing
+input, never an empty result.
+
 ## 3. Execution To-Do List (Self-Contained Tasks for Other Models)
 
 Execute these tasks **in order**. Remember: **run subagents serially (1 at a time)** to avoid 429 `bridge busy` on `blu`.
