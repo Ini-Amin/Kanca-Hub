@@ -115,9 +115,22 @@ KEY=$(cat "$ROUTER_KEY")
 [ -n "$KEY" ] || die "9router key file is empty"
 
 # 9router must actually be serving before we point a 2-hour hunt at it.
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
-  -H "Authorization: Bearer $KEY" http://127.0.0.1:20128/v1/models || true)
-[ "$CODE" = "200" ] || die "9router not healthy on :20128 (got ${CODE:-no-response}); start blu-9router"
+#
+# Probe /api/health, NOT /v1/models. Measured on blu 2026-10-21: /api/health
+# answers in 8ms; /v1/models takes 18.4s and returns 292KB (666 models), so a
+# 20s timeout sits right on the edge and intermittently returns 000. A health
+# check that fails on a HEALTHY router is worse than no check: it aborts a
+# deploy that would have worked, and it teaches you to ignore the one message
+# that means "the model gateway is down".
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 10 \
+  http://127.0.0.1:20128/api/health || true)
+if [ "$CODE" != "200" ]; then
+  # Fall back to the models endpoint only to distinguish "router down" from
+  # "router up but slow": a 000 here after a 200 above means auth/upstream.
+  CODE2=$(curl -s -o /dev/null -w '%{http_code}' -m 45 \
+    -H "Authorization: Bearer $KEY" http://127.0.0.1:20128/v1/models || true)
+  [ "$CODE2" = "200" ] || die "9router not healthy on :20128 (health=$CODE models=$CODE2); start blu-9router"
+fi
 
 # Model chain. Every entry must be PROBED live on :20128 before it lands here —
 # a dead model in the middle of the chain silently costs 65s per call and a
