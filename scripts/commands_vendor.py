@@ -622,6 +622,21 @@ def cmd_opencode(a) -> int:
         # `signup` opens the page in the same Camoufox profile the other farms
         # use, so the login survives across runs. `key` reopens the account page
         # to mint/copy another key. `inject` writes a key into 9router's DB.
+        if sub == "login":
+            # Device-flow login: prints a verification URL, waits for approval,
+            # then writes the account row the CLI reads. One run == one login.
+            tool = kancahub.AUTO_FREECF / "scripts" / "opencode_login.py"
+            if not tool.exists():
+                print(kancahub.col("red", f"✗ opencode_login.py not found at {tool}"))
+                return 1
+            py = kancahub.pick_python()
+            argv = [py, str(tool)]
+            if getattr(a, "email", None):
+                argv += ["--email", a.email]
+            if getattr(a, "no_store", False):
+                argv.append("--no-store")
+            return kancahub.run(argv)
+
         if sub == "signup":
             url = "https://opencode.ai/console/signup"
         elif sub == "key":
