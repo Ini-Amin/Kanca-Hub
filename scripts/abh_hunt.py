@@ -1003,10 +1003,48 @@ def finding_from_log(entry: dict, target: str = "") -> dict:
     }
 
 
+def _resolve_session_file(session_file: str, target: str = "") -> Path | None:
+    """Turn what the engine printed into a real agent_session.json path.
+
+    The `Session:` line carries the session DIRECTORY NAME, not a path --
+    `agent.py` prints `Session: {session_id} -> {recon_dir}`. Handing that id
+    straight to Path() gave a relative path that never existed, so
+    load_abh_findings() returned [] on every run and gate_findings() reported
+    "no findings recorded" even when findings_log had rows (observed on
+    sandbox-api.fireblocks.io, 2026-10-22: findings=1 in the digest, gates
+    said none recorded). Try, in order: an existing path, a session id under
+    recon/<target>/sessions/, and any session dir under that target.
+    """
+    if not session_file:
+        return None
+    p = Path(session_file)
+    if p.is_file():
+        return p
+    if p.is_dir():
+        cand = p / "agent_session.json"
+        if cand.is_file():
+            return cand
+    if target:
+        sessions = ABH / "bughunter" / "recon" / target / "sessions"
+        cand = sessions / Path(session_file).name / "agent_session.json"
+        if cand.is_file():
+            return cand
+        # Last resort: newest session for this target. Better a slightly stale
+        # report than silently reporting "no findings" for a hunt that found
+        # one -- the gate is the only thing standing between a finding and a
+        # submission, and it must not be fed a path that cannot exist.
+        if sessions.is_dir():
+            newest = sorted(sessions.glob("*/agent_session.json"),
+                            key=lambda f: f.stat().st_mtime, reverse=True)
+            if newest:
+                return newest[0]
+    return None
+
+
 def load_abh_findings(session_file: str, target: str = "") -> list[dict]:
     """Read ABH's session file and return gate-shaped findings, deduped."""
-    p = Path(session_file) if session_file else None
-    if not p or not p.is_file():
+    p = _resolve_session_file(session_file, target)
+    if not p:
         return []
     try:
         data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
