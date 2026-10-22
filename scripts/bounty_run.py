@@ -618,6 +618,31 @@ def _mirror_entry(platform, slug):
     return None
 
 
+LOGIN_WALL_MARKERS = (
+    "verify with your password",
+    "forgot password?",
+    "back to sign in",
+    "sign in to continue",
+    "log in to continue",
+    "create your account",
+)
+
+
+def is_login_wall(text: str) -> bool:
+    """True if a rendered page is a sign-in screen rather than program content.
+
+    Two or more distinct markers must match: a real brief can contain the words
+    "sign in" in prose, but it does not also carry "Forgot password?" and
+    "Back to sign in". Counting markers keeps this from rejecting a genuine
+    page, which would be the same class of false negative it exists to prevent.
+    """
+    low = (text or "").lower()
+    if not low:
+        return False
+    hits = sum(1 for m in LOGIN_WALL_MARKERS if m in low)
+    return hits >= 2
+
+
 def get_scope(platform, program):
     """(in_scope, out_of_scope, page_text).
 
@@ -641,6 +666,18 @@ def get_scope(platform, program):
         url = "https://bugcrowd.com/engagements/" + url.strip("/")
     text = _render_text(platform, url)
     if not text:
+        return [], [], ""
+    if is_login_wall(text):
+        # A dead session renders the SIGN-IN page, not an error. It is non-empty,
+        # so callers that only check `if not text` treat it as a healthy render;
+        # parse_scope() then finds no target tables and the program is retired as
+        # "nothing to hunt". Observed on blu 2026-10-22: Bugcrowd's session had
+        # expired on 18 Oct, Okta's scope came back with 1 entry instead of 24,
+        # and the pipeline kept hunting programs it could no longer read.
+        # Return an EMPTY page_text so callers take their existing
+        # "empty page - session expired?" path instead of silently proceeding.
+        print("  scope fetch returned a LOGIN WALL for %s/%s - session expired"
+              % (platform, program), file=sys.stderr)
         return [], [], ""
     ins, outs = parse_scope(text)
     return ins, outs, text
