@@ -862,7 +862,7 @@ def build_parser() -> argparse.ArgumentParser:
     oc = sub.add_parser("opencode",
                         help="OpenCode CLI: free Zen models as workers (status|models|run|zen)")
     oc.add_argument("oc_cmd", nargs="?", default="status",
-                    choices=["status", "models", "run", "zen", "signup", "key", "inject"],
+                    choices=["status", "models", "run", "zen", "login", "signup", "key", "inject"],
                     help="status (default) | models | run | zen | signup (console/signup) | "
                          "key (console/account) | inject (write key into 9router)")
     oc.add_argument("--api-key", default=None, metavar="KEY",
@@ -875,6 +875,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="`inject`: opencode auth.json to read provider keys from")
     oc.add_argument("--dry-run", action="store_true",
                     help="`inject`: print the plan, write nothing")
+    oc.add_argument("--email", default=None, metavar="ADDR",
+                    help="`login`: label to store with the account")
+    oc.add_argument("--no-store", action="store_true",
+                    help="`login`: print the token shape, write nothing")
     oc.add_argument("--model", default=None, metavar="ID",
                     help="model for `run`, e.g. opencode/glm-5.3-flash-free")
     oc.add_argument("--prompt", default=None, metavar="TEXT",
