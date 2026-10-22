@@ -109,17 +109,39 @@ def scope_flags(in_scope: list[str], out_of_scope: list[str]) -> list[str]:
     """
     args: list[str] = []
     seen: set[str] = set()
+
+    def add(host: str) -> None:
+        if not host or host in seen:
+            return
+        seen.add(host)
+        args.extend(["-d", host])
+
     for pat in in_scope:
         h = B._host_of(pat)
-        if not h or h in seen or B._is_placeholder_host(h):
+        if not h:
+            continue
+        # A wildcard is a MATCHABLE rule, not a placeholder. _is_placeholder_host
+        # treats any "*" as unenumerable template syntax, which is right for
+        # seeding but wrong here: dropping "*.okta.com" left ScopeChecker with
+        # only the explicit hosts, so the apex seed the pipeline itself chose
+        # was rejected by its own guard ("okta.com matches no in-scope rule",
+        # Okta, 2026-10-22 -> steps=0). Pass the wildcard through AND add the
+        # bare base, because "*.x" does not match "x" in ScopeChecker while
+        # every program that writes "*.x" means the apex too.
+        if h.startswith("*."):
+            base = h[2:]
+            if not B._is_placeholder_host(base):
+                add(h)
+                add(base)
+            continue
+        if B._is_placeholder_host(h):
             continue
         if h in ("apps.apple.com", "play.google.com", "itunes.apple.com",
                  "github.com", "gitlab.com", "bitbucket.org", "npmjs.com",
                  "pypi.org", "hub.docker.com", "chrome.google.com",
                  "chromewebstore.google.com", "addons.mozilla.org"):
             continue
-        seen.add(h)
-        args += ["-d", h]
+        add(h)
     for pat in out_of_scope:
         h = B._host_of(pat)
         if not h or B._is_placeholder_host(h):
@@ -1239,7 +1261,25 @@ def main() -> int:
                 B._mark_attempted(a.platform, slug)
                 skip_reasons["tanpa seed"] = skip_reasons.get("tanpa seed", 0) + 1
                 continue
-        seeds.sort(key=lambda h: (0 if h.count(".") == 1 else (1 if h.startswith("www.") else 2), h))
+        # Prefer a seed the program EXPLICITLY allows over a wildcard's bare
+        # apex. host_in_scope() is the authority here, not a dot count: for
+        # Okta the scope is "*.okta.com" plus explicit hosts, so "okta.com"
+        # (the wildcard base _scannable() adds as an enumeration root) is NOT
+        # in scope, while "www.okta.com" is. Sorting by dot count put the
+        # illegitimate apex first and the agent's very first tool call was
+        # blocked by its own guard ("okta.com matches no in-scope rule",
+        # 2026-10-22, steps=0). Rank by (explicitly in scope, then shape).
+        def _seed_rank(h: str) -> tuple:
+            in_scope, _ = B.host_in_scope(h, ins, outs)
+            return (0 if in_scope else 1,
+                    0 if h.count(".") == 1 else (1 if h.startswith("www.") else 2),
+                    h)
+
+        seeds.sort(key=_seed_rank)
+        if seeds and not B.host_in_scope(seeds[0], ins, outs)[0]:
+            say("  WARNING: no seed is explicitly in scope for %s — hunting %s "
+                "as an enumeration root only; gate 1b still filters discovered hosts"
+                % (slug, seeds[0]))
         picked.append((slug, c, pay, ins, outs, flags, seeds))
     say("abh: %d candidates, %d already worked, %d to hunt (preflight %d, top payout $%d)"
         % (len(cands), len(skipped), len(picked), preflight,
