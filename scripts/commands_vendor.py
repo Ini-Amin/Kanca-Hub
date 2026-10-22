@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -70,6 +72,47 @@ def cmd_abliteration(a) -> int:
     cdp = getattr(a, "cdp", None) or (getattr(a, "extra_env", None) or {}).get("ABC_CDP")
     if cdp:
         env["ABC_CDP"] = cdp
+
+    # Auto-wire an egress the way TokenHarbor does, for the same reason.
+    #
+    # MEASURED FAILURE (blu, 2026-10-22): `kancahub abliteration run` printed
+    #   [abc] proxy: disabled (direct connection) — signup will likely be blocked
+    #   [abc] inbox: ...@gmail.com (emailmux)
+    # and then stopped. The vendor CLI was telling us the truth: abliteration.ai
+    # is behind Cloudflare Turnstile, and a direct egress is rejected, so the run
+    # dies right after the mailbox step. Nothing was misconfigured in the tool --
+    # it was simply never given a usable exit.
+    #
+    # THK solved this by choosing an egress and exporting it; do the same here so
+    # the same flags (--proxy/--no-proxy/--country) mean the same thing in both
+    # farm commands. An explicit --cdp still wins: a remote browser carries its
+    # own egress, and proxying the local node process would be pointless.
+    choice = None
+    if mode in ("run", "mint") and not cdp:
+        try:
+            mode_p = getattr(a, "proxy", None) or kancahub.PROXY_AUTO
+            if getattr(a, "no_proxy", False):
+                mode_p = kancahub.PROXY_NONE
+            policy = kancahub.EGRESS_COUNTRY.get("abliteration", {})
+            country = getattr(a, "country", None)
+            allow = {country.strip().upper()} if country else (set(policy.get("allow") or []) or None)
+            exclude = None if country else (set(policy.get("exclude") or []) or None)
+            choice = kancahub._choose_egress(
+                mode_p,
+                kancahub.EGRESS_TARGETS["abliteration"],
+                country=allow,
+                exclude_countries=exclude,
+            )
+            env.update(kancahub._proxy_env(choice) or {})
+            if getattr(choice, "direct", False):
+                print(kancahub.col("yellow",
+                      "  [proxy] direct connection — Cloudflare will likely block the "
+                      "signup; pass --proxy auto or --cdp <browser> to give it an exit"))
+            else:
+                print(kancahub.col("dim", "  [proxy] %s" % (getattr(choice, "label", "acquired"))))
+        except Exception as exc:  # noqa: BLE001 - egress is best-effort, never fatal
+            print(kancahub.col("yellow", "  [proxy] auto-wire failed: %s" % str(exc)[:100]))
+
     return kancahub.run([str(node), str(entry)] + _extra(a), cwd=root, env=env)
 
 
@@ -459,3 +502,214 @@ def cmd_notrack(a) -> int:
     if mode in ("adapter", "run"):
         print(kancahub.col("dim", f"  adapter base: http://127.0.0.1:{NOTRACK_PORT}/v1"))
     return kancahub.run(cmd, cwd=root, env=env)
+
+def cmd_opencode(a) -> int:
+    """OpenCode CLI: free Zen models as workers, plus local provider wiring.
+
+    WHY THIS EXISTS
+    ---------------
+    OpenCode's free tier cannot be used as an OpenAI-compatible endpoint: the
+    gateway answers 403 FreeTierError to any request the OpenCode client did not
+    send, and that is a request-SHAPE check, so proxy rotation cannot clear it
+    (decolua/9router#4997; #4998 only makes 429/5xx retryable across pools).
+    Measured on this box 2026-10-22: a direct POST returns 403 in 0.65s, while
+    `opencode run -m <free model>` returns 200 with a real tool call. The CLI is
+    therefore the only supported path, which is what `zen` wraps.
+    """
+    import kancahub
+
+    sub = getattr(a, "oc_cmd", None) or "status"
+
+    if sub == "status":
+        binary = shutil.which("opencode") or os.environ.get("OPENCODE_BIN", "")
+        if not binary or not Path(binary).is_file():
+            print(kancahub.col("red", "✗ opencode CLI not found"))
+            print(kancahub.col("dim", "  install: curl -fsSL https://opencode.ai/install | bash"))
+            return 1
+        print(kancahub.col("cyan", f"opencode: {binary}"))
+        try:
+            out = subprocess.run([binary, "--version"], capture_output=True,
+                                 text=True, timeout=30)
+            print("  version:", (out.stdout or "").strip() or "?")
+        except Exception as exc:  # noqa: BLE001
+            print("  version: unknown (%s)" % exc)
+        cfg = Path.home() / ".config" / "opencode" / "opencode.json"
+        if cfg.is_file():
+            import json as _json
+            d = _json.loads(cfg.read_text())
+            provs = list((d.get("provider") or {}).keys())
+            print("  providers:", ", ".join(provs[:8]) or "-")
+            print("  model:", d.get("model", "-"))
+            print("  small_model:", d.get("small_model", "-"))
+            ag = d.get("agent") or {}
+            for name, spec in ag.items():
+                if isinstance(spec, dict):
+                    print(f"  agent {name}: {spec.get('model', '-')}")
+        return 0
+
+    if sub == "models":
+        binary = shutil.which("opencode") or os.environ.get("OPENCODE_BIN", "")
+        if not binary or not Path(binary).is_file():
+            print(kancahub.col("red", "✗ opencode CLI not found"))
+            return 1
+        out = subprocess.run([binary, "models"], capture_output=True, text=True, timeout=120)
+        lines = [l for l in (out.stdout or "").splitlines() if l.strip()]
+        if getattr(a, "free_only", False):
+            lines = [l for l in lines if "free" in l.lower()]
+        for l in lines:
+            print(l)
+        print(kancahub.col("dim", f"\n{len(lines)} model(s)"))
+        return 0
+
+    if sub == "run":
+        binary = shutil.which("opencode") or os.environ.get("OPENCODE_BIN", "")
+        if not binary or not Path(binary).is_file():
+            print(kancahub.col("red", "✗ opencode CLI not found"))
+            return 1
+        model = getattr(a, "model", None) or "opencode/glm-5.3-flash-free"
+        prompt = getattr(a, "prompt", None)
+        if not prompt:
+            print(kancahub.col("red", "✗ --prompt is required for `opencode run`"))
+            return 1
+        # Same egress auto-wire as `thk` and `abliteration`. OpenCode's 403 is a
+        # request-shape refusal that no proxy can clear, but its 429 IS per-IP,
+        # and that is the failure the free tier actually hits. Wiring an exit
+        # costs one probe and buys the case rotation can fix.
+        env = None
+        try:
+            mode_p = getattr(a, "proxy", None) or kancahub.PROXY_AUTO
+            if getattr(a, "no_proxy", False):
+                mode_p = kancahub.PROXY_NONE
+            policy = kancahub.EGRESS_COUNTRY.get("opencode", {})
+            country = getattr(a, "country", None)
+            allow = {country.strip().upper()} if country else (set(policy.get("allow") or []) or None)
+            exclude = None if country else (set(policy.get("exclude") or []) or None)
+            choice = kancahub._choose_egress(mode_p, kancahub.EGRESS_TARGETS["opencode"],
+                                             country=allow, exclude_countries=exclude)
+            env = dict(kancahub._proxy_env(choice) or {})
+            if getattr(choice, "direct", False):
+                print(kancahub.col("dim", "  [proxy] direct connection"))
+            else:
+                print(kancahub.col("dim", "  [proxy] %s" % (getattr(choice, "source", "acquired"))))
+        except Exception as exc:  # noqa: BLE001 - best effort
+            print(kancahub.col("yellow", "  [proxy] auto-wire failed: %s" % str(exc)[:90]))
+            env = None
+        # Run in an empty temp dir without --auto: a worker gets one prompt and
+        # no filesystem to wander, so a prompt-injected "read /root/.ssh" has
+        # nothing to reach.
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="oc-worker-") as tmp:
+            print(kancahub.col("dim", f"  model: {model}  cwd: {tmp}"))
+            return kancahub.run([binary, "run", "-m", model, prompt], cwd=tmp, env=env)
+
+    if sub == "zen":
+        # Delegate to the shared worker used by the bounty pipeline, so there is
+        # one implementation of "one prompt in, one answer out" instead of two.
+        tool = kancahub.AUTO_FREECF / "scripts" / "zen_worker.py"
+        if not tool.exists():
+            print(kancahub.col("red", f"✗ zen_worker.py not found at {tool}"))
+            return 1
+        py = kancahub.pick_python()
+        job = getattr(a, "job", None) or "ping"
+        return kancahub.run([py, str(tool), job])
+
+    if sub in ("signup", "key", "inject"):
+        # The account flow the operator actually uses:
+        #   https://opencode.ai/console/signup  -> create account
+        #   https://opencode.ai/console/account -> name an API key, copy it
+        #   then paste it into 9router as an opencode provider connection.
+        #
+        # `signup` opens the page in the same Camoufox profile the other farms
+        # use, so the login survives across runs. `key` reopens the account page
+        # to mint/copy another key. `inject` writes a key into 9router's DB.
+        if sub == "signup":
+            url = "https://opencode.ai/console/signup"
+        elif sub == "key":
+            url = "https://opencode.ai/console/account"
+        else:
+            # Batch injection: delegate to scripts/opencode_inject.py so the
+            # farm path and the one-key path share a single implementation.
+            tool = kancahub.AUTO_FREECF / "scripts" / "opencode_inject.py"
+            if not tool.exists():
+                print(kancahub.col("red", f"✗ opencode_inject.py not found at {tool}"))
+                return 1
+            py = kancahub.pick_python()
+            argv = [py, str(tool)]
+            key = getattr(a, "api_key", None)
+            if key:
+                argv += ["--key", key]
+            for flag, val in (("--from-file", getattr(a, "from_file", None)),
+                              ("--from-json", getattr(a, "from_json", None)),
+                              ("--from-auth-json", getattr(a, "from_auth_json", None))):
+                if val:
+                    argv += [flag, val]
+            if getattr(a, "dry_run", False):
+                argv.append("--dry-run")
+            return kancahub.run(argv)
+
+        prof = Path.home() / ".config" / "auto-freecf" / "sessions" / "opencode"
+        prof.mkdir(parents=True, exist_ok=True)
+        py = kancahub.pick_python(camoufox=True)
+        print(kancahub.col("cyan", f"  opening {url}"))
+        print(kancahub.col("dim", "  log in, then create an API key under Account; "
+                                  "copy it and run: kancahub opencode inject --api-key <KEY>"))
+        return kancahub.run([py, "-c", _OPENCODE_BROWSE % (str(prof), url)])
+
+    print(kancahub.col("red", f"✗ unknown opencode subcommand: {sub}"))
+    return 1
+
+
+# Opens a headed browser on a persistent profile and waits for the user to close
+# it. Kept as a string so it can be handed to `python -c` without a temp file.
+_OPENCODE_BROWSE = """
+import asyncio, sys
+from camoufox.async_api import AsyncCamoufox
+prof, url = sys.argv[1], sys.argv[2]
+async def main():
+    async with AsyncCamoufox(headless=False, humanize=True,
+                             user_data_dir=prof) as browser:
+        page = await browser.new_page()
+        await page.goto(url, timeout=120000)
+        print("READY", await page.title(), flush=True)
+        while True:
+            await page.wait_for_timeout(5000)
+asyncio.run(main())
+"""
+
+
+def _opencode_inject_9router(key: str, kancahub) -> int:
+    """Add an OpenCode API key as a 9router provider connection.
+
+    Writes to 9router's SQLite the same way scripts/inject_thk_9router.py does:
+    one connection row per key, so 9router's own failover rotates accounts.
+    """
+    import sqlite3
+    import uuid
+
+    db = Path.home() / ".9router" / "db" / "data.sqlite"
+    if not db.is_file():
+        print(kancahub.col("red", f"✗ 9router db not found at {db}"))
+        return 1
+    node = "openai-compatible-chat-opencode-zen"
+    conn_id = str(uuid.uuid4())
+    data = json.dumps({
+        "apiKey": key,
+        "baseUrl": "https://opencode.ai/zen/v1",
+        "models": ["glm-5.3-flash-free", "mimo-v2.6-flash-free",
+                   "nemotron-3.5-lightning-free", "minimax-m3.1-flash-free"],
+    })
+    try:
+        c = sqlite3.connect(str(db))
+        c.execute(
+            "insert into providerConnections (id, provider, authType, name, email,"
+            " priority, isActive, data) values (?,?,?,?,?,?,?,?)",
+            (conn_id, node, "apiKey", "OpenCodeZen", None, 100, 1, data))
+        c.commit()
+    except Exception as exc:  # noqa: BLE001
+        print(kancahub.col("red", f"✗ 9router inject failed: {exc}"))
+        return 1
+    print(kancahub.col("green", f"✓ injected OpenCode Zen key as {conn_id}"))
+    print(kancahub.col("dim", "  NOTE: free-tier keys still refuse requests that do not"
+                              " come from the OpenCode client (403 FreeTierError). This"
+                              " row only works for a PAID Zen key."))
+    return 0
