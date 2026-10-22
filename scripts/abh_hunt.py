@@ -1315,9 +1315,18 @@ def main() -> int:
         # illegitimate apex first and the agent's very first tool call was
         # blocked by its own guard ("okta.com matches no in-scope rule",
         # 2026-10-22, steps=0). Rank by (explicitly in scope, then shape).
+        # The program's own name is the best signal for "the main asset". Okta
+        # lists scaleft.com and trexcloud.com as in-scope acquisitions, and a
+        # dot-count sort picked scaleft.com as the hunt target over okta.com --
+        # legitimate but not what the program is about, and a $75k brief's
+        # deepest surface is its own domain.
+        stem = slug.replace("-", "").split(".")[0]
+
         def _seed_rank(h: str) -> tuple:
             in_scope, _ = B.host_in_scope(h, ins, outs)
+            named = 0 if stem and stem in h.replace("-", "").lower() else 1
             return (0 if in_scope else 1,
+                    named,
                     0 if h.count(".") == 1 else (1 if h.startswith("www.") else 2),
                     h)
 
