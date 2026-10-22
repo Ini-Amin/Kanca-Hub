@@ -663,7 +663,19 @@ def get_scope(platform, program):
 
     url = program
     if not url.startswith("http"):
-        url = "https://bugcrowd.com/engagements/" + url.strip("/")
+        # The #scope anchor is REQUIRED, not cosmetic. Bugcrowd renders the
+        # program overview by default, and the target table ("Name / Location",
+        # with the In scope / Out of scope labels parse_scope needs) lives in a
+        # lazy-loaded section that only renders when the scope anchor is
+        # requested. Measured on blu 2026-10-22 with a FRESH session: the plain
+        # engagement URL returned 30,558 chars of overview prose with ZERO
+        # occurrences of "in scope" / "name / location", so parse_scope found
+        # nothing and Okta looked like a program with no targets. The same page
+        # with #scope returned 30,610 chars and all three markers.
+        base = url.strip("/")
+        if platform == "bugcrowd" and "#" not in base:
+            base += "#scope"
+        url = "https://bugcrowd.com/engagements/" + base
     text = _render_text(platform, url)
     if not text:
         return [], [], ""

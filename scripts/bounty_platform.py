@@ -87,7 +87,18 @@ async def main():
                 await asyncio.sleep(5)
             print("LOGIN-TIMEOUT", flush=True)
             return
-        await page.wait_for_timeout(8000)
+        # Wait for the SCOPE TABLE, not a fixed sleep. Bugcrowd lazy-loads the
+        # "Name / Location" table when the #scope anchor is requested, and on a
+        # slow render 8 seconds was not enough: the same URL returned 24 targets
+        # on one call and 0 on the next (measured on blu 2026-10-22), which made
+        # the pipeline look like the program had no scope. Poll for the marker
+        # and fall through after the cap so a genuinely table-less page still
+        # returns its text instead of failing.
+        try:
+            await page.wait_for_selector("text=/name\\s*\\/\\s*location/i", timeout=25000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(1500)
         # Print the FULL body text, not a fixed prefix.
         #
         # This used to be [:6000]. The Targets table sits BELOW the program
