@@ -1101,6 +1101,43 @@ def gate_findings(session_file: str, target: str, program: str = "",
     if not high:
         return "%d finding(s), none above LOW — not gated" % len(rows)
 
+    # Advisory triage by a free OpenCode model, BEFORE the four gates.
+    #
+    # The gates are the authority; this only decides what is worth spending them
+    # on. It exists because the severity classifier reads keywords, and a
+    # zero-result line ("range matches: 0") can outrank a real bug in the queue.
+    # Measured 2026-10-22: Zen called that exact Fireblocks row FALSE at 95%
+    # confidence, which is the same conclusion the operator reached by hand.
+    #
+    # Failure is silent by design: no CLI, no quota, timeout, or an unparseable
+    # answer leaves `high` untouched. A worker that is down must never stop a
+    # real finding from being gated.
+    triaged_note = ""
+    try:
+        import zen_worker
+        if zen_worker.available() and len(high) > 0:
+            kept = []
+            for r in high:
+                verdict = zen_worker.triage_finding(r, target=target, program=program)
+                if not verdict:
+                    kept.append(r)
+                    continue
+                if verdict["verdict"] == "FALSE" and verdict["confidence"] >= 80:
+                    say("  triage: dropping %s (%s%%) — %s"
+                        % (r.get("title", "?")[:60], verdict["confidence"],
+                           verdict["reason"][:100]))
+                    triaged_note += " -1 triage-false"
+                    continue
+                kept.append(r)
+            if len(kept) != len(high):
+                triaged_note = ", triage dropped %d" % (len(high) - len(kept))
+                high = kept
+    except Exception as exc:  # noqa: BLE001 - advisory only, never fatal
+        say("  triage skipped: %s: %s" % (type(exc).__name__, exc))
+
+    if not high:
+        return "all candidate findings rejected by triage (no gates run)"
+
     cleared: list[dict] = []
     blocked_at: dict[str, int] = {}
     for r in high:
@@ -1118,7 +1155,7 @@ def gate_findings(session_file: str, target: str, program: str = "",
                     break
             blocked_at[stage] = blocked_at.get(stage, 0) + 1
 
-    parts = "%d gated, %d cleared" % (len(high), len(cleared))
+    parts = "%d gated, %d cleared%s" % (len(high), len(cleared), triaged_note)
     if blocked_at:
         parts += ", blocked " + " ".join(
             "%s:%d" % (k, v) for k, v in sorted(blocked_at.items()))
