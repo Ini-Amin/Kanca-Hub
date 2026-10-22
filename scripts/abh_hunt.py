@@ -140,9 +140,59 @@ def run_abh(target: str, flags: list[str], hours: float, steps: int,
     env = abh_env()
     if model:
         env["BRAIN_MODEL"] = model
-    p = subprocess.run(cmd, cwd=str(ABH), env=env,
-                       capture_output=True, text=True, timeout=int(hours * 3600) + 600)
-    return p.returncode, (p.stdout or "") + (p.stderr or "")
+    env["AUTONOMOUS"] = "1"
+
+    t0 = time.time()
+    base_timeout = int(hours * 3600) + 600
+    max_ceiling = int(max(hours, 2.5) * 3600)
+    current_timeout = base_timeout
+
+    proc = subprocess.Popen(
+        cmd, cwd=str(ABH), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+
+    recon_sessions = ABH / "bughunter" / "recon" / target / "sessions"
+    last_extension = 0
+
+    while True:
+        try:
+            ret = proc.wait(timeout=5)
+            out = proc.stdout.read() if proc.stdout else ""
+            return ret, out
+        except subprocess.TimeoutExpired:
+            pass
+
+        now = time.time()
+        elapsed = now - t0
+
+        if recon_sessions.is_dir():
+            try:
+                for s_dir in recon_sessions.iterdir():
+                    ext_f = s_dir / "budget_extension.json"
+                    if ext_f.is_file():
+                        ext_data = json.loads(ext_f.read_text(encoding="utf-8"))
+                        ext_mins = int(ext_data.get("extended_minutes", 0))
+                        if ext_mins > last_extension:
+                            added = ext_mins - last_extension
+                            last_extension = ext_mins
+                            current_timeout = min(max_ceiling, base_timeout + (ext_mins * 60))
+                            say(f"  [dynamic-budget] Agent requested +{added}m extension "
+                                f"(total: {ext_mins}m, deadline: {current_timeout//60}m): "
+                                f"{ext_data.get('reason', '')[:80]}")
+            except Exception:
+                pass
+
+        if elapsed >= current_timeout:
+            say(f"  [dynamic-budget] Target {target} exceeded deadline ({current_timeout}s) — terminating")
+            proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            out = proc.stdout.read() if proc.stdout else ""
+            return 124, out + f"\nTimeoutExpired: Command exceeded dynamic budget {current_timeout}s"
 
 
 def run_delegate_dry(target: str, flags: list[str], hours: float, steps: int,
@@ -251,6 +301,63 @@ def payout_of(c: dict) -> tuple[int, int]:
         d = "".join(ch for ch in str(v or "") if ch.isdigit())
         return int(d) if d else 0
     return money(c.get("min")), money(c.get("max"))
+
+def rank_program(c: dict, pay: tuple[int, int], worked_set: set[str], in_scope_count: int = 0) -> tuple[float, dict]:
+    """Transparent multi-factor ranking model for program prioritization.
+
+    Criteria:
+      1. Program reward structure (max 25 pts): top bounty payout vs VDP
+      2. Eligibility & scope clarity (max 20 pts): web/domain vs restrictive/mobile-only
+      3. Availability of suitable tools (max 20 pts): matches web scanner arsenal
+      4. Previous scan history & freshness (max 20 pts): fresh > aged re-scan > recent
+      5. Execution cost & attack-surface size (max 15 pts): focused surface
+    """
+    scores = {}
+    name = str(c.get("name", "")).lower()
+    brief = str(c.get("brief", "")).lower()
+
+    # 1. Reward structure (0-25)
+    hi_pay = pay[1]
+    if hi_pay >= 10000:
+        scores["reward"] = 25.0
+    elif hi_pay >= 5000:
+        scores["reward"] = 20.0
+    elif hi_pay >= 1000:
+        scores["reward"] = 15.0
+    elif hi_pay > 0:
+        scores["reward"] = 10.0
+    else:
+        scores["reward"] = 6.0  # VDP / Hall of Fame points
+
+    # 2. Scope clarity & eligibility (0-20)
+    if any(k in brief or k in name for k in ("ios only", "android only", "hardware", "firmware", "source code")):
+        scores["eligibility"] = 5.0
+    else:
+        scores["eligibility"] = 20.0
+
+    # 3. Tool suitability & attack surface (0-20)
+    if any(k in brief or k in name for k in ("api", "cloud", "saas", "web", "portal", "platform", "backend")):
+        scores["tool_fit"] = 20.0
+    else:
+        scores["tool_fit"] = 15.0
+
+    # 4. Scan history & freshness (0-20)
+    slug = (c.get("slug") or c.get("brief", "").rstrip("/").split("/")[-1]).lower()
+    if slug not in worked_set:
+        scores["freshness"] = 20.0
+    else:
+        scores["freshness"] = 6.0
+
+    # 5. Execution cost & estimated duration (0-15)
+    if 2 <= in_scope_count <= 25:
+        scores["duration_fit"] = 15.0
+    elif in_scope_count > 50:
+        scores["duration_fit"] = 8.0
+    else:
+        scores["duration_fit"] = 12.0
+
+    total = sum(scores.values())
+    return round(total, 1), scores
 
 
 def pick_model(payout: tuple[int, int], in_scope_count: int) -> str:
@@ -1011,25 +1118,25 @@ def main() -> int:
             return 0
         cands = matched
 
-    # Payout first. A program that pays nothing costs the same wall clock and
-    # the same model budget as one that pays five figures, so spending a tick
-    # on a VDP is a straight loss. Discovery already sorts per platform, but
-    # "all" concatenates platforms, which undoes that ordering.
-    cands.sort(key=lambda c: (payout_of(c)[1], payout_of(c)[0]), reverse=True)
+    # Transparent multi-factor ranking model:
+    # Scores every candidate across reward structure, scope clarity, tool fit, freshness, and duration.
+    scored_cands = []
+    for c in cands:
+        pay = payout_of(c)
+        score, factors = rank_program(c, pay, worked)
+        scored_cands.append((score, factors, c, pay))
+
+    # Sort descending by ranking score
+    scored_cands.sort(key=lambda item: item[0], reverse=True)
 
     picked, skipped, eligible, preflight = [], [], [], 0
     skip_reasons: dict[str, int] = {}
-    for c in cands:
-        # Prefer the candidate's own slug. URL-derived slugs are wrong for
-        # Intigriti: every detail URL ends in "/detail", so all 140 programs
-        # collapsed to one identity -- one shared scope and one shared
-        # _mark_attempted bucket, so hunting any one of them marked all done.
+    for score, factors, c, pay in scored_cands:
         slug = (c.get("slug") or c["brief"].rstrip("/").split("/")[-1]).lower()
         if slug in worked and not a.program:
             skipped.append(slug)
             skip_reasons["sudah dikerjakan"] = skip_reasons.get("sudah dikerjakan", 0) + 1
             continue
-        pay = payout_of(c)
         if pay[1] == 0 and not a.include_vdp:
             skip_reasons["tanpa payout"] = skip_reasons.get("tanpa payout", 0) + 1
             continue
@@ -1039,6 +1146,18 @@ def main() -> int:
             continue
         eligible.append((slug, c, pay))
 
+    # Queue unstalling / rotation fallback:
+    # If all candidates have been worked, rotate top-ranked candidates for re-scan
+    # so the 24/7 loop never dies with "nothing new to do".
+    if not eligible and not a.program and scored_cands:
+        say("abh: semua kandidat sudah dikerjakan — mengaktifkan rotasi re-scan berkala berdasarkan skor ranking")
+        for score, factors, c, pay in scored_cands:
+            slug = (c.get("slug") or c["brief"].rstrip("/").split("/")[-1]).lower()
+            if pay[1] == 0 and not a.include_vdp:
+                continue
+            eligible.append((slug, c, pay))
+            if len(eligible) >= a.max_programs * 4:
+                break
     # Pre-flight scope BEFORE a program takes a quota slot. Previously the pick
     # happened first and the empty scope was discovered inside the loop: the
     # 2026-10-20 run spent 2 of 3 slots on Swiss Post and Doctolib, both of
