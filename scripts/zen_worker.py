@@ -45,14 +45,65 @@ import tempfile
 import time
 from pathlib import Path
 
-# Tried in order. Ordered by measured latency on this box (2026-10-22):
-#   mimo 25s, glm-5.3-flash 37s, nemotron 40s, minimax 49s, deepseek 96s.
-# A model that answers but cannot follow instructions is caught by the caller's
-# validation, not by this list.
+# Ordered by measured latency first, then by context window (largest first).
+#
+# The list is derived from https://models.opencode.ai/api.json -- the catalog the
+# CLI itself fetches at runtime -- filtered to models whose declared cost is 0
+# for both input and output. `opencode models` only prints a subset (10 of the
+# 46 free ones), so the catalog is the honest source: measured 2026-10-22, the
+# zen provider declares 130 models and 46 of them are free.
+#
+# Only the first three have been measured end-to-end (tool call confirmed); the
+# rest are ordered by context so a fallback still gets the biggest window
+# available. A model that answers but cannot call a tool is caught by the
+# caller's validation, not by this list.
 ZEN_MODELS = (
     "opencode/mimo-v2.6-flash-free",
     "opencode/glm-5.3-flash-free",
     "opencode/nemotron-3.5-lightning-free",
+    "opencode/space-bunny-free",
+    "opencode/beam-free",
+    "opencode/cat-jam-free",
+    "opencode/exo-free",
+    "opencode/fledge-alpha-free",
+    "opencode/muse-spark-1.2-contributor-free",
+    "opencode/muse-spark-1.3-contributor-free",
+    "opencode/nemotron-3.5-super-vl-free",
+    "opencode/mimo-v2-pro-free",
+    "opencode/minimax-m3.1-flash-free",
+    "opencode/longcat-2.0-free",
+    "opencode/longcat-2.5-preview-free",
+    "opencode/x-preview-f-free",
+    "opencode/nemotron-3-ultra-free",
+    "opencode/step-5-preview-free",
+    "opencode/kimi-k2.5-free",
+    "opencode/flint-40b-free",
+    "opencode/ll-alpha-free",
+    "opencode/mimo-v2-flash-free",
+    "opencode/qwen3.6-plus-free",
+    "opencode/mimo-v2-omni-free",
+    "opencode/ling-3.0-flash-fin-free",
+    "opencode/ling-3.0-flash-free",
+    "opencode/ling-3.0-tiny-free",
+    "opencode/ling-3.1-flash-free",
+    "opencode/ling-2.6-flash-free",
+    "opencode/ring-2.6-1t-free",
+    "opencode/grok-code",
+    "opencode/hy3-preview-free",
+    "opencode/north-mini-code-free",
+    "opencode/laguna-s-2.1-free",
+    "opencode/glm-4.7-free",
+    "opencode/glm-5-free",
+    "opencode/minimax-m2.1-free",
+    "opencode/minimax-m2.5-free",
+    "opencode/nemotron-3-super-free",
+    "opencode/deepseek-v4-flash-free",
+    "opencode/big-pickle",
+    "opencode/deepseek-v4.1-flash-free",
+    "opencode/mimo-v2.5-free",
+    "opencode/minimax-m3-free",
+    "opencode/hy3-free",
+    "opencode/trinity-large-preview-free",
 )
 
 DEFAULT_TIMEOUT = 120

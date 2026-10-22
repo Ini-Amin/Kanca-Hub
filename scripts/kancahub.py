@@ -125,7 +125,7 @@ globals().update({_n: getattr(kancahub_base, _n)
 _REEXPORTS = {
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
-    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack",
+    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack cmd_opencode",
     "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api _r9_models cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
                       "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
@@ -848,8 +848,48 @@ def build_parser() -> argparse.ArgumentParser:
                 help="attach to an existing/cloud browser instead of launching local Chromium "
                      "(pass ABC_CDP to the tool; a clean residential egress then does the "
                      "Cloudflare Turnstile, e.g. 'kancahub abliteration run -- --cdp wss://...')")
+    # Same egress flags as `kancahub thk`, so one mental model covers both farms.
+    ab.add_argument("--proxy", default=None, metavar="MODE",
+                    help="egress mode: auto (default) | none | WARP | vpngate[:CC] | "
+                         "freepool | http://host:port. Auto probes the sign-up page and "
+                         "picks an exit that can actually reach abliteration.ai.")
+    ab.add_argument("--no-proxy", action="store_true",
+                    help="force a direct connection (expect Cloudflare to block the signup)")
+    ab.add_argument("--country", default=None, metavar="CC",
+                    help="restrict auto egress to one country code (e.g. SG, US)")
     ab.add_argument("extra", nargs=argparse.REMAINDER,
                     help="args passed straight to node (e.g. -- -n 5 -c 2)")
+    oc = sub.add_parser("opencode",
+                        help="OpenCode CLI: free Zen models as workers (status|models|run|zen)")
+    oc.add_argument("oc_cmd", nargs="?", default="status",
+                    choices=["status", "models", "run", "zen", "signup", "key", "inject"],
+                    help="status (default) | models | run | zen | signup (console/signup) | "
+                         "key (console/account) | inject (write key into 9router)")
+    oc.add_argument("--api-key", default=None, metavar="KEY",
+                    help="`inject`: OpenCode Zen API key to add to 9router")
+    oc.add_argument("--from-file", default=None, metavar="PATH",
+                    help="`inject`: file with one key per line")
+    oc.add_argument("--from-json", default=None, metavar="PATH",
+                    help="`inject`: JSON array/object holding apiKey/key/token")
+    oc.add_argument("--from-auth-json", default=None, metavar="PATH",
+                    help="`inject`: opencode auth.json to read provider keys from")
+    oc.add_argument("--dry-run", action="store_true",
+                    help="`inject`: print the plan, write nothing")
+    oc.add_argument("--model", default=None, metavar="ID",
+                    help="model for `run`, e.g. opencode/glm-5.3-flash-free")
+    oc.add_argument("--prompt", default=None, metavar="TEXT",
+                    help="prompt for `run`")
+    oc.add_argument("--free-only", action="store_true",
+                    help="`models` only: show models with 'free' in the id")
+    oc.add_argument("--job", default=None, choices=["ping", "triage"],
+                    help="`zen` job to run (default ping)")
+    oc.add_argument("--proxy", default=None, metavar="MODE",
+                    help="egress mode: auto (default) | none | WARP | vpngate[:CC] | "
+                         "freepool | http://host:port (same flags as thk/abliteration)")
+    oc.add_argument("--no-proxy", action="store_true",
+                    help="force a direct connection")
+    oc.add_argument("--country", default=None, metavar="CC",
+                    help="restrict auto egress to one country code")
     nt = sub.add_parser("notrack",
                         help="notrack-bulk-9router: cheap sessions (no email/captcha) pooled as one endpoint")
     nt.add_argument("mode", nargs="?", choices=["create", "verify", "list", "connect", "run", "adapter"],
@@ -1012,6 +1052,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_zcode(args)
     if g == "abliteration":
         return cmd_abliteration(args)
+    if g == "opencode":
+        return cmd_opencode(args)
     if g == "autoclaw":
         return cmd_autoclaw(args)
     if g == "notrack":
