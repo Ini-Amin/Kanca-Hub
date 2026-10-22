@@ -1237,10 +1237,19 @@ def main() -> int:
             say("  skip %s: scope error %s" % (slug, e))
             continue
         if not page:
+            # An unreadable page is a BROKEN SESSION, not a finished program.
+            # Bumping the transient counter and eventually marking the program
+            # attempted is how an expired Bugcrowd login silently retired a
+            # $75k program: the sign-in page parsed to one bogus host, and the
+            # tick reported a clean "0 to hunt". Never count this as progress.
             n_fail = B._bump_transient(a.platform, slug)
-            if n_fail >= B.MAX_TRANSIENT:
-                B._mark_attempted(a.platform, slug)
-            skip_reasons["halaman kosong"] = skip_reasons.get("halaman kosong", 0) + 1
+            skip_reasons["scope tak terbaca (sesi/login?)"] = \
+                skip_reasons.get("scope tak terbaca (sesi/login?)", 0) + 1
+            if n_fail == 1:
+                say("  SKIP %s: scope page unreadable (login wall or empty). "
+                    "Not retiring the program. Re-login: "
+                    "python3 scripts/bounty_platform.py login --platform %s"
+                    % (slug, a.platform))
             continue
         B._clear_transient(a.platform, slug)
         flags = scope_flags(ins, outs)

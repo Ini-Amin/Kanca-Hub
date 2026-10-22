@@ -88,17 +88,50 @@ def test_guard_accepts_target_and_rejects_strangers():
 
 def main() -> int:
     fails = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"  ok   {name}")
-            except AssertionError as exc:
-                fails += 1
-                print(f"  FAIL {name}: {exc}")
+    # Collect at CALL time from the module globals, so tests defined after this
+    # function (appended sections) are still discovered. An earlier version
+    # iterated globals() inline and silently skipped every test below it.
+    import __main__ as mod
+    for name in sorted(n for n in dir(mod) if n.startswith("test_")):
+        fn = getattr(mod, name)
+        if not callable(fn):
+            continue
+        try:
+            fn()
+            print(f"  ok   {name}")
+        except AssertionError as exc:
+            fails += 1
+            print(f"  FAIL {name}: {exc}")
     print(f"\nRESULT: {fails} FAILURES" if fails else "\nRESULT: all scope tests pass")
     return fails
 
 
 if __name__ == "__main__":
     sys.exit(1 if main() else 0)
+
+
+# ── login-wall detection ──────────────────────────────────────────────────────
+LOGIN_PAGE = "Verify with your password\nPassword\xa0\nForgot password?\nBack to sign in\n\n"
+REAL_BRIEF = """Okta
+In Scope
+bugcrowd-pam-###.oktapreview.com
+www.okta.com
+Out of Scope
+personal.trexcloud.com
+Vulnerabilities rewarded
+Sign in flows are in scope.
+"""
+
+
+def test_login_wall_is_detected():
+    assert B.is_login_wall(LOGIN_PAGE) is True
+
+
+def test_real_brief_is_not_a_login_wall():
+    """False positives here would retire every program."""
+    assert B.is_login_wall(REAL_BRIEF) is False
+
+
+def test_single_login_marker_is_not_enough():
+    assert B.is_login_wall("Please sign in to continue reading") is False
+    assert B.is_login_wall("") is False
