@@ -122,13 +122,12 @@ def execute_codebuddy(model: str, prompt: str, timeout: int = 120) -> str:
             "--print",
             "--model",
             cb_model,
-            prompt,
         ]
 
-        log.info("Executing CodeBuddy (token %d/%d, model=%s, prompt len=%d)...",
+        log.info("Executing CodeBuddy (token %d/%d, model=%s, prompt len=%d via stdin)...",
                  idx + 1, len(tokens), cb_model, len(prompt))
         t0 = time.time()
-        res = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(cmd, input=prompt, env=env, capture_output=True, text=True, timeout=timeout)
         elapsed = round(time.time() - t0, 2)
 
         out = res.stdout.strip()

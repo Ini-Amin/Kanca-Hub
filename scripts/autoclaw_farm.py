@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """scripts/autoclaw_farm.py — AutoClaw claim farm, 1 account per run (gentle).
 
-Recipe (pinned in AGENTS.md):
-  1. Temporary xdg-open wrapper in PATH captures the OAuth URL from shell.openExternal.
-  2. Launch patched AppRun with CDP :9444 on X11 DISPLAY=:0.
-  3. CDP click: "Continue with Zai".
-  4. App pops "Security verification" Aliyun window. xdotool clicks (570, 423).
-  5. App calls shell.openExternal(chat.z.ai/api/oauth/authorize?...) -> caught by wrapper.
-  6. Drive the z.ai half via Camoufox (email + Aliyun slider + consent screen).
-  7. App loopback :18432 receives the code, exchanges tokens, writes vault.
-  8. AutoClawClient triggers claim_daily_credits() -> 40M tokens in campaign wallet.
+Features:
+  - 100% Virtual Headless: runs inside Xvfb (:99) so zero windows pop up on desktop.
+  - Safe xdg-open wrapper: never opens the user's primary browser.
+  - Correct Sequence: solves Aliyun WAF security popup first, then clicks "Continue with Zai".
+  - Completes z.ai OAuth via Camoufox, exchanges tokens, and triggers 40M daily/event claim.
 """
 from __future__ import annotations
 
@@ -32,25 +28,60 @@ from consent_hard import accept_consent, signin_zai_email  # noqa: E402
 
 APPRUN = Path("/home/amen/Auto-FreeCF-vendor-refs/artifacts/autoclaw/squashfs-root/AppRun")
 DEFAULT_PORT = 9444
+DEFAULT_VIRTUAL_DISPLAY = ":99"
 
 
-def find_display_and_xauth() -> tuple[str, str]:
-    disp = os.environ.get("DISPLAY") or ":0"
-    xa = os.environ.get("XAUTHORITY")
-    if xa and Path(xa).exists():
-        return disp, xa
-    cand = list(Path("/run/user/1000").glob("xauth_*"))
-    if cand:
-        return disp, str(sorted(cand)[-1])
-    home_xa = Path.home() / ".Xauthority"
-    return disp, str(home_xa) if home_xa.exists() else ""
+class VirtualDisplay:
+    """Manages an invisible Xvfb server so desktop windows never pop up."""
+    def __init__(self, display: str = DEFAULT_VIRTUAL_DISPLAY, width: int = 1280, height: int = 800):
+        self.display = display
+        self.width = width
+        self.height = height
+        self.proc: subprocess.Popen | None = None
+
+    def start(self, log=print) -> bool:
+        if not shutil.which("Xvfb"):
+            log("  Xvfb not found; falling back to current DISPLAY")
+            return False
+        # Clean up any stale lock on this display
+        lock_file = Path(f"/tmp/.X11-unix/X{self.display.lstrip(':')}")
+        if lock_file.exists():
+            try:
+                lock_file.unlink()
+            except Exception:
+                pass
+        cmd = ["Xvfb", self.display, "-screen", "0", f"{self.width}x{self.height}x24", "-nolisten", "tcp"]
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+        if self.proc.poll() is None:
+            log(f"  virtual headless display {self.display} active ({self.width}x{self.height})")
+            return True
+        log(f"  failed to start Xvfb on {self.display}")
+        self.proc = None
+        return False
+
+    def stop(self):
+        if self.proc:
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=3)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+            self.proc = None
 
 
-def click_security_verification_window(log=print) -> bool:
-    """Find the Security verification popup and click the Aliyun checkbox with xdotool."""
+def click_security_verification_window(disp: str, log=print) -> bool:
+    """Find the Security verification popup in `disp` and click the Aliyun checkbox with xdotool."""
+    env = os.environ.copy()
+    env["DISPLAY"] = disp
     try:
-        wids = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--name", ""],
-                                       text=True).splitlines()
+        wids = subprocess.check_output(
+            ["xdotool", "search", "--onlyvisible", "--name", ""],
+            env=env, text=True, timeout=5
+        ).splitlines()
     except Exception as e:
         log(f"  xdotool search error: {e}")
         return False
@@ -58,25 +89,27 @@ def click_security_verification_window(log=print) -> bool:
     target_wid = None
     for wid in wids:
         try:
-            name = subprocess.check_output(["xdotool", "getwindowname", wid], text=True).strip()
+            name = subprocess.check_output(
+                ["xdotool", "getwindowname", wid], env=env, text=True, timeout=3
+            ).strip()
             if any(k in name.lower() for k in ("security verification", "安全验证", "verification")):
                 target_wid = wid
-                log(f"  found security window: wid={wid} name={name!r}")
+                log(f"  found Aliyun security window: wid={wid} name={name!r}")
                 break
         except Exception:
             continue
 
     if not target_wid:
-        log("  no security verification window found by name")
         return False
 
-    # Pinned in AGENTS.md: click at (570, 423) relative to the security window
+    # Coordinates pinned in AGENTS.md: click at (570, 423) relative to the security window
     try:
-        subprocess.run(["xdotool", "windowactivate", "--sync", target_wid], check=True, timeout=5)
+        subprocess.run(["xdotool", "windowactivate", "--sync", target_wid],
+                       env=env, check=True, timeout=5)
         time.sleep(0.5)
         subprocess.run(["xdotool", "mousemove", "--window", target_wid, "570", "423",
-                        "click", "1"], check=True, timeout=5)
-        log("  xdotool clicked Aliyun checkbox at (570, 423)")
+                        "click", "1"], env=env, check=True, timeout=5)
+        log("  xdotool clicked Aliyun WAF checkbox at (570, 423)")
         return True
     except Exception as e:
         log(f"  xdotool click error: {e}")
@@ -84,7 +117,7 @@ def click_security_verification_window(log=print) -> bool:
 
 
 def pick_account_from_farm() -> tuple[str, str] | None:
-    """Return an (email, password) candidate from accounts.txt or accounts.json."""
+    """Return an (email, password) candidate from accounts.txt."""
     for p in (ROOT / "accounts.txt", ROOT / "data" / "accounts.txt",
               Path.home() / ".zcode-bridge" / "accounts.txt"):
         if not p.exists():
@@ -116,15 +149,15 @@ async def drive_cdp_continue_zai(cdp_port: int, log=print) -> bool:
             for page in ctx.pages:
                 try:
                     title = await page.title()
-                    log(f"  page: {title} ({page.url})")
-                    # Try clicking "Continue with Zai"
+                    log(f"  CDP inspecting page: {title} ({page.url})")
+                    # Try English selector
                     loc = page.get_by_text("Continue with Zai", exact=False).first
                     if await loc.count() and await loc.is_visible():
                         await loc.click()
                         log("  clicked 'Continue with Zai' via CDP")
                         clicked = True
                         break
-                    # Fallback selectors for Chinese UI
+                    # Try Chinese selector
                     loc_zh = page.get_by_text("使用 Z.ai 登录", exact=False).first
                     if await loc_zh.count() and await loc_zh.is_visible():
                         await loc_zh.click()
@@ -139,12 +172,16 @@ async def drive_cdp_continue_zai(cdp_port: int, log=print) -> bool:
         return clicked
 
 
-async def drive_zai_oauth_login(auth_url: str, email: str, password: str, log=print) -> bool:
-    """Drive the z.ai sign-in in Camoufox (email form -> Aliyun slider -> consent)."""
+async def drive_zai_oauth_login(auth_url: str, email: str, password: str, disp: str, log=print) -> bool:
+    """Drive the z.ai sign-in in Camoufox inside virtual display (email form -> Aliyun slider -> consent)."""
     from camoufox.async_api import AsyncCamoufox
 
-    log("  opening Camoufox to finish z.ai sign-in…")
-    async with AsyncCamoufox(headless=False, humanize=True, os="windows", locale="en-US") as br:
+    log("  opening Camoufox inside virtual display to finish z.ai sign-in…")
+    # Set DISPLAY to virtual display so Camoufox never appears on user monitor
+    env = os.environ.copy()
+    env["DISPLAY"] = disp
+
+    async with AsyncCamoufox(headless=True, humanize=True, os="windows", locale="en-US") as br:
         ctx = await br.new_context()
         page = await ctx.new_page()
         await page.goto(auth_url, wait_until="domcontentloaded", timeout=90000)
@@ -173,37 +210,42 @@ async def drive_zai_oauth_login(auth_url: str, email: str, password: str, log=pr
         return False
 
 
-def run_one(email: str, password: str, cdp_port: int = DEFAULT_PORT, log=print) -> bool:
+def run_one(email: str, password: str, cdp_port: int = DEFAULT_PORT,
+            use_xvfb: bool = True, log=print) -> bool:
     """Run one gentle AutoClaw claim cycle."""
     if not APPRUN.exists():
         log(f"AppRun not found: {APPRUN}")
         return False
 
-    disp, xa = find_display_and_xauth()
-    log(f"[1/7] Environment: DISPLAY={disp} XAUTHORITY={xa}")
+    vdisp = VirtualDisplay(DEFAULT_VIRTUAL_DISPLAY)
+    disp = os.environ.get("DISPLAY") or ":0"
+    if use_xvfb and vdisp.start(log=log):
+        disp = vdisp.display
 
-    # Set up temporary xdg-open wrapper to catch the OAuth URL
+    log(f"[1/7] Environment: DISPLAY={disp} (virtual headless={use_xvfb})")
+
+    # Set up safe xdg-open wrapper that NEVER touches user's real browser
     tmp_bin = Path(tempfile.mkdtemp(prefix="autoclaw_xdg_"))
     captured_file = tmp_bin / "captured_url.txt"
+    log_file = tmp_bin / "xdg_log.txt"
     wrapper = tmp_bin / "xdg-open"
+    # Pure URL trap: logs and writes captured URL, never executes real browser
     wrapper.write_text(f"""#!/usr/bin/env bash
 for arg in "$@"; do
-    if [[ "$arg" =~ "chat.z.ai" ]] || [[ "$arg" =~ "oauth" ]]; then
+    echo "$arg" >> "{log_file}"
+    if [[ "$arg" =~ "http" ]] || [[ "$arg" =~ "oauth" ]] || [[ "$arg" =~ "chat.z.ai" ]]; then
         echo "$arg" > "{captured_file}"
-        exit 0
     fi
 done
-exec /usr/bin/xdg-open "$@"
+exit 0
 """)
     wrapper.chmod(0o755)
 
     env = os.environ.copy()
     env["PATH"] = f"{tmp_bin}:{env.get('PATH', '')}"
     env["DISPLAY"] = disp
-    if xa:
-        env["XAUTHORITY"] = xa
 
-    log("[2/7] Launching patched AutoClaw AppRun with CDP :%d…" % cdp_port)
+    log("[2/7] Launching patched AutoClaw AppRun in virtual display with CDP :%d…" % cdp_port)
     cmd = [
         str(APPRUN),
         "--ozone-platform=x11",
@@ -213,27 +255,44 @@ exec /usr/bin/xdg-open "$@"
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     try:
-        # Give Electron 6 seconds to spin up UI & open CDP port
+        # Give Electron 6 seconds to spin up
         time.sleep(6)
 
-        log("[3/7] CDP: clicking 'Continue with Zai'…")
+        # Step 3: Check and solve Alibaba WAF Security Verification FIRST (as requested)
+        log("[3/7] Checking for Alibaba WAF Security Verification popup FIRST…")
+        waf_solved = False
+        for attempt in range(1, 6):
+            if click_security_verification_window(disp, log=log):
+                waf_solved = True
+                log("  Alibaba WAF solved on initial startup!")
+                time.sleep(2)
+                break
+            time.sleep(1)
+
+        if not waf_solved:
+            log("  no initial WAF popup found; proceeding to sign in option")
+
+        # Step 4: Click "Continue with Zai" via CDP
+        log("[4/7] CDP: clicking 'Continue with Zai'…")
         clicked = asyncio.run(drive_cdp_continue_zai(cdp_port, log=log))
         if not clicked:
-            log("  warning: 'Continue with Zai' not clicked via CDP, waiting for UI…")
+            log("  retrying CDP click in 3s…")
+            time.sleep(3)
+            asyncio.run(drive_cdp_continue_zai(cdp_port, log=log))
 
-        # Wait for the Aliyun security popup to render, then click with xdotool
-        log("[4/7] Waiting 3s for Aliyun Security Verification window…")
-        time.sleep(3)
-        for attempt in range(1, 4):
-            log(f"  xdotool click attempt {attempt}/3…")
-            if click_security_verification_window(log=log):
+        # If WAF pops up after clicking sign in, solve it now
+        log("  checking if Alibaba WAF appeared after clicking sign in…")
+        time.sleep(2)
+        for attempt in range(1, 5):
+            if click_security_verification_window(disp, log=log):
+                log("  Alibaba WAF solved after clicking sign in!")
                 break
-            time.sleep(2)
+            time.sleep(1.5)
 
-        # Wait for xdg-open wrapper to catch the auth URL
-        log("[5/7] Waiting for shell.openExternal -> xdg-open wrapper…")
+        # Step 5: Wait for safe xdg-open wrapper to catch OAuth URL
+        log("[5/7] Waiting for OAuth URL to be caught by wrapper (no browser opened)…")
         auth_url = ""
-        for _ in range(20):
+        for _ in range(25):
             if captured_file.exists():
                 auth_url = captured_file.read_text().strip()
                 if auth_url:
@@ -242,20 +301,22 @@ exec /usr/bin/xdg-open "$@"
 
         if not auth_url:
             log("  FAILED: xdg-open wrapper captured no OAuth URL")
+            if log_file.exists():
+                log(f"  xdg-open received: {log_file.read_text()[:300]}")
             return False
 
-        log(f"  captured auth URL: {auth_url[:70]}…")
+        log(f"  captured auth URL safely: {auth_url[:75]}…")
 
-        # Drive z.ai login via Camoufox
+        # Step 6: Drive z.ai login via Camoufox inside virtual display
         log(f"[6/7] Completing z.ai OAuth login for {email}…")
-        ok = asyncio.run(drive_zai_oauth_login(auth_url, email, password, log=log))
+        ok = asyncio.run(drive_zai_oauth_login(auth_url, email, password, disp=disp, log=log))
         if not ok:
             log("  z.ai login half failed")
             return False
 
-        # Wait for the app's internal loopback handler (:18432) to process code & write vault
+        # Step 7: Wait for AutoClaw loopback handler (:18432) to exchange tokens
         log("[7/7] Waiting for AutoClaw to exchange tokens and write vault…")
-        time.sleep(5)
+        time.sleep(6)
 
         # Trigger claim_daily_credits using fresh token
         creds = load_app_credentials()
@@ -264,7 +325,7 @@ exec /usr/bin/xdg-open "$@"
             log("  token not detected from get_token or vault yet")
             return True
 
-        log(f"  token acquired: {tok[:15]}… Triggering 40M daily/event claim…")
+        log(f"  TOKEN ACQUIRED: {tok[:15]}… Triggering 40M daily/event claim…")
         client = AutoClawClient()
         claim_res = client.claim_daily_credits(tok)
         log(f"  claim response: {claim_res}")
@@ -278,9 +339,13 @@ exec /usr/bin/xdg-open "$@"
         shutil.rmtree(tmp_bin, ignore_errors=True)
         try:
             proc.terminate()
-            proc.wait(timeout=5)
+            proc.wait(timeout=4)
         except Exception:
-            proc.kill()
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        vdisp.stop()
 
 
 def main():
@@ -288,6 +353,7 @@ def main():
     parser.add_argument("--email", help="z.ai account email (defaults to accounts.txt)")
     parser.add_argument("--password", help="z.ai password")
     parser.add_argument("--cdp-port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--no-xvfb", action="store_true", help="Run with real display instead of Xvfb")
     parser.add_argument("--dry-run", action="store_true", help="Print target account and exit")
     args = parser.parse_args()
 
@@ -304,7 +370,7 @@ def main():
         print("[dry-run] account ready, AppRun exists:", APPRUN.exists())
         return
 
-    ok = run_one(email, password, cdp_port=args.cdp_port)
+    ok = run_one(email, password, cdp_port=args.cdp_port, use_xvfb=not args.no_xvfb)
     sys.exit(0 if ok else 1)
 
 

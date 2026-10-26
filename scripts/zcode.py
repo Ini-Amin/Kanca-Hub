@@ -329,19 +329,45 @@ def cmd_quota(a):
         write(p("balance.json"), json.dumps(data))
     else:
         data = load_json(p("balance.json"), {})
-    usage = load_json(p("usage.json"), {})
-    for email, _ in accounts():
-        print("== %s ==" % email)
-        for b in (data.get(email) or {}).get("buckets", []):
-            tot, used = b.get("total_units", 0), b.get("used_units", 0)
-            pct = (100.0 * used / tot) if tot else 0
-            print("  %-14s %8d/%-9d (%.1f%%) reset %s" % (b.get("show_name"), used, tot, pct,
-                  time.strftime("%m-%d %H:%M", time.localtime(b.get("period_end", 0)))))
-        local = usage.get(email) or {}
-        for model, v in local.items():
-            if isinstance(v, list) and len(v) == 2:
-                print("  [bridge counted today] %-14s in=%d out=%d" % (model, v[0], v[1]))
 
+    total_flash = 0
+    total_glm = 0
+    active_accs = 0
+    for email, info in data.items():
+        has_quota = False
+        for b in info.get("buckets", []):
+            m = (b.get("show_name") or "").lower()
+            rem = b.get("remaining_units") or (b.get("total_units", 0) - b.get("used_units", 0))
+            if "flash" in m:
+                total_flash += rem
+            elif "glm" in m:
+                total_glm += rem
+            if rem > 0:
+                has_quota = True
+        if has_quota:
+            active_accs += 1
+
+    tot_tokens = total_flash + total_glm
+    print(f"=== ZCODE FARM TOTAL POOL ===")
+    print(f"Total Accounts : {len(data)} ({active_accs} active with quota)")
+    print(f"GLM-5.3-Flash  : {total_flash/1e9:.3f} Billion tokens ({total_flash:,})")
+    print(f"GLM-5.3        : {total_glm/1e9:.3f} Billion tokens ({total_glm:,})")
+    print(f"Total Supply   : {tot_tokens/1e9:.3f} Billion tokens ({tot_tokens:,})")
+    print("=============================")
+
+    if getattr(a, "details", False):
+        usage = load_json(p("usage.json"), {})
+        for email, _ in accounts():
+            print("== %s ==" % email)
+            for b in (data.get(email) or {}).get("buckets", []):
+                tot, used = b.get("total_units", 0), b.get("used_units", 0)
+                pct = (100.0 * used / tot) if tot else 0
+                print("  %-14s %8d/%-9d (%.1f%%) reset %s" % (b.get("show_name"), used, tot, pct,
+                      time.strftime("%m-%d %H:%M", time.localtime(b.get("period_end", 0)))))
+            local = usage.get(email) or {}
+            for model, v in local.items():
+                if isinstance(v, list) and len(v) == 2:
+                    print("  [bridge counted today] %-14s in=%d out=%d" % (model, v[0], v[1]))
 
 # ---------------- watcher ----------------
 def _claim_direct(email, plan_id):
@@ -567,7 +593,23 @@ def _watch_tick():
         for email, pw in accounts():
             _promo_tick(email, pw)
     _autofarm_tick(cache)
-    event("watch", "tick ok (%d accounts)" % len(accounts()))
+    total_flash = sum(
+        (b.get("remaining_units") or (b.get("total_units", 0) - b.get("used_units", 0)))
+        for acc in cache.values() for b in acc.get("buckets", [])
+        if "flash" in (b.get("show_name") or "").lower()
+    )
+    total_glm = sum(
+        (b.get("remaining_units") or (b.get("total_units", 0) - b.get("used_units", 0)))
+        for acc in cache.values() for b in acc.get("buckets", [])
+        if "glm" in (b.get("show_name") or "").lower() and "flash" not in (b.get("show_name") or "").lower()
+    )
+    active_accs = sum(
+        1 for acc in cache.values()
+        if any((b.get("remaining_units") or (b.get("total_units", 0) - b.get("used_units", 0))) > 0
+               for b in acc.get("buckets", []))
+    )
+    event("watch", "POOL TOTAL: %.2fB tokens (Flash: %.2fB, GLM-5.3: %.2fB) | %d/%d accounts ready" %
+          ((total_flash + total_glm)/1e9, total_flash/1e9, total_glm/1e9, active_accs, len(accounts())))
 
 
 # ---------------- autofarm ----------------
@@ -763,7 +805,7 @@ def main():
     s = sub.add_parser("models"); s.add_argument("action", choices=["add", "list", "rm"])
     s.add_argument("alias", nargs="?"); s.add_argument("model", nargs="?")
 
-    s = sub.add_parser("quota"); s.add_argument("--live", action="store_true")
+    s = sub.add_parser("quota"); s.add_argument("--live", action="store_true"); s.add_argument("--details", action="store_true", help="Print per-account details in addition to pool total")
 
     s = sub.add_parser("watch"); s.add_argument("--once", action="store_true"); s.add_argument("--interval", type=int, default=60)
 
