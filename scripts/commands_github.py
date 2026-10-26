@@ -172,6 +172,22 @@ def build_github_parser(sub: Any = None) -> argparse.ArgumentParser:
         help="inbox to check: binus (Outlook) or relay (KancaHub mail relay)",
     )
 
+    # ---- signup (semi-automated interactive) ----
+    gsi = ghs.add_parser(
+        "signup",
+        help="semi-automated desktop registration (auto-fills form + auto-catches OTP from Tempik; you solve captcha)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Semi-automated GitHub registration helper:\n"
+            "  1. Opens Camoufox on your desktop display without adblocker.\n"
+            "  2. Pre-fills email (@kancalabs.my.id via Tempik), password, username.\n"
+            "  3. Waits for you to solve the Arkose/DataDome visual puzzle on screen.\n"
+            "  4. Automatically intercepts the 8-digit verification code from Tempik in real-time.\n"
+            "  5. Saves the confirmed account to github_accounts.json.\n"
+        ),
+    )
+    gsi.add_argument("--proxy", default=None, help="Proxy URL (e.g. http://host:port)")
+
     return ghp
 
 
@@ -196,6 +212,16 @@ def cmd_github(a) -> int:
             cmd += ["--email-domain", a.domain]
         if getattr(a, "inbox", None):
             cmd += ["--inbox", a.inbox]
+        return kancahub.run(cmd, cwd=kancahub.AUTO_FREECF)
+
+    if sub in ("signup", "interactive"):
+        script = kancahub.AUTO_FREECF / "scripts" / "github_signup_interactive.py"
+        if not script.exists():
+            print(kancahub.col("red", f"✗ github_signup_interactive.py not found at {script}"))
+            return 1
+        cmd = [py_camo, str(script)]
+        if getattr(a, "proxy", None):
+            cmd += ["--proxy", a.proxy]
         return kancahub.run(cmd, cwd=kancahub.AUTO_FREECF)
 
     if sub == "farm":
