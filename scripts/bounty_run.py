@@ -60,10 +60,10 @@ BOX = os.environ.get("BOUNTY_BOX", "blu")
 TOOLPATH = "export PATH=\"%s:%s:%s\"; " % (
     HOME / "go" / "bin", HOME / ".local" / "bin", os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"))
 
-PLANNER = os.environ.get("BOUNTY_PLANNER", "cbai/deepseek-v4.1-flash")
-DRAFTER = os.environ.get("BOUNTY_DRAFTER", "Zcode/GLM-5.3")
+PLANNER = os.environ.get("BOUNTY_PLANNER", "ag/gemini-3.8-flash-high")
+DRAFTER = os.environ.get("BOUNTY_DRAFTER", "ag/gemini-3.8-flash-high")
 CHALLENGERS = os.environ.get(
-    "BOUNTY_CHALLENGERS", "THK/deepseek-v4.1-flash:free,ag/gemini-3.8-flash-high").split(",")
+    "BOUNTY_CHALLENGERS", "ag/gemini-3.8-flash-high").split(",")
 
 
 def r9_key():
@@ -709,8 +709,15 @@ def get_scope(platform, program):
               % slug, file=sys.stderr)
         return [], [], ""
     ins, outs = parse_scope(text)
+    if not ins:
+        entry = _mirror_entry("bugcrowd", slug)
+        if entry:
+            m_ins, m_outs = _hosts_from_targets("bugcrowd", entry.get("targets"))
+            if m_ins:
+                print("  [mirror-fallback] bugcrowd/%s layout empty -> loaded from mirror (%d in, %d out)"
+                      % (slug, len(m_ins), len(m_outs)), file=sys.stderr)
+                return m_ins, m_outs, json.dumps(entry, indent=1)
     return ins, outs, text
-
 
 def cmd_scope(a):
     ins, outs, text = get_scope(a.platform, a.program)
@@ -1103,6 +1110,10 @@ def cmd_dispatch(a):
         if mode == "subs" and t:
             lines.append(t)
     hosts = [x for x in lines if re.match(r"^[\w*][\w.*-]*\.[a-z]{2,}$", x, re.I)]
+    for s in seeds:
+        s_clean = s.strip()
+        if s_clean and s_clean not in hosts and not s_clean.startswith("*"):
+            hosts.append(s_clean)
     (d / "recon").mkdir(parents=True, exist_ok=True)
     (d / "recon" / "subs_raw.txt").write_text("\n".join(hosts) + ("\n" if hosts else ""))
 
@@ -1247,13 +1258,23 @@ def cmd_triage(a):
     except Exception:
         pass
 
-    plan = chat(PLANNER,
-                "Bug bounty hunt plan. Program: %s. In scope: %s. Out of scope (NEVER touch): %s.\n"
-                "%s%sRecon counts: %s\n%s\n"
-                "List the top 5 checks in order, each with an exact tool command. "
-                "Only ever touch the in-scope hosts above."
-                % (job["program"], job["in_scope"], job["out_of_scope"], scope_note,
-                   empirical_note, counts, recon[:4000]))
+    plan = ""
+    for attempt in range(2):
+        try:
+            plan = chat(PLANNER,
+                        "Bug bounty hunt plan. Program: %s. In scope: %s. Out of scope (NEVER touch): %s.\n"
+                        "%s%sRecon counts: %s\n%s\n"
+                        "List the top 5 checks in order, each with an exact tool command. "
+                        "Only ever touch the in-scope hosts above."
+                        % (job["program"], job["in_scope"], job["out_of_scope"], scope_note,
+                           empirical_note, counts, recon[:4000]), timeout=120)
+            if plan.strip():
+                break
+        except Exception as e:
+            print("  planner error (%s); trying fallback..." % e, file=sys.stderr)
+            time.sleep(3)
+    if not plan.strip():
+        plan = "# Default Automated Plan\n1. Active endpoints verification\n2. Nuclei high/critical scan\n"
     (d / "plan.md").write_text(plan)
     # The drafter can come back empty on a transient upstream hiccup (429/bridge
     # busy). An empty draft then goes to the challengers, which correctly say
