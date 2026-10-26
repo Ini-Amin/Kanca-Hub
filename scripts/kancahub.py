@@ -123,6 +123,7 @@ globals().update({_n: getattr(kancahub_base, _n)
 # Extracted command modules (docs/refactor-kancahub.md). Each name is re-exported
 # here so dispatch() and tests keep using `kancahub.<name>` (H1).
 _REEXPORTS = {
+    "doctor": "cmd_doctor",
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
     "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack cmd_opencode cmd_omnirush",
