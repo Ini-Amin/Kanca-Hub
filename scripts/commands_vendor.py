@@ -768,3 +768,13 @@ def _opencode_inject_9router(key: str, kancahub) -> int:
                               " come from the OpenCode client (403 FreeTierError). This"
                               " row only works for a PAID Zen key."))
     return 0
+
+def cmd_omnirush(a: Any) -> int:
+    """OmniRush device login & gateway bridge."""
+    import subprocess
+    script = Path(__file__).resolve().parent / "omnirush_bridge.py"
+    cmd = [sys.executable, str(script)]
+    sub = getattr(a, "omnirush_cmd", None)
+    if sub:
+        cmd.append(sub)
+    return subprocess.call(cmd)

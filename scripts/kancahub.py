@@ -125,7 +125,7 @@ globals().update({_n: getattr(kancahub_base, _n)
 _REEXPORTS = {
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
-    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack cmd_opencode",
+    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack cmd_opencode cmd_omnirush",
     "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api _r9_models cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
                       "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
@@ -918,6 +918,12 @@ def build_parser() -> argparse.ArgumentParser:
     ac_cl.add_argument("--port", type=int, default=18432, help="local loopback port (default: 18432)")
 
 
+    om = sub.add_parser("omnirush", help="OmniRush free AI provider: OAuth device-flow login & bridge server (:8795)")
+    oms = om.add_subparsers(dest="omnirush_cmd")
+    oms.add_parser("login", help="authorize in browser via OAuth device-flow (default)")
+    oms.add_parser("status", help="check current token and quota")
+    oms.add_parser("serve", help="run OpenAI-compatible HTTP bridge on :8795")
+
     ac_log = acs.add_parser("login", help="log in via z.ai OAuth and auto-bind referral code")
     ac_log.add_argument("--listen", action="store_true", help="listen on local loopback to automatically catch OAuth callback from browser")
     ac_log.add_argument("--verify-param", default=None, metavar="PROOF", help="Aliyun captcha verifyParam proof (opens browser and handles full flow)")
@@ -1089,6 +1095,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         if getattr(args, "live", False):
             cmd.append("--live")
         return run(cmd, cwd=AUTO_FREECF)
+    if g == "omnirush":
+        return cmd_omnirush(args)
 
     p.print_help()
     return 0
