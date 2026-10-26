@@ -60,10 +60,19 @@ BOX = os.environ.get("BOUNTY_BOX", "blu")
 TOOLPATH = "export PATH=\"%s:%s:%s\"; " % (
     HOME / "go" / "bin", HOME / ".local" / "bin", os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"))
 
-PLANNER = os.environ.get("BOUNTY_PLANNER", "ag/gemini-3.8-flash-high")
-DRAFTER = os.environ.get("BOUNTY_DRAFTER", "ag/gemini-3.8-flash-high")
+PLANNER = os.environ.get("BOUNTY_PLANNER", "CodeBuddy/deepseek-1017")
+DRAFTER = os.environ.get("BOUNTY_DRAFTER", "Zcode/GLM-5.3")
 CHALLENGERS = os.environ.get(
-    "BOUNTY_CHALLENGERS", "ag/gemini-3.8-flash-high").split(",")
+    "BOUNTY_CHALLENGERS", "CodeBuddy/deepseek-1017,atria/Atria-Dawn-Preview").split(",")
+# Fallback families: a single upstream 405/503/429 must not fail a stage.
+# Measured 2026-10-26: atria + CodeBuddy/deepseek-1017 + Zcode/GLM-5.3 answer;
+# ag/* and xperimential/* were returning 503 at this time, so they sit last.
+PLANNER_FALLBACK = ["atria/Atria-Dawn-Preview", "Zcode/GLM-5.3", "CodeBuddy/deepseek-1017",
+                    "ag/gemini-3.8-flash-high"]
+DRAFTER_FALLBACK = ["atria/Atria-Dawn-Preview", "CodeBuddy/deepseek-1017", "Zcode/GLM-5.3",
+                    "ag/gemini-3.8-flash-high"]
+CHALLENGER_FALLBACK = ["Zcode/GLM-5.3", "CodeBuddy/deepseek-1017", "atria/Atria-Dawn-Preview",
+                       "ag/gemini-3.8-flash-high"]
 
 
 def r9_key():
@@ -73,6 +82,24 @@ def r9_key():
     return d["provider"]["9router"]["options"]["apiKey"]
 
 
+
+def chat_any(models, prompt, max_tokens=600, timeout=240, attempts=2):
+    """Try each model in order until one returns content. A single upstream blip
+    (405/503/429/empty) must not fail the whole stage — it was being recorded as
+    a verdict-less 'triage-failed' and a transport error looked like a finding
+    that failed review. Returns (text, model_used); text is "" if all failed."""
+    last = None
+    for m in models:
+        for _ in range(attempts):
+            try:
+                out = chat(m, prompt, max_tokens=max_tokens, timeout=timeout)
+                if out.strip():
+                    return out, m
+                last = "empty reply"
+            except Exception as e:
+                last = "%s: %s" % (type(e).__name__, str(e)[:120])
+            time.sleep(4)
+    return "", last
 def chat(model, prompt, max_tokens=600, timeout=240):
     """Chat via laptop 9Router. Handles JSON and SSE (ocz/) bodies."""
     body = {"model": model, "max_tokens": max_tokens,
@@ -1258,21 +1285,14 @@ def cmd_triage(a):
     except Exception:
         pass
 
-    plan = ""
-    for attempt in range(2):
-        try:
-            plan = chat(PLANNER,
-                        "Bug bounty hunt plan. Program: %s. In scope: %s. Out of scope (NEVER touch): %s.\n"
-                        "%s%sRecon counts: %s\n%s\n"
-                        "List the top 5 checks in order, each with an exact tool command. "
-                        "Only ever touch the in-scope hosts above."
-                        % (job["program"], job["in_scope"], job["out_of_scope"], scope_note,
-                           empirical_note, counts, recon[:4000]), timeout=120)
-            if plan.strip():
-                break
-        except Exception as e:
-            print("  planner error (%s); trying fallback..." % e, file=sys.stderr)
-            time.sleep(3)
+    plan_prompt = (
+        "Bug bounty hunt plan. Program: %s. In scope: %s. Out of scope (NEVER touch): %s.\n"
+        "%s%sRecon counts: %s\n%s\n"
+        "List the top 5 checks in order, each with an exact tool command. "
+        "Only ever touch the in-scope hosts above."
+        % (job["program"], job["in_scope"], job["out_of_scope"], scope_note,
+           empirical_note, counts, recon[:4000]))
+    plan, plan_model = chat_any([PLANNER] + DRAFTER_FALLBACK, plan_prompt, timeout=180)
     if not plan.strip():
         plan = "# Default Automated Plan\n1. Active endpoints verification\n2. Nuclei high/critical scan\n"
     (d / "plan.md").write_text(plan)
@@ -1280,43 +1300,32 @@ def cmd_triage(a):
     # busy). An empty draft then goes to the challengers, which correctly say
     # "no draft supplied" and KILL it — so a transport blip is recorded as a
     # finding that failed review. That is a false negative dressed as a verdict.
-    # Retry, and treat an empty draft as an ERROR rather than a draft.
-    draft = ""
-    last_err = None
-    for attempt in range(3):
-        try:
-            draft = chat(DRAFTER,
-                         "Draft ONE candidate finding from this recon (or say NONE). Only use in-scope hosts.\n"
-                         "%s\nPlan:\n%s" % (recon[:4000], plan[:2000]), timeout=300)
-            if draft.strip():
-                break
-            last_err = "empty reply"
-        except Exception as e:
-            last_err = "%s: %s" % (type(e).__name__, str(e)[:120])
-        time.sleep(8 * (attempt + 1))
+    # Try the whole drafting family before declaring failure.
+    draft_prompt = ("Draft ONE candidate finding from this recon (or say NONE). Only use in-scope hosts.\n"
+                    "%s\nPlan:\n%s" % (recon[:4000], plan[:2000]))
+    draft, draft_model = chat_any([DRAFTER] + PLANNER_FALLBACK + CHALLENGERS,
+                                  draft_prompt, max_tokens=1200, timeout=300)
     if not draft.strip():
         (d / "draft.md").write_text(
             "# DRAFT FAILED (no draft produced)\n\n"
-            "The drafter (%s) returned nothing after 3 attempts: %s\n\n"
+            "Every drafting model returned nothing (%s).\n\n"
             "This is an UPSTREAM failure, not a review verdict. No finding was\n"
             "evaluated, so nothing can be concluded about the target. Re-run triage.\n"
-            % (DRAFTER, last_err))
+            % draft_model)
         job["status"] = "triage-failed"
         (d / "job.json").write_text(json.dumps(job, indent=1))
-        print("triage-failed: drafter produced no content (%s)" % last_err)
+        print("triage-failed: every drafting model produced no content")
         return
     # Gate 4: challenger from a DIFFERENT family must fail to break the draft.
     verdicts = []
     for ch in CHALLENGERS:
-        try:
-            v = chat(ch, "Challenge this draft finding. Try to prove it is a duplicate, "
-                     "out of scope, unexploitable, or a hallucination. Draft:\n%s\n"
-                     "Reply VERDICT: KILL:<reason> or VERDICT: SURVIVES:<why>"
-                     % draft[:2500], timeout=300)
-            verdicts.append("%s -> %s" % (ch, v[:300]))
-            time.sleep(5)
-        except Exception as e:
-            verdicts.append("%s -> ERROR %s" % (ch, type(e).__name__))
+        v, _used = chat_any([ch] + CHALLENGER_FALLBACK,
+                            "Challenge this draft finding. Try to prove it is a duplicate, "
+                            "out of scope, unexploitable, or a hallucination. Draft:\n%s\n"
+                            "Reply VERDICT: KILL:<reason> or VERDICT: SURVIVES:<why>"
+                            % draft[:2500], timeout=300)
+        verdicts.append("%s -> %s" % (ch, v[:300] if v.strip() else "ERROR (no reply)"))
+        time.sleep(5)
     killed = [v for v in verdicts if "KILL" in v.upper()]
     (d / "draft.md").write_text("# DRAFT (needs gates 2+3 + human)\n\n%s\n\n## Challenger verdicts\n%s\n" %
                                 (draft, "\n".join(verdicts)))

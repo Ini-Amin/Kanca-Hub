@@ -55,12 +55,11 @@ CHAT_HISTORIES: dict[str, deque] = {}
 HISTORY_LEN = 12
 
 MODELS = [
+    "CodeBuddy/deepseek-1017",
+    "Zcode/GLM-5.3",
     "ag/gemini-3.8-flash-high",
     "xperimential/glm-5.3-uncensored:free",
-    "CodeBuddy/deepseek-v4.1-flash",
     "atria/Atria-Dawn-Preview",
-    "ollama/nemotron-3-ultra",
-    "Zcode/GLM-5.3",
 ]
 
 

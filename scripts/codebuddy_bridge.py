@@ -22,6 +22,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -32,7 +33,7 @@ from pathlib import Path
 
 DEFAULT_PORT = 8794
 NINE_ROUTER_DB = Path.home() / ".9router/db/data.sqlite"
-CLI_BIN = "/home/amen/.npm-global/bin/codebuddy"
+CLI_BIN = shutil.which("codebuddy") or "/usr/local/bin/codebuddy" or "/home/amen/.npm-global/bin/codebuddy"
 CACHE_TOKEN_FILE = Path.home() / ".config/auto-freecf/codebuddy_token.txt"
 
 logging.basicConfig(
