@@ -261,6 +261,10 @@ INTIGRITI_MIRROR = ("https://raw.githubusercontent.com/arkadiyt/"
                     "bounty-targets-data/main/data/intigriti_data.json")
 YESWEHACK_MIRROR = ("https://raw.githubusercontent.com/arkadiyt/"
                     "bounty-targets-data/main/data/yeswehack_data.json")
+BUGCROWD_MIRROR = ("https://raw.githubusercontent.com/arkadiyt/"
+                   "bounty-targets-data/main/data/bugcrowd_data.json")
+HACKERONE_MIRROR = ("https://raw.githubusercontent.com/arkadiyt/"
+                    "bounty-targets-data/main/data/hackerone_data.json")
 
 # One download per process. Discovery and get_scope() both need the feed; a
 # second fetch would double the latency and risk the two views disagreeing
@@ -334,8 +338,7 @@ def _hosts_from_targets(platform, targets):
         for t in block.get(key) or []:
             if not isinstance(t, dict):
                 continue
-            # Intigriti names the asset `endpoint`; YesWeHack names it `target`.
-            raw = t.get("endpoint") if platform == "intigriti" else t.get("target")
+            raw = t.get("endpoint") or t.get("target") or t.get("uri") or t.get("asset_identifier")
             p = _host_pattern(raw)
             if p and p not in want:
                 want.append(p)
@@ -593,27 +596,41 @@ def parse_scope(text):
 
 
 def _mirror_entry(platform, slug):
-    """The mirror document for one Intigriti/YesWeHack program handle."""
-    url = INTIGRITI_MIRROR if platform == "intigriti" else YESWEHACK_MIRROR
+    """The mirror document for one program handle across all supported platforms."""
+    if platform == "intigriti":
+        url = INTIGRITI_MIRROR
+    elif platform == "yeswehack":
+        url = YESWEHACK_MIRROR
+    elif platform == "bugcrowd":
+        url = BUGCROWD_MIRROR
+    elif platform == "hackerone":
+        url = HACKERONE_MIRROR
+    else:
+        return None
+
+    slug_norm = slug.rstrip("/").split("/")[-1].lower()
     for e in _mirror_json(url):
         if not isinstance(e, dict):
             continue
         if platform == "intigriti":
-            # handle is unique; company_handle is not (one company, several
-            # programs), so it is only a fallback for a manually passed slug.
             if slug == (e.get("handle") or ""):
                 return e
-            # Detail pages are /programs/<company>/<handle>/detail. The URL
-            # must end in "/<slug>/detail" -- matching a bare "/<slug>" tail
-            # matched ONLY the literal word "detail", which every Intigriti
-            # program has, so any slug resolved to the first feed entry.
             if slug and slug != "detail" and \
                     (e.get("url") or "").rstrip("/").endswith("/%s/detail" % slug):
                 return e
             if slug and slug == (e.get("company_handle") or ""):
                 return e
+        elif platform == "bugcrowd":
+            u = (e.get("url") or "").rstrip("/").lower()
+            if u.endswith("/" + slug_norm) or u.endswith("/" + slug_norm.replace("-mbb-og", "")):
+                return e
+        elif platform == "hackerone":
+            handle = (e.get("handle") or "").lower()
+            u = (e.get("url") or "").rstrip("/").lower()
+            if slug_norm == handle or u.endswith("/" + slug_norm):
+                return e
         else:
-            if slug == (e.get("id") or ""):
+            if slug_norm == (e.get("id") or ""):
                 return e
     return None
 
@@ -649,11 +666,23 @@ def get_scope(platform, program):
     page_text is returned so callers can tell "session expired" (empty page)
     from "program really lists nothing" (page rendered, no target tables).
     """
-    # Mirror-backed platforms: the scope is already structured JSON, so there is
-    # nothing to render and no browser session to depend on. Returning the raw
-    # entry as `page_text` keeps the contract callers rely on -- a non-empty page
-    # means "the program really lists nothing" rather than "session expired",
-    # which is what cmd_scope/abh_hunt key off.
+    # 1. HackerOne: unauthenticated public GraphQL first, mirror fallback
+    if platform == "hackerone":
+        handle = program.rstrip("/").split("/")[-1].lower()
+        ins_raw, outs_raw = h1_scope(handle)
+        if ins_raw or outs_raw:
+            ins = [_host_pattern(aid) for aid, atype in ins_raw if aid and atype in ("URL", "DOMAIN", "IP_ADDRESS", "CIDR", "")]
+            outs = [_host_pattern(aid) for aid, atype in outs_raw if aid and atype in ("URL", "DOMAIN", "IP_ADDRESS", "CIDR", "")]
+            ins = [h for h in ins if h]
+            outs = [h for h in outs if h]
+            return ins, outs, json.dumps({"handle": handle, "in_scope": ins, "out_of_scope": outs}, indent=1)
+        entry = _mirror_entry("hackerone", handle)
+        if entry:
+            ins, outs = _hosts_from_targets("hackerone", entry.get("targets"))
+            return ins, outs, json.dumps(entry, indent=1)
+        return [], [], ""
+
+    # 2. Mirror-backed platforms (Intigriti & YesWeHack)
     if platform in ("intigriti", "yeswehack"):
         entry = _mirror_entry(platform, program)
         if not entry:
@@ -661,35 +690,23 @@ def get_scope(platform, program):
         ins, outs = _hosts_from_targets(platform, entry.get("targets"))
         return ins, outs, json.dumps(entry, indent=1)
 
-    url = program
-    if not url.startswith("http"):
-        # The #scope anchor is REQUIRED, not cosmetic. Bugcrowd renders the
-        # program overview by default, and the target table ("Name / Location",
-        # with the In scope / Out of scope labels parse_scope needs) lives in a
-        # lazy-loaded section that only renders when the scope anchor is
-        # requested. Measured on blu 2026-10-22 with a FRESH session: the plain
-        # engagement URL returned 30,558 chars of overview prose with ZERO
-        # occurrences of "in scope" / "name / location", so parse_scope found
-        # nothing and Okta looked like a program with no targets. The same page
-        # with #scope returned 30,610 chars and all three markers.
-        base = url.strip("/")
-        if platform == "bugcrowd" and "#" not in base:
-            base += "#scope"
-        url = "https://bugcrowd.com/engagements/" + base
+    # 3. Bugcrowd: live render first, fallback to mirror on login wall / empty
+    slug = program.rstrip("/").split("/")[-1].lower()
+    base = slug
+    if "#" not in base:
+        base += "#scope"
+    url = "https://bugcrowd.com/engagements/" + base
     text = _render_text(platform, url)
-    if not text:
-        return [], [], ""
-    if is_login_wall(text):
-        # A dead session renders the SIGN-IN page, not an error. It is non-empty,
-        # so callers that only check `if not text` treat it as a healthy render;
-        # parse_scope() then finds no target tables and the program is retired as
-        # "nothing to hunt". Observed on blu 2026-10-22: Bugcrowd's session had
-        # expired on 18 Oct, Okta's scope came back with 1 entry instead of 24,
-        # and the pipeline kept hunting programs it could no longer read.
-        # Return an EMPTY page_text so callers take their existing
-        # "empty page - session expired?" path instead of silently proceeding.
-        print("  scope fetch returned a LOGIN WALL for %s/%s - session expired"
-              % (platform, program), file=sys.stderr)
+    if not text or is_login_wall(text):
+        entry = _mirror_entry("bugcrowd", slug)
+        if entry:
+            ins, outs = _hosts_from_targets("bugcrowd", entry.get("targets"))
+            if ins or outs:
+                print("  [mirror-fallback] bugcrowd/%s loaded from mirror (%d in, %d out)"
+                      % (slug, len(ins), len(outs)), file=sys.stderr)
+                return ins, outs, json.dumps(entry, indent=1)
+        print("  scope fetch returned a LOGIN WALL for bugcrowd/%s - session expired"
+              % slug, file=sys.stderr)
         return [], [], ""
     ins, outs = parse_scope(text)
     return ins, outs, text
@@ -1487,7 +1504,7 @@ def cmd_auto(a):
 
     picked, skipped = [], []
     for c in cands:
-        slug = c["brief"].rstrip("/").split("/")[-1].lower()
+        slug = (c.get("slug") or c["brief"].rstrip("/").split("/")[-1]).lower()
         if slug in worked:
             skipped.append(slug)
             continue
