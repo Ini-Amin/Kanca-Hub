@@ -104,9 +104,64 @@ def latest_token(path: Path | None = None) -> str | None:
     return acc.get("access_token") if acc else None
 
 
+APP_USER_DATA = Path.home() / ".config" / "AutoClaw-oversea-official"
+
+
+def load_app_device_id() -> str | None:
+    """Device id from the app's userData, so API identity matches the desktop app."""
+    try:
+        return json.loads((APP_USER_DATA / "device" / "device-id.json").read_text())["deviceId"]
+    except Exception:
+        return None
+
+
+def load_app_credentials() -> dict | None:
+    """Fresh credentials straight from the app, best-effort.
+
+    1. GET http://127.0.0.1:18432/get_token while the app runs (auto-refreshed).
+    2. Decrypt accounts/<key>/account-credentials.enc (OSCrypt basic_text v10:
+       AES-128-CBC, key PBKDF2("peanuts","saltysalt",1,16), iv 16x0x20) once the
+       vault persists on disk.
+    """
+    try:
+        req = urllib.request.Request("http://127.0.0.1:18432/get_token")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            tok = resp.read().decode("utf-8").strip()
+            if tok.startswith("Bearer "):
+                tok = tok[len("Bearer "):]
+            if tok:
+                return {"access_token": tok, "device_id": load_app_device_id(), "source": "get_token"}
+    except Exception:
+        pass
+
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError:
+        return None
+    key = hashlib.pbkdf2_hmac("sha1", b"peanuts", b"saltysalt", 1, 16)
+    iv = b" " * 16
+    for enc in sorted(APP_USER_DATA.glob("accounts/*/account-credentials.enc")):
+        try:
+            blob = enc.read_bytes()
+            if not blob.startswith(b"v10"):
+                continue
+            dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+            padded = dec.update(blob[3:]) + dec.finalize()
+            pad = padded[-1] if padded else 0
+            plain = padded[:-pad] if 1 <= pad <= 16 else padded
+            stored = json.loads(plain.decode("utf-8"))
+            if stored.get("accessToken"):
+                return {"access_token": stored["accessToken"],
+                        "refresh_token": stored.get("refreshToken"),
+                        "device_id": load_app_device_id(), "source": "vault"}
+        except Exception:
+            continue
+    return None
+
+
 class AutoClawClient:
     def __init__(self, device_id: str | None = None):
-        self.device_id = device_id or str(uuid.uuid4())
+        self.device_id = device_id or load_app_device_id() or str(uuid.uuid4())
 
     def _req(self, path: str, method: str = "POST", body: dict | None = None, token: str | None = None) -> dict:
         url = f"{BASE}{path}"
@@ -142,11 +197,98 @@ class AutoClawClient:
         return self._req("/agent-assetmgr/api/v1/fission-v2/bind", body=body, token=tok)
 
     def get_wallets(self, token: str | None = None) -> dict:
-        """Query balances and active credit tokens across scopes."""
+        """Query balances across wallet scopes (v2, GET with query string)."""
         tok = token or latest_token()
         if not tok:
             raise ValueError("No access token provided and no saved accounts found.")
-        return self._req("/agent-assetmgr/api/v2/wallets", body={"biz_app_id": "autoclaw"}, token=tok)
+        return self._req("/agent-assetmgr/api/v2/wallets?biz_app_id=autoclaw", method="GET", token=tok)
+
+    def get_wallet_instances(self, token: str | None = None) -> dict:
+        """Per-scope balances incl. `campaign` (40M bonus) — v1 fallback path."""
+        tok = token or latest_token()
+        if not tok:
+            raise ValueError("No access token provided and no saved accounts found.")
+        return self._req("/agent-assetmgr/api/v1/wallet-instances?wallet_type=all&wallet_scope=all", method="GET", token=tok)
+
+    def get_ledgers(self, token: str | None = None, page_size: int = 20) -> dict:
+        """Credit mutation history."""
+        tok = token or latest_token()
+        if not tok:
+            raise ValueError("No access token provided and no saved accounts found.")
+        return self._req(f"/agent-assetmgr/api/v1/ledgers_std?asset_type=point&wallet_type=all&page_size={page_size}", method="GET", token=tok)
+
+    def redeem_code(self, code: str, token: str | None = None) -> dict:
+        """Redeem a promo/voucher code."""
+        tok = token or latest_token()
+        if not tok:
+            raise ValueError("No access token provided and no saved accounts found.")
+        return self._req("/agent-assetmgr/api/v1/autoglm-codes/redeem", body={"biz_app_id": "autoclaw", "code": code.strip()}, token=tok)
+
+    def claim_daily_credits(self, token: str | None = None) -> dict:
+        """Trigger the login/daily/event (40M) credit grant — the app's own claim path."""
+        tok = token or latest_token()
+        if not tok:
+            raise ValueError("No access token provided and no saved accounts found.")
+        return self._req("/userapi/v1/user-info", body={"source_id": "autoclaw", "device_id": self.device_id}, token=tok)
+
+    def refresh_token(self, refresh_tok: str) -> dict:
+        """Exchange a refresh token for fresh credentials; saves the new pair."""
+        body = {"refresh_token": refresh_tok, "source_id": "autoclaw", "device_id": self.device_id}
+        res = self._req("/userapi/v1/refresh", body=body)
+        if res.get("code") == 400002:
+            res = self._req("/userapi/v1/agent-refresh", body=body)
+        d = res.get("data") or {}
+        if res.get("code") == 0 and d.get("access_token"):
+            rec = {
+                "user_id": d.get("user_id"),
+                "auth_type": "refresh",
+                "access_token": d.get("access_token"),
+                "refresh_token": d.get("refresh_token") or refresh_tok,
+                "device_id": self.device_id,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            save_account(rec)
+        return res
+
+    def chat(self, model: str, messages: list, token: str | None = None, session_id: str | None = None, **kw) -> dict:
+        """Call a built-in AutoClaw model via the managed model gateway proxy."""
+        tok = token or latest_token()
+        if not tok:
+            raise ValueError("No access token provided and no saved accounts found.")
+        ts = str(int(time.time()))
+        sign = hashlib.md5(f"{APP_ID}&{ts}&{APP_KEY}".encode()).hexdigest()
+        rid = str(uuid.uuid4())
+        h = {
+            "Content-Type": "application/json",
+            "User-Agent": DEFAULT_UA,
+            "X-Version": "2.0.3",
+            "X-Tm": "linux",
+            "X-Product": "autoclaw",
+            "X-Channel": "official",
+            "X-Lang": "en-US",
+            "X-Auth-Appid": APP_ID,
+            "X-Auth-TimeStamp": ts,
+            "X-Auth-Sign": sign,
+            "X-Authorization": f"Bearer {tok}",
+            "X-Trace-Id": rid,
+            "X-Request-Id": rid,
+            "X-Request-Model": model,
+            "X-Client-Type": "pc",
+            "x_trace_id": "autoclaw-desktop",
+        }
+        if session_id:
+            h["X-Session-Id"] = session_id
+        body = {"model": model, "messages": messages, **kw}
+        req = urllib.request.Request(f"{BASE}/autoclaw-proxy/proxy/autoclaw/chat/completions",
+                                     data=json.dumps(body).encode(), headers=h, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                return json.loads(e.read().decode("utf-8"))
+            except Exception:
+                raise e
 
     # ── z.ai OAuth Flow ──
     def captcha_config(self) -> dict:
