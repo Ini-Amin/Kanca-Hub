@@ -13,9 +13,7 @@ State dir ~/.zcode-bridge/ (managed by scripts/zcode.py):
   keys.txt      <bridge-api-key>=<email>  (one key per account -> 9router sees
                 one connection per account; its fallback = account failover)
   jwt/<email>.txt   ZCode login token, re-read hot on every request
-  config.json   {"persona": {"enabled": bool, "models": [names...]}, "aliases": {name: {"model": ..., "persona": bool}}}
-                persona.models empty/missing = ALL models; non-empty = whitelist
-  persona.txt   persona template (abliteration by default)
+  config.json   {"aliases": {name: {"models": [...]}}}  # virtual name -> chain
   usage.json    local token counters (per account/model/day)
   balance.json  server-side quota cache written by `zcode.py watch`
 
@@ -96,15 +94,11 @@ def read_jwt(email=""):
     return tok or _read(FALLBACK_JWT).strip() or _read(LEGACY_FALLBACK_JWT).strip()
 
 
-def persona_text():
-    return _read(os.path.join(STATE, "persona.txt")).strip()
-
-
 def resolve_model(model):
-    """alias (combo) -> (model chain, force_persona). The chain is walked in
-    order with account failover inside each step: e.g. GLM-5.3 on Acc1..N,
-    then the fallback GLM-5.3-Flash on Acc1..N. 'zcode/GLM-5.3' and
-    claude/gpt names -> single GLM-5.3 chain."""
+    """alias (combo) -> model chain. The chain is walked in order with account
+    failover inside each step: e.g. GLM-5.3 on Acc1..N, then the fallback
+    GLM-5.3-Flash on Acc1..N. 'zcode/GLM-5.3' and claude/gpt names -> single
+    GLM-5.3 chain."""
     cfg = load_config()
     m = (model or "").strip()
     alias = (cfg.get("aliases") or {}).get(m)
@@ -113,37 +107,10 @@ def resolve_model(model):
         if not isinstance(chain, list) or not chain:      # legacy single-model alias
             chain = [alias.get("model", DEFAULT_MODEL)]
         chain = [x.strip() for x in chain if isinstance(x, str) and x.strip()]
-        return (chain or [DEFAULT_MODEL]), bool(alias.get("persona"))
+        return (chain or [DEFAULT_MODEL]), False
     if "/" in m:
         m = m.rsplit("/", 1)[-1]
     return ([(m if m.upper().startswith("GLM") else DEFAULT_MODEL)]), False
-
-
-def persona_active(force, requested="", resolved=""):
-    """force (alias --persona) always wins; otherwise persona applies when
-    enabled AND (models list empty = ALL, or requested/resolved name listed)."""
-    if force:
-        return True
-    p = load_config().get("persona") or {}
-    if not p.get("enabled"):
-        return False
-    sel = p.get("models") or []
-    if not sel:
-        return True
-    for name in (requested, resolved):
-        n = (name or "").strip()
-        if n in sel:
-            return True
-        if "/" in n and n.rsplit("/", 1)[-1] in sel:
-            return True
-    return False
-
-
-def persona_scope():
-    p = load_config().get("persona") or {}
-    if not p.get("enabled"):
-        return "off"
-    return ",".join(p.get("models") or []) or "ALL"
 
 
 def merge_system(client_system, force_persona=False, requested="", resolved=""):
@@ -658,7 +625,7 @@ MAX_BODY_BYTES = int(os.environ.get("ZCODE_MAX_BODY_KB", "1280")) * 1024
 # Measured 2026-10-21: a 1367 KB body is a normal long session, not abuse.
 MAX_ACCEPT_BYTES = int(os.environ.get("ZCODE_MAX_ACCEPT_KB", "4096")) * 1024
 # Compact down to this, leaving headroom under MAX_BODY_BYTES for the
-# system-block prefix and persona that get added after compaction.
+# system-block prefix that gets added after compaction.
 COMPACT_TARGET_BYTES = int(os.environ.get("ZCODE_COMPACT_KB", "1100")) * 1024
 KEEP_TAIL = int(os.environ.get("ZCODE_COMPACT_KEEP", "6"))
 
@@ -1273,9 +1240,8 @@ def main():
     if not read_jwt():
         sys.exit("no JWT: run `python3 scripts/zcode.py mint --all` first")
     keys = load_key_map()
-    print("bridge on http://%s:%d  model=%s  keys=%d  persona=%s"
-          % (args.host, args.port, DEFAULT_MODEL, len(keys) or len(API_KEYS),
-             persona_scope()))
+    print("bridge on http://%s:%d  model=%s  keys=%d"
+          % (args.host, args.port, DEFAULT_MODEL, len(keys) or len(API_KEYS)))
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 

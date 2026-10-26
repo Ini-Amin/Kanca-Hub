@@ -5,8 +5,7 @@
                              (keys.txt) + mint JWT (unless --no-mint)
   account list / rm <email>
   mint <email>|--all         refresh ZCode login token (OAuth flow, needs CDP Chrome)
-  persona on [models...]|off|show  abliteration persona (whitelist: only listed models get it)
-  models add <alias> <model> [--persona]   combo: virtual model -> real model (+persona)
+  models add <alias> <model>               combo: virtual model -> real model
   models list / rm <alias>
   quota [--live]             per-account quota (billing/balance) + local usage counters
   promo [check|claim]        list / claim promo "coupons" (billing/preview -> claim,
@@ -291,24 +290,11 @@ def cmd_remint(a):
         inject_9router()
 
 
-# ---------------- persona / combos ----------------
+# ---------------- combos ----------------
 def _cfg_toggle(fn):
     cfg = load_json(p("config.json"), {})
     write(p("config.json"), json.dumps(fn(cfg), indent=1))
 
-
-def cmd_persona(a):
-    if a.action == "show":
-        per = load_json(p("config.json"), {}).get("persona") or {}
-        sel = per.get("models") or []
-        print("enabled:", bool(per.get("enabled")))
-        print("models:", ", ".join(sel) if sel else "ALL")
-        print(read(p("persona.txt"))[:400])
-        return
-    on = a.action == "on"
-    sel = list(a.models) if on else (load_json(p("config.json"), {}).get("persona") or {}).get("models") or []
-    _cfg_toggle(lambda c: {**c, "persona": {"enabled": on, "models": sel}})
-    event("persona", "persona %s models=%s" % ("ON" if on else "OFF", ",".join(sel) or "ALL"))
 
 
 def cmd_models(a):
@@ -316,14 +302,14 @@ def cmd_models(a):
     aliases = cfg.get("aliases") or {}
     if a.action == "add":
         chain = [x.strip() for x in a.model.split(",") if x.strip()]
-        aliases[a.alias] = {"models": chain, "persona": bool(a.persona)}
-        event("models", "alias %s -> %s persona=%s" % (a.alias, "->".join(chain), bool(a.persona)))
+        aliases[a.alias] = {"models": chain}
+        event("models", "alias %s -> %s" % (a.alias, "->".join(chain)))
     elif a.action == "rm":
         aliases.pop(a.alias, None)
     else:
         for k, v in aliases.items():
             chain = v.get("models") or ([v.get("model")] if v.get("model") else [])
-            print("%-24s -> %-30s persona=%s" % (k, "->".join(chain), v.get("persona")))
+            print("%-24s -> %-30s" % (k, "->".join(chain)))
         return
     _cfg_toggle(lambda c: {**c, "aliases": aliases})
 
@@ -773,13 +759,9 @@ def main():
     s.add_argument("--force", action="store_true", help="Force re-mint regardless of JWT age")
 
 
-    s = sub.add_parser("persona")
-    s.add_argument("action", choices=["on", "off", "show"])
-    s.add_argument("models", nargs="*",
-                   help="whitelist: only these models/aliases get the persona (empty = ALL)")
 
     s = sub.add_parser("models"); s.add_argument("action", choices=["add", "list", "rm"])
-    s.add_argument("alias", nargs="?"); s.add_argument("model", nargs="?"); s.add_argument("--persona", action="store_true")
+    s.add_argument("alias", nargs="?"); s.add_argument("model", nargs="?")
 
     s = sub.add_parser("quota"); s.add_argument("--live", action="store_true")
 
@@ -807,8 +789,6 @@ def main():
         cmd_mint(a)
     elif a.cmd == "remint":
         cmd_remint(a)
-    elif a.cmd == "persona":
-        cmd_persona(a)
     elif a.cmd == "models":
         cmd_models(a)
     elif a.cmd == "quota":
