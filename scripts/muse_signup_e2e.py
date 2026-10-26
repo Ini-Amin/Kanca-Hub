@@ -113,9 +113,10 @@ def run_muse_signup(headless: bool = True, password: str = "", local_part: str =
                 page.goto("https://muse.ai/?aymh_complete=1", timeout=40000)
         else:
             print("[3/6] Navigating to https://muse.ai/?aymh_complete=1...")
+            page.goto("https://muse.ai/?aymh_complete=1", timeout=40000)
 
         # Enter email
-        inp = page.wait_for_selector('input[placeholder*="Mobile number or email"]', timeout=20000)
+        inp = page.wait_for_selector('input[placeholder*="Mobile number or email"]', timeout=60000, state="attached")
         inp.fill(email)
         time.sleep(0.5)
 
@@ -185,16 +186,21 @@ def run_muse_signup(headless: bool = True, password: str = "", local_part: str =
 
         confirm_btn = page.wait_for_selector('button[data-slot="button"]:has-text("Confirm")', timeout=5000)
         confirm_btn.click()
-
+        time.sleep(5)
         print("      Waiting for session cookies from Meta / Muse...")
         end_wait = time.time() + 120.0
+        last_print = 0
         while time.time() < end_wait:
             cookies_now = page.context.cookies()
             if any(c["name"] == "hatch_sess" for c in cookies_now):
                 break
             if "dashboard" in page.url or "home" in page.url:
                 break
-            time.sleep(1.0)
+            now = time.time()
+            if now - last_print >= 10:
+                print(f"      ...waiting ({int(now - (end_wait - 120))}s) url={page.url} cookies={[c['name'] for c in cookies_now]}")
+                last_print = now
+            time.sleep(2.0)
 
         # Extract cookies
         all_cookies = page.context.cookies()
