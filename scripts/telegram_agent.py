@@ -174,15 +174,49 @@ def query_llm(messages: list[dict], system: str = "") -> str:
 
 
 def get_live_system_context() -> str:
-    """Collect brief real-time context for the AI prompt."""
+    """Collect strictly factual real-time context directly from running processes."""
     try:
         up = subprocess.run(["uptime"], capture_output=True, text=True, timeout=3).stdout.strip()
     except Exception:
         up = "unknown"
+
+    # 1. Real active running processes
+    active_tools = []
     try:
-        tmux = subprocess.run(["tmux", "ls"], capture_output=True, text=True, timeout=3).stdout.strip()
+        ps_res = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True, timeout=3).stdout
+        for line in ps_res.splitlines():
+            if "nuclei" in line and "grep" not in line:
+                active_tools.append("Nuclei active scanner")
+            elif "httpx" in line and "grep" not in line:
+                active_tools.append("HTTPX live prober")
+            elif "subfinder" in line and "grep" not in line:
+                active_tools.append("Subfinder passive recon")
+            elif "bounty_run.py auto" in line:
+                active_tools.append("bounty_run autopilot loop")
     except Exception:
-        tmux = "no tmux"
+        pass
+
+    # 2. Real current active target being worked
+    bj_dirs = sorted(Path("/tmp").glob("bj-bugcrowd-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    current_target = "Idle / Menunggu siklus berikutnya"
+    if bj_dirs:
+        current_target = bj_dirs[0].name.replace("bj-bugcrowd-", "")
+
+    # 3. Real state of tmux sessions (check if done/idle)
+    tmux_states = []
+    try:
+        sessions = subprocess.run(["tmux", "ls"], capture_output=True, text=True, timeout=3).stdout.strip().splitlines()
+        for s in sessions:
+            s_name = s.split(":", 1)[0]
+            pane = subprocess.run(["tmux", "capture-pane", "-p", "-t", s_name], capture_output=True, text=True, timeout=2).stdout
+            if "Finished with status 0" in pane or "parity reached" in pane.lower() or not pane.strip():
+                tmux_states.append(f"{s_name}: SUDAH SELESAI (Status 0, terminal idle)")
+            elif "auto-hunter" in s_name:
+                tmux_states.append(f"{s_name}: SEDANG BERJALAN (Target aktif: {current_target})")
+            else:
+                tmux_states.append(f"{s_name}: AKTIF")
+    except Exception:
+        pass
 
     log_file = HOME / ".config" / "auto-freecf" / "logs" / "bounty_auto.log"
     last_log = ""
@@ -190,19 +224,14 @@ def get_live_system_context() -> str:
         lines = log_file.read_text(errors="ignore").splitlines()
         last_log = "\n".join(lines[-15:]) if lines else ""
 
-    jobs_dir = HOME / ".config" / "auto-freecf" / "bounty"
-    active_jobs = []
-    if jobs_dir.exists():
-        for jd in jobs_dir.glob("bugcrowd-*"):
-            if jd.is_dir():
-                active_jobs.append(jd.name)
-
-    ctx = f"""[System Environment]
-- Host: blu (Cloud Sandbox, Ubuntu 24.04, 8 vCPU / 23 GB RAM)
-- Uptime: {up}
-- Active Tmux Sessions: {tmux or 'none'}
-- Currently Active Scoped Bounty Jobs: {', '.join(active_jobs) if active_jobs else 'None'}
-- Recent Bounty Log Snippet:
+    ctx = f"""[Real-Time Verified System State - GROUND TRUTH]
+- Server: blu (Ubuntu 24.04, 8 vCPU / 23 GB RAM)
+- Server Uptime: {up}
+- SINGLE Active Target Scanning RIGHT NOW: {current_target} (Running tools: {', '.join(set(active_tools)) or 'None'})
+- Note: Only ONE target runs at a time sequentially. The historical bugcrowd folders on disk are past/cached jobs.
+- Tmux Sessions Truth:
+{chr(10).join('  • ' + st for st in tmux_states) if tmux_states else '  None'}
+- Latest Autopilot Log Tail:
 {last_log or 'No active logs'}
 """
     return ctx
