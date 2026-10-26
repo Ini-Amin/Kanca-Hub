@@ -97,7 +97,9 @@ def execute_codebuddy(model: str, prompt: str, timeout: int = 120) -> str:
     # Map request model name
     m_lower = model.lower()
     cb_model = "deepseek-v4.1-flash"
-    if "glm-5.3" in m_lower:
+    if "hy3" in m_lower or "hunyuan" in m_lower:
+        cb_model = "hy3"
+    elif "glm-5.3" in m_lower:
         cb_model = "glm-5.3"
     elif "glm-5.2" in m_lower:
         cb_model = "glm-5.2"
@@ -107,7 +109,8 @@ def execute_codebuddy(model: str, prompt: str, timeout: int = 120) -> str:
         cb_model = "gpt-5.6-sol"
     elif "kimi" in m_lower:
         cb_model = "kimi-k3"
-
+    elif "1017" in m_lower or "deepseek" in m_lower:
+        cb_model = "deepseek-v4.1-flash"
     for idx, token in enumerate(tokens):
         env = dict(os.environ)
         env["CODEBUDDY_AUTH_TOKEN"] = token
@@ -165,6 +168,7 @@ class CodeBuddyBridgeHandler(BaseHTTPRequestHandler):
                 "tokens_loaded": len(tokens),
                 "available_models": [
                     "deepseek-v4.1-flash",
+                    "hy3",
                     "glm-5.3",
                     "glm-5.2",
                     "gpt-6-astra",
@@ -177,12 +181,16 @@ class CodeBuddyBridgeHandler(BaseHTTPRequestHandler):
         if self.path in ("/v1/models", "/models"):
             models_list = [
                 {"id": "CodeBuddy/deepseek-v4.1-flash", "object": "model", "owned_by": "tencent-codebuddy"},
+                {"id": "CodeBuddy/deepseek-1017", "object": "model", "owned_by": "tencent-codebuddy"},
+                {"id": "CodeBuddy/hy3", "object": "model", "owned_by": "tencent-codebuddy"},
                 {"id": "CodeBuddy/glm-5.3", "object": "model", "owned_by": "tencent-codebuddy"},
                 {"id": "CodeBuddy/glm-5.2", "object": "model", "owned_by": "tencent-codebuddy"},
                 {"id": "CodeBuddy/gpt-6-astra", "object": "model", "owned_by": "tencent-codebuddy"},
                 {"id": "CodeBuddy/gpt-5.6-sol", "object": "model", "owned_by": "tencent-codebuddy"},
                 {"id": "CodeBuddy/kimi-k3", "object": "model", "owned_by": "tencent-codebuddy"},
                 {"id": "deepseek-v4.1-flash", "object": "model", "owned_by": "tencent-codebuddy"},
+                {"id": "deepseek-1017", "object": "model", "owned_by": "tencent-codebuddy"},
+                {"id": "hy3", "object": "model", "owned_by": "tencent-codebuddy"},
                 {"id": "glm-5.3", "object": "model", "owned_by": "tencent-codebuddy"},
             ]
             self._send_json(200, {"object": "list", "data": models_list})
