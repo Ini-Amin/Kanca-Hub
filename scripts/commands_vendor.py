@@ -515,6 +515,17 @@ def cmd_opencode(a) -> int:
     Measured on this box 2026-10-22: a direct POST returns 403 in 0.65s, while
     `opencode run -m <free model>` returns 200 with a real tool call. The CLI is
     therefore the only supported path, which is what `zen` wraps.
+
+    QUOTA, ALSO MEASURED 2026-10-22 (do not repeat the old wrong claim)
+    -------------------------------------------------------------------
+    Once the anonymous quota is spent the CLI answers 429 FreeUsageLimitError
+    with `retry-after` around 1000-22000s. That 429 is NOT per-IP: a fresh
+    Windscribe exit (135.136.3.111) hit it on its very first request, and so did
+    a second exit, and so did two different working directories (distinct
+    x-opencode-project hashes). It also ignores the model. What the key actually
+    is remains unknown; the remaining candidates are the project hash combined
+    with a per-install counter, or an anonymous identity derived from the
+    install. Do not build an IP-rotation farm on this until that is settled.
     """
     import kancahub
 
@@ -571,10 +582,15 @@ def cmd_opencode(a) -> int:
         if not prompt:
             print(kancahub.col("red", "✗ --prompt is required for `opencode run`"))
             return 1
-        # Same egress auto-wire as `thk` and `abliteration`. OpenCode's 403 is a
-        # request-shape refusal that no proxy can clear, but its 429 IS per-IP,
-        # and that is the failure the free tier actually hits. Wiring an exit
-        # costs one probe and buys the case rotation can fix.
+        # Same egress auto-wire as `thk` and `abliteration`, but measured
+        # 2026-10-22: rotating the exit does NOT clear the free-tier 429.
+        # Windscribe US-East (135.136.3.111) and US-West, both fresh exits,
+        # returned FreeUsageLimitError on the first request, and two different
+        # working directories (different x-opencode-project hashes) behaved the
+        # same. The 403 FreeTierError is a request-shape check; the 429 is keyed
+        # to something machine-scoped that survives IP and project changes.
+        # Keeping the egress wiring because a 405/timeout from a bad relay is
+        # still worth avoiding, not because rotation buys quota.
         env = None
         try:
             mode_p = getattr(a, "proxy", None) or kancahub.PROXY_AUTO
@@ -613,30 +629,54 @@ def cmd_opencode(a) -> int:
         job = getattr(a, "job", None) or "ping"
         return kancahub.run([py, str(tool), job])
 
+    if sub == "captcha":
+        tool = kancahub.AUTO_FREECF / "scripts" / "hcaptcha_dataset.py"
+        if not tool.exists():
+            print(kancahub.col("red", f"✗ hcaptcha_dataset.py not found at {tool}"))
+            return 1
+        py = kancahub.pick_python(camoufox=True)
+        argv = [py, str(tool), "capture"]
+        if getattr(a, "continuous", False):
+            argv.append("--continuous")
+        if getattr(a, "keep_open", None):
+            argv += ["--keep-open", str(a.keep_open)]
+        return kancahub.run(argv)
+
+    if sub == "farm":
+        tool = kancahub.AUTO_FREECF / "scripts" / "opencode_farm.py"
+        if not tool.exists():
+            print(kancahub.col("red", f"✗ opencode_farm.py not found at {tool}"))
+            return 1
+        py = kancahub.pick_python(camoufox=True)
+        argv = [py, str(tool), "run"]
+        if getattr(a, "headed", False):
+            argv.append("--headed")
+        if getattr(a, "count", None):
+            argv += ["--count", str(a.count)]
+        return kancahub.run(argv)
+
+    if sub == "login":
+        tool = kancahub.AUTO_FREECF / "scripts" / "opencode_auth.py"
+        if not tool.exists():
+            print(kancahub.col("red", f"✗ opencode_auth.py not found at {tool}"))
+            return 1
+        py = kancahub.pick_python()
+        return kancahub.run([py, str(tool), "device"])
+
+    if sub == "bridge":
+        tool = kancahub.AUTO_FREECF / "scripts" / "opencode_bridge.py"
+        if not tool.exists():
+            print(kancahub.col("red", f"✗ opencode_bridge.py not found at {tool}"))
+            return 1
+        py = kancahub.pick_python()
+        port = getattr(a, "port", None) or 8791
+        return kancahub.run([py, str(tool), "serve", "--port", str(port)])
+
     if sub in ("signup", "key", "inject"):
         # The account flow the operator actually uses:
         #   https://opencode.ai/console/signup  -> create account
         #   https://opencode.ai/console/account -> name an API key, copy it
         #   then paste it into 9router as an opencode provider connection.
-        #
-        # `signup` opens the page in the same Camoufox profile the other farms
-        # use, so the login survives across runs. `key` reopens the account page
-        # to mint/copy another key. `inject` writes a key into 9router's DB.
-        if sub == "login":
-            # Device-flow login: prints a verification URL, waits for approval,
-            # then writes the account row the CLI reads. One run == one login.
-            tool = kancahub.AUTO_FREECF / "scripts" / "opencode_login.py"
-            if not tool.exists():
-                print(kancahub.col("red", f"✗ opencode_login.py not found at {tool}"))
-                return 1
-            py = kancahub.pick_python()
-            argv = [py, str(tool)]
-            if getattr(a, "email", None):
-                argv += ["--email", a.email]
-            if getattr(a, "no_store", False):
-                argv.append("--no-store")
-            return kancahub.run(argv)
-
         if sub == "signup":
             url = "https://opencode.ai/console/signup"
         elif sub == "key":

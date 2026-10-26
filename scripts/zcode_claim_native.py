@@ -2,7 +2,7 @@
 """
 scripts/zcode_claim_native.py — claim the ZCode Start Plan WITHOUT the desktop app.
 
-Reverse-engineered from ZCode 3.14.5 (app.asar/out/host/index.js):
+Reverse-engineered from ZCode 3.16.3 (app.asar/out/host/index.js):
 
   1. GET  /api/v1/client/configs?app_version=<v>&platform=<os>-<arch>
           -> data.configs.captcha {enabled, region, prefix, sceneId, skip_model_request}
@@ -33,7 +33,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 ZCODE = "https://zcode.z.ai"
-APP_VERSION = "3.14.5"
+APP_VERSION = "3.16.3"
 PLAN_ID = "zcode-v3-start-plan"
 CFG_URL = f"{ZCODE}/api/v1/client/configs?app_version={APP_VERSION}&platform=linux-x64"
 CLAIM_URL = f"{ZCODE}/api/v1/zcode-plan/billing/claim?app_version={APP_VERSION}"

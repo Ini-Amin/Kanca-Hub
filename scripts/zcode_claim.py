@@ -36,7 +36,7 @@ def claim(jwt, plan_id, captcha_param, region="sgp"):
     H = {"Authorization": "Bearer " + jwt, "Content-Type": "application/json",
          "X-Aliyun-Captcha-Verify-Param": captcha_param,
          "X-Aliyun-Captcha-Verify-Region": region,
-         "X-ZCode-App-Version": "3.14.5", "X-Platform": "linux-x64"}
+         "X-ZCode-App-Version": "3.16.3", "X-Platform": "linux-x64"}
     req = urllib.request.Request("https://zcode.z.ai/api/v1/zcode-plan/billing/claim",
                                  data=json.dumps({"plan_id": plan_id}).encode(),
                                  headers=H, method="POST")

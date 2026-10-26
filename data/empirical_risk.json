@@ -1,0 +1,2530 @@
+{
+ "generated": "2026-10-23",
+ "base_rate": 0.004474,
+ "vendors": {
+  "synacor": {
+   "n": 94,
+   "kev": 18,
+   "rate": 0.19149,
+   "hazard": 42.8
+  },
+  "papercut": {
+   "n": 33,
+   "kev": 5,
+   "rate": 0.15152,
+   "hazard": 33.87
+  },
+  "connectwise": {
+   "n": 39,
+   "kev": 5,
+   "rate": 0.12821,
+   "hazard": 28.66
+  },
+  "roundcube": {
+   "n": 93,
+   "kev": 11,
+   "rate": 0.11828,
+   "hazard": 26.44
+  },
+  "sitecore": {
+   "n": 35,
+   "kev": 4,
+   "rate": 0.11429,
+   "hazard": 25.54
+  },
+  "rarlab": {
+   "n": 41,
+   "kev": 4,
+   "rate": 0.09756,
+   "hazard": 21.81
+  },
+  "sonicwall": {
+   "n": 209,
+   "kev": 19,
+   "rate": 0.09091,
+   "hazard": 20.32
+  },
+  "beyondtrust": {
+   "n": 35,
+   "kev": 3,
+   "rate": 0.08571,
+   "hazard": 19.16
+  },
+  "kentico": {
+   "n": 53,
+   "kev": 4,
+   "rate": 0.07547,
+   "hazard": 16.87
+  },
+  "sysaid": {
+   "n": 40,
+   "kev": 3,
+   "rate": 0.075,
+   "hazard": 16.76
+  },
+  "citrix": {
+   "n": 365,
+   "kev": 27,
+   "rate": 0.07397,
+   "hazard": 16.53
+  },
+  "exim": {
+   "n": 68,
+   "kev": 5,
+   "rate": 0.07353,
+   "hazard": 16.43
+  },
+  "ivanti": {
+   "n": 501,
+   "kev": 36,
+   "rate": 0.07186,
+   "hazard": 16.06
+  },
+  "whatsapp": {
+   "n": 44,
+   "kev": 3,
+   "rate": 0.06818,
+   "hazard": 15.24
+  },
+  "laravel": {
+   "n": 30,
+   "kev": 2,
+   "rate": 0.06667,
+   "hazard": 14.9
+  },
+  "commvault": {
+   "n": 30,
+   "kev": 2,
+   "rate": 0.06667,
+   "hazard": 14.9
+  },
+  "minio": {
+   "n": 31,
+   "kev": 2,
+   "rate": 0.06452,
+   "hazard": 14.42
+  },
+  "metabase": {
+   "n": 32,
+   "kev": 2,
+   "rate": 0.0625,
+   "hazard": 13.97
+  },
+  "sangoma": {
+   "n": 68,
+   "kev": 4,
+   "rate": 0.05882,
+   "hazard": 13.15
+  },
+  "jenkins project": {
+   "n": 34,
+   "kev": 2,
+   "rate": 0.05882,
+   "hazard": 13.15
+  },
+  "smartertools": {
+   "n": 52,
+   "kev": 3,
+   "rate": 0.05769,
+   "hazard": 12.9
+  },
+  "apache software foundation": {
+   "n": 279,
+   "kev": 16,
+   "rate": 0.05735,
+   "hazard": 12.82
+  },
+  "litellm": {
+   "n": 35,
+   "kev": 2,
+   "rate": 0.05714,
+   "hazard": 12.77
+  },
+  "kaseya": {
+   "n": 35,
+   "kev": 2,
+   "rate": 0.05714,
+   "hazard": 12.77
+  },
+  "veeam": {
+   "n": 71,
+   "kev": 4,
+   "rate": 0.05634,
+   "hazard": 12.59
+  },
+  "hikvision": {
+   "n": 36,
+   "kev": 2,
+   "rate": 0.05556,
+   "hazard": 12.42
+  },
+  "arm": {
+   "n": 144,
+   "kev": 8,
+   "rate": 0.05556,
+   "hazard": 12.42
+  },
+  "saltstack": {
+   "n": 55,
+   "kev": 3,
+   "rate": 0.05455,
+   "hazard": 12.19
+  },
+  "mikrotik": {
+   "n": 93,
+   "kev": 5,
+   "rate": 0.05376,
+   "hazard": 12.02
+  },
+  "mitel": {
+   "n": 132,
+   "kev": 7,
+   "rate": 0.05303,
+   "hazard": 11.85
+  },
+  "jfrog": {
+   "n": 76,
+   "kev": 4,
+   "rate": 0.05263,
+   "hazard": 11.76
+  },
+  "eyesofnetwork": {
+   "n": 40,
+   "kev": 2,
+   "rate": 0.05,
+   "hazard": 11.18
+  },
+  "sophos": {
+   "n": 142,
+   "kev": 7,
+   "rate": 0.0493,
+   "hazard": 11.02
+  },
+  "3ds": {
+   "n": 61,
+   "kev": 3,
+   "rate": 0.04918,
+   "hazard": 10.99
+  },
+  "paessler": {
+   "n": 41,
+   "kev": 2,
+   "rate": 0.04878,
+   "hazard": 10.9
+  },
+  "litespeedtech": {
+   "n": 41,
+   "kev": 2,
+   "rate": 0.04878,
+   "hazard": 10.9
+  },
+  "paloaltonetworks": {
+   "n": 320,
+   "kev": 14,
+   "rate": 0.04375,
+   "hazard": 9.78
+  },
+  "arista": {
+   "n": 73,
+   "kev": 3,
+   "rate": 0.0411,
+   "hazard": 9.19
+  },
+  "langflow": {
+   "n": 149,
+   "kev": 6,
+   "rate": 0.04027,
+   "hazard": 9.0
+  },
+  "realtek": {
+   "n": 50,
+   "kev": 2,
+   "rate": 0.04,
+   "hazard": 8.94
+  },
+  "palo alto networks": {
+   "n": 50,
+   "kev": 2,
+   "rate": 0.04,
+   "hazard": 8.94
+  },
+  "dnnsoftware": {
+   "n": 76,
+   "kev": 3,
+   "rate": 0.03947,
+   "hazard": 8.82
+  },
+  "zyxel": {
+   "n": 309,
+   "kev": 12,
+   "rate": 0.03883,
+   "hazard": 8.68
+  },
+  "vbulletin": {
+   "n": 52,
+   "kev": 2,
+   "rate": 0.03846,
+   "hazard": 8.6
+  },
+  "draytek": {
+   "n": 134,
+   "kev": 5,
+   "rate": 0.03731,
+   "hazard": 8.34
+  },
+  "vmware": {
+   "n": 937,
+   "kev": 33,
+   "rate": 0.03522,
+   "hazard": 7.87
+  },
+  "checkpoint": {
+   "n": 143,
+   "kev": 5,
+   "rate": 0.03497,
+   "hazard": 7.82
+  },
+  "dahuasecurity": {
+   "n": 58,
+   "kev": 2,
+   "rate": 0.03448,
+   "hazard": 7.71
+  },
+  "ui": {
+   "n": 117,
+   "kev": 4,
+   "rate": 0.03419,
+   "hazard": 7.64
+  },
+  "ptc": {
+   "n": 30,
+   "kev": 1,
+   "rate": 0.03333,
+   "hazard": 7.45
+  },
+  "solarwinds": {
+   "n": 335,
+   "kev": 11,
+   "rate": 0.03284,
+   "hazard": 7.34
+  },
+  "trend micro": {
+   "n": 154,
+   "kev": 5,
+   "rate": 0.03247,
+   "hazard": 7.26
+  },
+  "x-stream": {
+   "n": 31,
+   "kev": 1,
+   "rate": 0.03226,
+   "hazard": 7.21
+  },
+  "webkitgtk": {
+   "n": 31,
+   "kev": 1,
+   "rate": 0.03226,
+   "hazard": 7.21
+  },
+  "accellion": {
+   "n": 126,
+   "kev": 4,
+   "rate": 0.03175,
+   "hazard": 7.1
+  },
+  "watchguard": {
+   "n": 127,
+   "kev": 4,
+   "rate": 0.0315,
+   "hazard": 7.04
+  },
+  "notepad-plus-plus": {
+   "n": 32,
+   "kev": 1,
+   "rate": 0.03125,
+   "hazard": 6.98
+  },
+  "7-zip": {
+   "n": 33,
+   "kev": 1,
+   "rate": 0.0303,
+   "hazard": 6.77
+  },
+  "atlassian": {
+   "n": 472,
+   "kev": 14,
+   "rate": 0.02966,
+   "hazard": 6.63
+  },
+  "onlyoffice": {
+   "n": 34,
+   "kev": 1,
+   "rate": 0.02941,
+   "hazard": 6.57
+  }
+ },
+ "cwes": {
+  "CWE-843": {
+   "n": 809,
+   "kev": 41,
+   "rate": 0.05068,
+   "hazard": 11.33
+  },
+  "CWE-917": {
+   "n": 191,
+   "kev": 8,
+   "rate": 0.04188,
+   "hazard": 9.36
+  },
+  "CWE-36": {
+   "n": 100,
+   "kev": 4,
+   "rate": 0.04,
+   "hazard": 8.94
+  },
+  "CWE-288": {
+   "n": 542,
+   "kev": 14,
+   "rate": 0.02583,
+   "hazard": 5.77
+  },
+  "CWE-749": {
+   "n": 163,
+   "kev": 4,
+   "rate": 0.02454,
+   "hazard": 5.48
+  },
+  "CWE-502": {
+   "n": 3221,
+   "kev": 71,
+   "rate": 0.02204,
+   "hazard": 4.93
+  },
+  "CWE-494": {
+   "n": 206,
+   "kev": 4,
+   "rate": 0.01942,
+   "hazard": 4.34
+  },
+  "CWE-78": {
+   "n": 6350,
+   "kev": 115,
+   "rate": 0.01811,
+   "hazard": 4.05
+  },
+  "CWE-693": {
+   "n": 745,
+   "kev": 13,
+   "rate": 0.01745,
+   "hazard": 3.9
+  },
+  "CWE-669": {
+   "n": 116,
+   "kev": 2,
+   "rate": 0.01724,
+   "hazard": 3.85
+  },
+  "CWE-822": {
+   "n": 237,
+   "kev": 4,
+   "rate": 0.01688,
+   "hazard": 3.77
+  },
+  "CWE-305": {
+   "n": 119,
+   "kev": 2,
+   "rate": 0.01681,
+   "hazard": 3.76
+  },
+  "CWE-706": {
+   "n": 131,
+   "kev": 2,
+   "rate": 0.01527,
+   "hazard": 3.41
+  },
+  "CWE-306": {
+   "n": 2947,
+   "kev": 44,
+   "rate": 0.01493,
+   "hazard": 3.34
+  },
+  "CWE-552": {
+   "n": 448,
+   "kev": 6,
+   "rate": 0.01339,
+   "hazard": 2.99
+  },
+  "CWE-94": {
+   "n": 5597,
+   "kev": 73,
+   "rate": 0.01304,
+   "hazard": 2.92
+  },
+  "CWE-23": {
+   "n": 310,
+   "kev": 4,
+   "rate": 0.0129,
+   "hazard": 2.88
+  },
+  "CWE-59": {
+   "n": 1726,
+   "kev": 22,
+   "rate": 0.01275,
+   "hazard": 2.85
+  },
+  "CWE-697": {
+   "n": 160,
+   "kev": 2,
+   "rate": 0.0125,
+   "hazard": 2.79
+  },
+  "CWE-77": {
+   "n": 3200,
+   "kev": 39,
+   "rate": 0.01219,
+   "hazard": 2.72
+  },
+  "CWE-787": {
+   "n": 13751,
+   "kev": 160,
+   "rate": 0.01164,
+   "hazard": 2.6
+  },
+  "CWE-416": {
+   "n": 8615,
+   "kev": 100,
+   "rate": 0.01161,
+   "hazard": 2.59
+  },
+  "CWE-116": {
+   "n": 373,
+   "kev": 4,
+   "rate": 0.01072,
+   "hazard": 2.4
+  },
+  "CWE-1188": {
+   "n": 281,
+   "kev": 3,
+   "rate": 0.01068,
+   "hazard": 2.39
+  },
+  "CWE-703": {
+   "n": 103,
+   "kev": 1,
+   "rate": 0.00971,
+   "hazard": 2.17
+  },
+  "CWE-444": {
+   "n": 412,
+   "kev": 4,
+   "rate": 0.00971,
+   "hazard": 2.17
+  },
+  "CWE-134": {
+   "n": 415,
+   "kev": 4,
+   "rate": 0.00964,
+   "hazard": 2.15
+  },
+  "CWE-610": {
+   "n": 216,
+   "kev": 2,
+   "rate": 0.00926,
+   "hazard": 2.07
+  },
+  "CWE-88": {
+   "n": 433,
+   "kev": 4,
+   "rate": 0.00924,
+   "hazard": 2.06
+  },
+  "CWE-470": {
+   "n": 109,
+   "kev": 1,
+   "rate": 0.00917,
+   "hazard": 2.05
+  },
+  "CWE-665": {
+   "n": 330,
+   "kev": 3,
+   "rate": 0.00909,
+   "hazard": 2.03
+  },
+  "CWE-287": {
+   "n": 4738,
+   "kev": 43,
+   "rate": 0.00908,
+   "hazard": 2.03
+  },
+  "CWE-326": {
+   "n": 441,
+   "kev": 4,
+   "rate": 0.00907,
+   "hazard": 2.03
+  },
+  "CWE-22": {
+   "n": 10504,
+   "kev": 95,
+   "rate": 0.00904,
+   "hazard": 2.02
+  },
+  "CWE-61": {
+   "n": 111,
+   "kev": 1,
+   "rate": 0.00901,
+   "hazard": 2.01
+  },
+  "CWE-404": {
+   "n": 685,
+   "kev": 6,
+   "rate": 0.00876,
+   "hazard": 1.96
+  },
+  "CWE-425": {
+   "n": 229,
+   "kev": 2,
+   "rate": 0.00873,
+   "hazard": 1.95
+  },
+  "CWE-754": {
+   "n": 592,
+   "kev": 5,
+   "rate": 0.00845,
+   "hazard": 1.89
+  },
+  "CWE-347": {
+   "n": 829,
+   "kev": 7,
+   "rate": 0.00844,
+   "hazard": 1.89
+  },
+  "CWE-178": {
+   "n": 119,
+   "kev": 1,
+   "rate": 0.0084,
+   "hazard": 1.88
+  },
+  "CWE-290": {
+   "n": 749,
+   "kev": 6,
+   "rate": 0.00801,
+   "hazard": 1.79
+  },
+  "CWE-1287": {
+   "n": 129,
+   "kev": 1,
+   "rate": 0.00775,
+   "hazard": 1.73
+  },
+  "CWE-829": {
+   "n": 266,
+   "kev": 2,
+   "rate": 0.00752,
+   "hazard": 1.68
+  },
+  "CWE-436": {
+   "n": 135,
+   "kev": 1,
+   "rate": 0.00741,
+   "hazard": 1.66
+  },
+  "CWE-755": {
+   "n": 543,
+   "kev": 4,
+   "rate": 0.00737,
+   "hazard": 1.65
+  },
+  "CWE-91": {
+   "n": 136,
+   "kev": 1,
+   "rate": 0.00735,
+   "hazard": 1.64
+  },
+  "CWE-824": {
+   "n": 275,
+   "kev": 2,
+   "rate": 0.00727,
+   "hazard": 1.63
+  },
+  "CWE-259": {
+   "n": 139,
+   "kev": 1,
+   "rate": 0.00719,
+   "hazard": 1.61
+  },
+  "CWE-472": {
+   "n": 141,
+   "kev": 1,
+   "rate": 0.00709,
+   "hazard": 1.59
+  },
+  "CWE-670": {
+   "n": 144,
+   "kev": 1,
+   "rate": 0.00694,
+   "hazard": 1.55
+  },
+  "CWE-441": {
+   "n": 148,
+   "kev": 1,
+   "rate": 0.00676,
+   "hazard": 1.51
+  },
+  "CWE-35": {
+   "n": 153,
+   "kev": 1,
+   "rate": 0.00654,
+   "hazard": 1.46
+  },
+  "CWE-798": {
+   "n": 1724,
+   "kev": 11,
+   "rate": 0.00638,
+   "hazard": 1.43
+  },
+  "CWE-1336": {
+   "n": 158,
+   "kev": 1,
+   "rate": 0.00633,
+   "hazard": 1.41
+  },
+  "CWE-367": {
+   "n": 791,
+   "kev": 5,
+   "rate": 0.00632,
+   "hazard": 1.41
+  },
+  "CWE-434": {
+   "n": 4007,
+   "kev": 25,
+   "rate": 0.00624,
+   "hazard": 1.39
+  },
+  "CWE-269": {
+   "n": 3445,
+   "kev": 21,
+   "rate": 0.0061,
+   "hazard": 1.36
+  },
+  "CWE-611": {
+   "n": 1314,
+   "kev": 8,
+   "rate": 0.00609,
+   "hazard": 1.36
+  },
+  "CWE-131": {
+   "n": 165,
+   "kev": 1,
+   "rate": 0.00606,
+   "hazard": 1.35
+  },
+  "CWE-73": {
+   "n": 505,
+   "kev": 3,
+   "rate": 0.00594,
+   "hazard": 1.33
+  }
+ },
+ "blind_spots": [
+  {
+   "id": "CVE-2009-20011",
+   "cvss40": 10.0,
+   "vendor": "ContentKeeper Technologies",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2010-10016",
+   "cvss40": 10.0,
+   "vendor": "BS.Player",
+   "cwe": "CWE-120"
+  },
+  {
+   "id": "CVE-2011-10011",
+   "cvss40": 10.0,
+   "vendor": "WeBid",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2011-10013",
+   "cvss40": 10.0,
+   "vendor": "Traq Project",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2011-10017",
+   "cvss40": 10.0,
+   "vendor": "Symmetrix Technologies",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2012-10025",
+   "cvss40": 10.0,
+   "vendor": "Advanced Custom Fields",
+   "cwe": "CWE-98"
+  },
+  {
+   "id": "CVE-2012-10026",
+   "cvss40": 10.0,
+   "vendor": "jkriddle",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2012-10035",
+   "cvss40": 10.0,
+   "vendor": "TurboSoft, Inc.",
+   "cwe": "CWE-120"
+  },
+  {
+   "id": "CVE-2012-10044",
+   "cvss40": 10.0,
+   "vendor": "MobileCartly",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2012-10047",
+   "cvss40": 10.0,
+   "vendor": "Cyclope-Series",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2012-10058",
+   "cvss40": 10.0,
+   "vendor": "RabidHamster",
+   "cwe": "CWE-121"
+  },
+  {
+   "id": "CVE-2013-10066",
+   "cvss40": 10.0,
+   "vendor": "Kordil",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2013-10070",
+   "cvss40": 10.0,
+   "vendor": "PHP-Charts",
+   "cwe": "CWE-95"
+  },
+  {
+   "id": "CVE-2014-125115",
+   "cvss40": 10.0,
+   "vendor": "Artica ST",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2014-125121",
+   "cvss40": 10.0,
+   "vendor": "Array Networks",
+   "cwe": "CWE-732"
+  },
+  {
+   "id": "CVE-2014-125123",
+   "cvss40": 10.0,
+   "vendor": "LXCenter",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2014-125124",
+   "cvss40": 10.0,
+   "vendor": "Artica ST",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2018-25118",
+   "cvss40": 10.0,
+   "vendor": "GeoVision Inc.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2023-7309",
+   "cvss40": 10.0,
+   "vendor": "Zhejiang Dahua Technology Co., Ltd.",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2024-0851",
+   "cvss40": 10.0,
+   "vendor": "Grup Arge Energy and Control Systems",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2024-12799",
+   "cvss40": 10.0,
+   "vendor": "OpenText",
+   "cwe": "CWE-522"
+  },
+  {
+   "id": "CVE-2024-13980",
+   "cvss40": 10.0,
+   "vendor": "H3C Group",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2024-13981",
+   "cvss40": 10.0,
+   "vendor": "Fujian Apex Software Co. Ltd.",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2024-13984",
+   "cvss40": 10.0,
+   "vendor": "Qi'anxin",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2024-13985",
+   "cvss40": 10.0,
+   "vendor": "Zhejiang Dahua Technology Co., Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2024-51501",
+   "cvss40": 10.0,
+   "vendor": "reactiveui",
+   "cwe": "CWE-93"
+  },
+  {
+   "id": "CVE-2024-6886",
+   "cvss40": 10.0,
+   "vendor": "Gitea",
+   "cwe": "CWE-79"
+  },
+  {
+   "id": "CVE-2024-8525",
+   "cvss40": 10.0,
+   "vendor": "Automated Logic, a Carrier company",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2024-9478",
+   "cvss40": 10.0,
+   "vendor": "upKeeper Solutions",
+   "cwe": "CWE-266"
+  },
+  {
+   "id": "CVE-2024-9479",
+   "cvss40": 10.0,
+   "vendor": "upKeeper Solutions",
+   "cwe": "CWE-266"
+  },
+  {
+   "id": "CVE-2025-10363",
+   "cvss40": 10.0,
+   "vendor": "Topal Solutions AG",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2025-12004",
+   "cvss40": 10.0,
+   "vendor": "The Wikimedia Foundation",
+   "cwe": "CWE-732"
+  },
+  {
+   "id": "CVE-2025-14988",
+   "cvss40": 10.0,
+   "vendor": "iba Systems",
+   "cwe": "CWE-732"
+  },
+  {
+   "id": "CVE-2025-15586",
+   "cvss40": 10.0,
+   "vendor": "OpenGamePanel",
+   "cwe": "CWE-287"
+  },
+  {
+   "id": "CVE-2025-1866",
+   "cvss40": 10.0,
+   "vendor": "warmcat",
+   "cwe": "CWE-119"
+  },
+  {
+   "id": "CVE-2025-1867",
+   "cvss40": 10.0,
+   "vendor": "ithewei",
+   "cwe": "CWE-444"
+  },
+  {
+   "id": "CVE-2025-2071",
+   "cvss40": 10.0,
+   "vendor": "FAST LTA",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-23202",
+   "cvss40": 10.0,
+   "vendor": "devycreates",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-3322",
+   "cvss40": 10.0,
+   "vendor": "B. Braun Melsungen AG",
+   "cwe": "CWE-917"
+  },
+  {
+   "id": "CVE-2025-34030",
+   "cvss40": 10.0,
+   "vendor": "sar2html",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34037",
+   "cvss40": 10.0,
+   "vendor": "Linksys",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34039",
+   "cvss40": 10.0,
+   "vendor": "Yonyou Co., Ltd.",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2025-34040",
+   "cvss40": 10.0,
+   "vendor": "Seeyon (Beijing Zhiyuan Internet Software Co., Ltd.)",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2025-34041",
+   "cvss40": 10.0,
+   "vendor": "Sangfor Technologies Co., Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34043",
+   "cvss40": 10.0,
+   "vendor": "Vacron",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-34046",
+   "cvss40": 10.0,
+   "vendor": "Shanghai Fanwei Network Technology",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2025-34054",
+   "cvss40": 10.0,
+   "vendor": "AVTECH",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34060",
+   "cvss40": 10.0,
+   "vendor": "Monero Project",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-34063",
+   "cvss40": 10.0,
+   "vendor": "One Identity",
+   "cwe": "CWE-290"
+  },
+  {
+   "id": "CVE-2025-34067",
+   "cvss40": 10.0,
+   "vendor": "Hikvision",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2025-34073",
+   "cvss40": 10.0,
+   "vendor": "Stamparm",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34077",
+   "cvss40": 10.0,
+   "vendor": "Genetech Solutions",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2025-34105",
+   "cvss40": 10.0,
+   "vendor": "Flexense",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-34112",
+   "cvss40": 10.0,
+   "vendor": "Riverbed Technology",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34153",
+   "cvss40": 10.0,
+   "vendor": "Hyland Software",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2025-34160",
+   "cvss40": 10.0,
+   "vendor": "Shanghai Aishu Information Technology Co., Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34163",
+   "cvss40": 10.0,
+   "vendor": "Qingdao Dongsheng Weiye Software Co., Ltd.",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2025-34300",
+   "cvss40": 10.0,
+   "vendor": "Sawtooth Software",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-47419",
+   "cvss40": 10.0,
+   "vendor": "Crestron",
+   "cwe": "CWE-319"
+  },
+  {
+   "id": "CVE-2025-5597",
+   "cvss40": 10.0,
+   "vendor": "WF Steuerungstechnik GmbH",
+   "cwe": "CWE-287"
+  },
+  {
+   "id": "CVE-2025-58367",
+   "cvss40": 10.0,
+   "vendor": "seperman",
+   "cwe": "CWE-915"
+  },
+  {
+   "id": "CVE-2025-69425",
+   "cvss40": 10.0,
+   "vendor": "RUCKUS Networks",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2025-69426",
+   "cvss40": 10.0,
+   "vendor": "RUCKUS Networks",
+   "cwe": "CWE-732"
+  },
+  {
+   "id": "CVE-2025-7503",
+   "cvss40": 10.0,
+   "vendor": "Shenzhen Liandian Communication Technology LTD",
+   "cwe": "CWE-798"
+  },
+  {
+   "id": "CVE-2025-9118",
+   "cvss40": 10.0,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2025-9265",
+   "cvss40": 10.0,
+   "vendor": "Kiloview",
+   "cwe": "CWE-287"
+  },
+  {
+   "id": "CVE-2025-9962",
+   "cvss40": 10.0,
+   "vendor": "Novakon",
+   "cwe": "CWE-120"
+  },
+  {
+   "id": "CVE-2026-0092",
+   "cvss40": 10.0,
+   "vendor": "google",
+   "cwe": "CWE-862"
+  },
+  {
+   "id": "CVE-2026-100103",
+   "cvss40": 10.0,
+   "vendor": "Perfoce",
+   "cwe": "CWE-1392"
+  },
+  {
+   "id": "CVE-2026-100382",
+   "cvss40": 10.0,
+   "vendor": "Wikimedia Foundation",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2026-10577",
+   "cvss40": 10.0,
+   "vendor": "Rockwell Auotmation",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2026-11429",
+   "cvss40": 10.0,
+   "vendor": "Altium",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-12260",
+   "cvss40": 10.0,
+   "vendor": "NetBoard CRM",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2026-18885",
+   "cvss40": 10.0,
+   "vendor": "ServiceNow",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-18886",
+   "cvss40": 10.0,
+   "vendor": "ServiceNow",
+   "cwe": "CWE-284"
+  },
+  {
+   "id": "CVE-2026-2031",
+   "cvss40": 10.0,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-862"
+  },
+  {
+   "id": "CVE-2026-24729",
+   "cvss40": 10.0,
+   "vendor": "Internet Information Co., Ltd",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2026-24800",
+   "cvss40": 10.0,
+   "vendor": "tildearrow",
+   "cwe": "CWE-120"
+  },
+  {
+   "id": "CVE-2026-24810",
+   "cvss40": 10.0,
+   "vendor": "rethinkdb",
+   "cwe": "CWE-120"
+  },
+  {
+   "id": "CVE-2026-24814",
+   "cvss40": 10.0,
+   "vendor": "swoole",
+   "cwe": "CWE-190"
+  },
+  {
+   "id": "CVE-2026-24815",
+   "cvss40": 10.0,
+   "vendor": "datavane",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2026-24816",
+   "cvss40": 10.0,
+   "vendor": "datavane",
+   "cwe": "CWE-835"
+  },
+  {
+   "id": "CVE-2026-24822",
+   "cvss40": 10.0,
+   "vendor": "ttttupup",
+   "cwe": "CWE-122"
+  },
+  {
+   "id": "CVE-2026-24823",
+   "cvss40": 10.0,
+   "vendor": "FASTSHIFT",
+   "cwe": "CWE-120"
+  },
+  {
+   "id": "CVE-2026-24826",
+   "cvss40": 10.0,
+   "vendor": "cadaver",
+   "cwe": "CWE-125"
+  },
+  {
+   "id": "CVE-2026-24871",
+   "cvss40": 10.0,
+   "vendor": "pilgrimage233",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-2731",
+   "cvss40": 10.0,
+   "vendor": "DynamicWeb",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-27604",
+   "cvss40": 10.0,
+   "vendor": "FOSSBilling",
+   "cwe": "CWE-200"
+  },
+  {
+   "id": "CVE-2026-28353",
+   "cvss40": 10.0,
+   "vendor": "aquasecurity",
+   "cwe": "CWE-506"
+  },
+  {
+   "id": "CVE-2026-3325",
+   "cvss40": 10.0,
+   "vendor": "CRM Sistemas de Fidelizaci\u00f3n",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2026-33591",
+   "cvss40": 10.0,
+   "vendor": "Tranquil IT Systems",
+   "cwe": "CWE-288"
+  },
+  {
+   "id": "CVE-2026-42160",
+   "cvss40": 10.0,
+   "vendor": "sovity",
+   "cwe": "CWE-602"
+  },
+  {
+   "id": "CVE-2026-42287",
+   "cvss40": 10.0,
+   "vendor": "emlog",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2026-42996",
+   "cvss40": 10.0,
+   "vendor": "JS8Call",
+   "cwe": "CWE-121"
+  },
+  {
+   "id": "CVE-2026-4606",
+   "cvss40": 10.0,
+   "vendor": "GeoVision",
+   "cwe": "CWE-250"
+  },
+  {
+   "id": "CVE-2026-46752",
+   "cvss40": 10.0,
+   "vendor": "Apache Software Foundation",
+   "cwe": "CWE-122"
+  },
+  {
+   "id": "CVE-2026-4745",
+   "cvss40": 10.0,
+   "vendor": "dendibakh",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-4746",
+   "cvss40": 10.0,
+   "vendor": "timeplus-io",
+   "cwe": "CWE-787"
+  },
+  {
+   "id": "CVE-2026-55393",
+   "cvss40": 10.0,
+   "vendor": "Teledyne FLIR",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-61424",
+   "cvss40": 10.0,
+   "vendor": "dj-extensions.com",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2026-61900",
+   "cvss40": 10.0,
+   "vendor": "dj-extensions.com",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2026-6213",
+   "cvss40": 10.0,
+   "vendor": "Remote Spark (https://www.remotespark.com/)",
+   "cwe": "CWE-290"
+  },
+  {
+   "id": "CVE-2026-64633",
+   "cvss40": 10.0,
+   "vendor": "Veeam",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-65880",
+   "cvss40": 10.0,
+   "vendor": "balbooa.com",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-65956",
+   "cvss40": 10.0,
+   "vendor": "1Panel-dev",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2026-66915",
+   "cvss40": 10.0,
+   "vendor": "fabrikar.com",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-67282",
+   "cvss40": 10.0,
+   "vendor": "fabrikar.com",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-67364",
+   "cvss40": 10.0,
+   "vendor": "balbooa.com",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-6876",
+   "cvss40": 10.0,
+   "vendor": "ServiceNow",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-74253",
+   "cvss40": 10.0,
+   "vendor": "regularlabs.com",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-74764",
+   "cvss40": 10.0,
+   "vendor": "pandora-analysis",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-74803",
+   "cvss40": 10.0,
+   "vendor": "yootheme.com",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2026-74820",
+   "cvss40": 10.0,
+   "vendor": "ServiceNow",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2026-75754",
+   "cvss40": 10.0,
+   "vendor": "ASUS",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2026-75949",
+   "cvss40": 10.0,
+   "vendor": "cmsjunkie.com",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2026-76604",
+   "cvss40": 10.0,
+   "vendor": "fabrikar.com",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-76605",
+   "cvss40": 10.0,
+   "vendor": "fabrikar.com",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-76606",
+   "cvss40": 10.0,
+   "vendor": "fabrikar.com",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-76607",
+   "cvss40": 10.0,
+   "vendor": "fabrikar.com",
+   "cwe": "CWE-284"
+  },
+  {
+   "id": "CVE-2026-77995",
+   "cvss40": 10.0,
+   "vendor": "miniorange.com",
+   "cwe": "CWE-639"
+  },
+  {
+   "id": "CVE-2026-77998",
+   "cvss40": 10.0,
+   "vendor": "miniorange.com",
+   "cwe": "CWE-639"
+  },
+  {
+   "id": "CVE-2026-7866",
+   "cvss40": 10.0,
+   "vendor": "RTI",
+   "cwe": "CWE-121"
+  },
+  {
+   "id": "CVE-2026-79696",
+   "cvss40": 10.0,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-184"
+  },
+  {
+   "id": "CVE-2026-8054",
+   "cvss40": 10.0,
+   "vendor": "dotCMS",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2026-8326",
+   "cvss40": 10.0,
+   "vendor": "Remote Spark (https://www.remotespark.com/)",
+   "cwe": "CWE-23"
+  },
+  {
+   "id": "CVE-2026-84147",
+   "cvss40": 10.0,
+   "vendor": "Manacle Technologies",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2026-87827",
+   "cvss40": 10.0,
+   "vendor": "KGUARD",
+   "cwe": "CWE-1188"
+  },
+  {
+   "id": "CVE-2026-87985",
+   "cvss40": 10.0,
+   "vendor": "mistralai",
+   "cwe": "CWE-184"
+  },
+  {
+   "id": "CVE-2026-87986",
+   "cvss40": 10.0,
+   "vendor": "mistralai",
+   "cwe": "CWE-228"
+  },
+  {
+   "id": "CVE-2026-87987",
+   "cvss40": 10.0,
+   "vendor": "mistralai",
+   "cwe": "CWE-15"
+  },
+  {
+   "id": "CVE-2026-87988",
+   "cvss40": 10.0,
+   "vendor": "mistralai",
+   "cwe": "CWE-732"
+  },
+  {
+   "id": "CVE-2026-9152",
+   "cvss40": 10.0,
+   "vendor": "Altium",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2026-92808",
+   "cvss40": 10.0,
+   "vendor": "Altium",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2026-9508",
+   "cvss40": 10.0,
+   "vendor": "Suprema",
+   "cwe": "CWE-732"
+  },
+  {
+   "id": "CVE-2026-97163",
+   "cvss40": 10.0,
+   "vendor": "lomart.fr",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2023-53739",
+   "cvss40": 9.9,
+   "vendor": "Tinycontrol",
+   "cwe": "CWE-260"
+  },
+  {
+   "id": "CVE-2024-6684",
+   "cvss40": 9.9,
+   "vendor": "GST Electronics",
+   "cwe": "CWE-288"
+  },
+  {
+   "id": "CVE-2025-31340",
+   "cvss40": 9.9,
+   "vendor": "SUNNET Technology Co., Ltd.",
+   "cwe": "CWE-98"
+  },
+  {
+   "id": "CVE-2025-54426",
+   "cvss40": 9.9,
+   "vendor": "polkadot-evm",
+   "cwe": "CWE-327"
+  },
+  {
+   "id": "CVE-2025-68667",
+   "cvss40": 9.9,
+   "vendor": "continuwuity",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-6950",
+   "cvss40": 9.9,
+   "vendor": "Moxa",
+   "cwe": "CWE-798"
+  },
+  {
+   "id": "CVE-2026-29200",
+   "cvss40": 9.9,
+   "vendor": "WebPros",
+   "cwe": "CWE-639"
+  },
+  {
+   "id": "CVE-2026-42196",
+   "cvss40": 9.9,
+   "vendor": "codingjoe",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-86464",
+   "cvss40": 9.9,
+   "vendor": "Eclipse Foundation",
+   "cwe": "CWE-200"
+  },
+  {
+   "id": "CVE-2013-10043",
+   "cvss40": 9.5,
+   "vendor": "Astium",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2020-36851",
+   "cvss40": 9.5,
+   "vendor": "Rob--W / cors-anywhere",
+   "cwe": "CWE-918"
+  },
+  {
+   "id": "CVE-2024-1244",
+   "cvss40": 9.5,
+   "vendor": "OSSEC",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2024-13503",
+   "cvss40": 9.5,
+   "vendor": "Newtec/iDirect",
+   "cwe": "CWE-120"
+  },
+  {
+   "id": "CVE-2025-1077",
+   "cvss40": 9.5,
+   "vendor": "IBL Software Engineering",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-11544",
+   "cvss40": 9.5,
+   "vendor": "Sharp Display Solutions, Ltd.",
+   "cwe": "CWE-912"
+  },
+  {
+   "id": "CVE-2025-11545",
+   "cvss40": 9.5,
+   "vendor": "Sharp Display Solutions, Ltd.",
+   "cwe": "CWE-497"
+  },
+  {
+   "id": "CVE-2025-15579",
+   "cvss40": 9.5,
+   "vendor": "OpenText\u2122",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2025-24971",
+   "cvss40": 9.5,
+   "vendor": "DumbWareio",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-2516",
+   "cvss40": 9.5,
+   "vendor": "Kingsoft",
+   "cwe": "CWE-326"
+  },
+  {
+   "id": "CVE-2025-26385",
+   "cvss40": 9.5,
+   "vendor": "Johnson Controls",
+   "cwe": "CWE-77"
+  },
+  {
+   "id": "CVE-2025-47292",
+   "cvss40": 9.5,
+   "vendor": "cap-collectif",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2025-50121",
+   "cvss40": 9.5,
+   "vendor": "Schneider Electric",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-5333",
+   "cvss40": 9.5,
+   "vendor": "Broadcom",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2025-62376",
+   "cvss40": 9.5,
+   "vendor": "pwncollege",
+   "cwe": "CWE-287"
+  },
+  {
+   "id": "CVE-2025-68937",
+   "cvss40": 9.5,
+   "vendor": "Forgejo",
+   "cwe": "CWE-61"
+  },
+  {
+   "id": "CVE-2026-100102",
+   "cvss40": 9.5,
+   "vendor": "Perforce",
+   "cwe": "CWE-489"
+  },
+  {
+   "id": "CVE-2026-103510",
+   "cvss40": 9.5,
+   "vendor": "Perforce",
+   "cwe": "CWE-636"
+  },
+  {
+   "id": "CVE-2026-104848",
+   "cvss40": 9.5,
+   "vendor": "tinylibs",
+   "cwe": "CWE-1321"
+  },
+  {
+   "id": "CVE-2026-104849",
+   "cvss40": 9.5,
+   "vendor": "tinylibs",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-107406",
+   "cvss40": 9.5,
+   "vendor": "NetScaler",
+   "cwe": "CWE-119"
+  },
+  {
+   "id": "CVE-2026-13385",
+   "cvss40": 9.5,
+   "vendor": "ASUS",
+   "cwe": "CWE-295"
+  },
+  {
+   "id": "CVE-2026-15640",
+   "cvss40": 9.5,
+   "vendor": "Delinea",
+   "cwe": "CWE-290"
+  },
+  {
+   "id": "CVE-2026-21391",
+   "cvss40": 9.5,
+   "vendor": "Ping Identity",
+   "cwe": "CWE-290"
+  },
+  {
+   "id": "CVE-2026-21627",
+   "cvss40": 9.5,
+   "vendor": "tassos.gr",
+   "cwe": "CWE-284"
+  },
+  {
+   "id": "CVE-2026-22093",
+   "cvss40": 9.5,
+   "vendor": "EVbee",
+   "cwe": "CWE-295"
+  },
+  {
+   "id": "CVE-2026-46684",
+   "cvss40": 9.5,
+   "vendor": "dataease",
+   "cwe": "CWE-347"
+  },
+  {
+   "id": "CVE-2026-47172",
+   "cvss40": 9.5,
+   "vendor": "duck-organization",
+   "cwe": "CWE-829"
+  },
+  {
+   "id": "CVE-2026-47174",
+   "cvss40": 9.5,
+   "vendor": "duck-organization",
+   "cwe": "CWE-829"
+  },
+  {
+   "id": "CVE-2026-48909",
+   "cvss40": 9.5,
+   "vendor": "joomshaper.net",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2026-54210",
+   "cvss40": 9.5,
+   "vendor": "Tobit Laboratories AG",
+   "cwe": "CWE-787"
+  },
+  {
+   "id": "CVE-2026-54211",
+   "cvss40": 9.5,
+   "vendor": "Tobit Laboratories AG",
+   "cwe": "CWE-787"
+  },
+  {
+   "id": "CVE-2026-54212",
+   "cvss40": 9.5,
+   "vendor": "Tobit Laboratories AG",
+   "cwe": "CWE-787"
+  },
+  {
+   "id": "CVE-2026-58073",
+   "cvss40": 9.5,
+   "vendor": "Veeam",
+   "cwe": "CWE-288"
+  },
+  {
+   "id": "CVE-2026-65639",
+   "cvss40": 9.5,
+   "vendor": "WebPros",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2026-66066",
+   "cvss40": 9.5,
+   "vendor": "rails",
+   "cwe": "CWE-1188"
+  },
+  {
+   "id": "CVE-2026-6875",
+   "cvss40": 9.5,
+   "vendor": "ServiceNow",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-77136",
+   "cvss40": 9.5,
+   "vendor": "TYPO3",
+   "cwe": "CWE-1336"
+  },
+  {
+   "id": "CVE-2026-77411",
+   "cvss40": 9.5,
+   "vendor": "rabbitmq",
+   "cwe": "CWE-754"
+  },
+  {
+   "id": "CVE-2026-77992",
+   "cvss40": 9.5,
+   "vendor": "fabrikar.com",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-78069",
+   "cvss40": 9.5,
+   "vendor": "j2commerce.com",
+   "cwe": "CWE-862"
+  },
+  {
+   "id": "CVE-2026-82180",
+   "cvss40": 9.5,
+   "vendor": "Eclipse Foundation",
+   "cwe": "CWE-290"
+  },
+  {
+   "id": "CVE-2026-8467",
+   "cvss40": 9.5,
+   "vendor": "phenixdigital",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-88062",
+   "cvss40": 9.5,
+   "vendor": "diegosouzapw",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-93483",
+   "cvss40": 9.5,
+   "vendor": "Znuny",
+   "cwe": "CWE-348"
+  },
+  {
+   "id": "CVE-2026-94132",
+   "cvss40": 9.5,
+   "vendor": "acymailing.com",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2011-10010",
+   "cvss40": 9.4,
+   "vendor": "QuickShareHQ",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2012-10039",
+   "cvss40": 9.4,
+   "vendor": "ZEN Load Balancer",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2012-10040",
+   "cvss40": 9.4,
+   "vendor": "Openfiler",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2012-10059",
+   "cvss40": 9.4,
+   "vendor": "Dolibarr Project",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2013-10067",
+   "cvss40": 9.4,
+   "vendor": "Glossword Team",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2013-10068",
+   "cvss40": 9.4,
+   "vendor": "Foxit",
+   "cwe": "CWE-121"
+  },
+  {
+   "id": "CVE-2014-125118",
+   "cvss40": 9.4,
+   "vendor": "MicroWorld",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2023-32188",
+   "cvss40": 9.4,
+   "vendor": "SUSE",
+   "cwe": "CWE-1270"
+  },
+  {
+   "id": "CVE-2023-5878",
+   "cvss40": 9.4,
+   "vendor": "Honeywell",
+   "cwe": "CWE-77"
+  },
+  {
+   "id": "CVE-2024-0336",
+   "cvss40": 9.4,
+   "vendor": "EMTA Grup",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2024-10576",
+   "cvss40": 9.4,
+   "vendor": "Infinix Mobile",
+   "cwe": "CWE-925"
+  },
+  {
+   "id": "CVE-2024-10865",
+   "cvss40": 9.4,
+   "vendor": "OpenText",
+   "cwe": "CWE-79"
+  },
+  {
+   "id": "CVE-2024-36455",
+   "cvss40": 9.4,
+   "vendor": "Broadcom",
+   "cwe": "CWE-665"
+  },
+  {
+   "id": "CVE-2024-36456",
+   "cvss40": 9.4,
+   "vendor": "Broadcom",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2024-38492",
+   "cvss40": 9.4,
+   "vendor": "Broadcom",
+   "cwe": "CWE-77"
+  },
+  {
+   "id": "CVE-2024-4999",
+   "cvss40": 9.4,
+   "vendor": "Ligowave",
+   "cwe": "CWE-77"
+  },
+  {
+   "id": "CVE-2024-5176",
+   "cvss40": 9.4,
+   "vendor": "Baxter",
+   "cwe": "CWE-522"
+  },
+  {
+   "id": "CVE-2024-56333",
+   "cvss40": 9.4,
+   "vendor": "InseeFrLab",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2024-7093",
+   "cvss40": 9.4,
+   "vendor": "Netflix",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2024-7205",
+   "cvss40": 9.4,
+   "vendor": "CoolKit",
+   "cwe": "CWE-201"
+  },
+  {
+   "id": "CVE-2024-7873",
+   "cvss40": 9.4,
+   "vendor": "Veribilim Software",
+   "cwe": "CWE-79"
+  },
+  {
+   "id": "CVE-2025-0520",
+   "cvss40": 9.4,
+   "vendor": "ShowDoc",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2025-10460",
+   "cvss40": 9.4,
+   "vendor": "BEIMS",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-10728",
+   "cvss40": 9.4,
+   "vendor": "Qt",
+   "cwe": "CWE-674"
+  },
+  {
+   "id": "CVE-2025-10729",
+   "cvss40": 9.4,
+   "vendor": "Qt",
+   "cwe": "CWE-416"
+  },
+  {
+   "id": "CVE-2025-1980",
+   "cvss40": 9.4,
+   "vendor": "Symfonia",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2025-1981",
+   "cvss40": 9.4,
+   "vendor": "Symfonia",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2025-2304",
+   "cvss40": 9.4,
+   "vendor": "owen2345",
+   "cwe": "CWE-915"
+  },
+  {
+   "id": "CVE-2025-2313",
+   "cvss40": 9.4,
+   "vendor": "CGM",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2025-27462",
+   "cvss40": 9.4,
+   "vendor": "Xen",
+   "cwe": "CWE-276"
+  },
+  {
+   "id": "CVE-2025-27463",
+   "cvss40": 9.4,
+   "vendor": "Xen",
+   "cwe": "CWE-276"
+  },
+  {
+   "id": "CVE-2025-27464",
+   "cvss40": 9.4,
+   "vendor": "Xen",
+   "cwe": "CWE-276"
+  },
+  {
+   "id": "CVE-2025-29757",
+   "cvss40": 9.4,
+   "vendor": "Growatt",
+   "cwe": "CWE-863"
+  },
+  {
+   "id": "CVE-2025-30044",
+   "cvss40": 9.4,
+   "vendor": "CGM",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-30056",
+   "cvss40": 9.4,
+   "vendor": "CGM",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2025-30057",
+   "cvss40": 9.4,
+   "vendor": "CGM",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2025-30063",
+   "cvss40": 9.4,
+   "vendor": "CGM",
+   "cwe": "CWE-732"
+  },
+  {
+   "id": "CVE-2025-30091",
+   "cvss40": 9.4,
+   "vendor": "Tiny",
+   "cwe": "CWE-96"
+  },
+  {
+   "id": "CVE-2025-3114",
+   "cvss40": 9.4,
+   "vendor": "Spotfire",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2025-3321",
+   "cvss40": 9.4,
+   "vendor": "B. Braun Melsungen AG",
+   "cwe": "CWE-798"
+  },
+  {
+   "id": "CVE-2025-34042",
+   "cvss40": 9.4,
+   "vendor": "Beward",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34044",
+   "cvss40": 9.4,
+   "vendor": "Shenzhen Lingkong Technology",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34049",
+   "cvss40": 9.4,
+   "vendor": "OptiLink",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34055",
+   "cvss40": 9.4,
+   "vendor": "AVTECH",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-34056",
+   "cvss40": 9.4,
+   "vendor": "AVTECH",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-34074",
+   "cvss40": 9.4,
+   "vendor": "Lucee Association Switzerland",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2025-34104",
+   "cvss40": 9.4,
+   "vendor": "Piwik (now Matomo)",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2025-34147",
+   "cvss40": 9.4,
+   "vendor": "Shenzhen Aitemi E Commerce Co. Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34148",
+   "cvss40": 9.4,
+   "vendor": "Shenzhen Aitemi E Commerce Co. Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34149",
+   "cvss40": 9.4,
+   "vendor": "Shenzhen Aitemi E Commerce Co. Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34150",
+   "cvss40": 9.4,
+   "vendor": "Shenzhen Aitemi E Commerce Co. Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34151",
+   "cvss40": 9.4,
+   "vendor": "Shenzhen Aitemi E Commerce Co. Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34152",
+   "cvss40": 9.4,
+   "vendor": "Shenzhen Aitemi E Commerce Co. Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-34292",
+   "cvss40": 9.4,
+   "vendor": "BeWelcome",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2025-3463",
+   "cvss40": 9.4,
+   "vendor": "ASUS",
+   "cwe": "CWE-295"
+  },
+  {
+   "id": "CVE-2025-3476",
+   "cvss40": 9.4,
+   "vendor": "OpenText\u2122",
+   "cwe": "CWE-863"
+  },
+  {
+   "id": "CVE-2025-3659",
+   "cvss40": 9.4,
+   "vendor": "Digi International",
+   "cwe": "CWE-287"
+  },
+  {
+   "id": "CVE-2025-36751",
+   "cvss40": 9.4,
+   "vendor": "Growatt",
+   "cwe": "CWE-311"
+  },
+  {
+   "id": "CVE-2025-36852",
+   "cvss40": 9.4,
+   "vendor": "Niklas Portmann",
+   "cwe": "CWE-829"
+  },
+  {
+   "id": "CVE-2025-47788",
+   "cvss40": 9.4,
+   "vendor": "Atheos",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2025-48047",
+   "cvss40": 9.4,
+   "vendor": "MICI Network Co. Ltd.",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-49008",
+   "cvss40": 9.4,
+   "vendor": "Atheos",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-49596",
+   "cvss40": 9.4,
+   "vendor": "modelcontextprotocol",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2025-52935",
+   "cvss40": 9.4,
+   "vendor": "dragonflydb",
+   "cwe": "CWE-190"
+  },
+  {
+   "id": "CVE-2025-52939",
+   "cvss40": 9.4,
+   "vendor": "dail8859",
+   "cwe": "CWE-787"
+  },
+  {
+   "id": "CVE-2025-53695",
+   "cvss40": 9.4,
+   "vendor": "Johnson Controls, Inc",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-54071",
+   "cvss40": 9.4,
+   "vendor": "rommapp",
+   "cwe": "CWE-434"
+  },
+  {
+   "id": "CVE-2025-54298",
+   "cvss40": 9.4,
+   "vendor": "firecoders.com",
+   "cwe": "CWE-79"
+  },
+  {
+   "id": "CVE-2025-54299",
+   "cvss40": 9.4,
+   "vendor": "nobossextensions.com",
+   "cwe": "CWE-79"
+  },
+  {
+   "id": "CVE-2025-58146",
+   "cvss40": 9.4,
+   "vendor": "Xen",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-58151",
+   "cvss40": 9.4,
+   "vendor": "Xen",
+   "cwe": "CWE-367"
+  },
+  {
+   "id": "CVE-2025-58366",
+   "cvss40": 9.4,
+   "vendor": "InseeFrLab",
+   "cwe": "CWE-522"
+  },
+  {
+   "id": "CVE-2025-58438",
+   "cvss40": 9.4,
+   "vendor": "jjjake",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2025-6029",
+   "cvss40": 9.4,
+   "vendor": "KIA",
+   "cwe": "CWE-294"
+  },
+  {
+   "id": "CVE-2025-6030",
+   "cvss40": 9.4,
+   "vendor": "Autoeastern",
+   "cwe": "CWE-294"
+  },
+  {
+   "id": "CVE-2025-62410",
+   "cvss40": 9.4,
+   "vendor": "capricorn86",
+   "cwe": "CWE-1321"
+  },
+  {
+   "id": "CVE-2025-64125",
+   "cvss40": 9.4,
+   "vendor": "Nuvation Energy",
+   "cwe": "CWE-441"
+  },
+  {
+   "id": "CVE-2025-64393",
+   "cvss40": 9.4,
+   "vendor": "Veeam",
+   "cwe": "CWE-502"
+  },
+  {
+   "id": "CVE-2025-65008",
+   "cvss40": 9.4,
+   "vendor": "WODESYS",
+   "cwe": "CWE-78"
+  },
+  {
+   "id": "CVE-2025-65095",
+   "cvss40": 9.4,
+   "vendor": "Lookyloo",
+   "cwe": "CWE-79"
+  },
+  {
+   "id": "CVE-2025-66385",
+   "cvss40": 9.4,
+   "vendor": "cerebrate-project",
+   "cwe": "CWE-472"
+  },
+  {
+   "id": "CVE-2025-7783",
+   "cvss40": 9.4,
+   "vendor": null,
+   "cwe": "CWE-330"
+  },
+  {
+   "id": "CVE-2025-8311",
+   "cvss40": 9.4,
+   "vendor": "dotCMS",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2025-8414",
+   "cvss40": 9.4,
+   "vendor": "silabs.com",
+   "cwe": "CWE-20"
+  },
+  {
+   "id": "CVE-2025-9696",
+   "cvss40": 9.4,
+   "vendor": "SunPower",
+   "cwe": "CWE-798"
+  },
+  {
+   "id": "CVE-2025-9963",
+   "cvss40": 9.4,
+   "vendor": "Novakon",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-103663",
+   "cvss40": 9.4,
+   "vendor": "Ollama",
+   "cwe": "CWE-23"
+  },
+  {
+   "id": "CVE-2026-104480",
+   "cvss40": 9.4,
+   "vendor": "Discord",
+   "cwe": "CWE-390"
+  },
+  {
+   "id": "CVE-2026-105445",
+   "cvss40": 9.4,
+   "vendor": "Docker",
+   "cwe": "CWE-266"
+  },
+  {
+   "id": "CVE-2026-105474",
+   "cvss40": 9.4,
+   "vendor": "WebPros",
+   "cwe": "CWE-1336"
+  },
+  {
+   "id": "CVE-2026-107282",
+   "cvss40": 9.4,
+   "vendor": "AsyncHttpClient",
+   "cwe": "CWE-319"
+  },
+  {
+   "id": "CVE-2026-107806",
+   "cvss40": 9.4,
+   "vendor": "0xJacky",
+   "cwe": "CWE-94"
+  },
+  {
+   "id": "CVE-2026-11423",
+   "cvss40": 9.4,
+   "vendor": "Altium",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-11535",
+   "cvss40": 9.4,
+   "vendor": "vivo",
+   "cwe": "CWE-306"
+  },
+  {
+   "id": "CVE-2026-11624",
+   "cvss40": 9.4,
+   "vendor": "Google",
+   "cwe": "CWE-346"
+  },
+  {
+   "id": "CVE-2026-11746",
+   "cvss40": 9.4,
+   "vendor": "LY Corporation",
+   "cwe": "CWE-798"
+  },
+  {
+   "id": "CVE-2026-1201",
+   "cvss40": 9.4,
+   "vendor": "Hubitat",
+   "cwe": "CWE-639"
+  },
+  {
+   "id": "CVE-2026-12717",
+   "cvss40": 9.4,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-74"
+  },
+  {
+   "id": "CVE-2026-14157",
+   "cvss40": 9.4,
+   "vendor": "ASUS",
+   "cwe": "CWE-134"
+  },
+  {
+   "id": "CVE-2026-14439",
+   "cvss40": 9.4,
+   "vendor": "Altium",
+   "cwe": "CWE-22"
+  },
+  {
+   "id": "CVE-2026-14934",
+   "cvss40": 9.4,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-862"
+  },
+  {
+   "id": "CVE-2026-14984",
+   "cvss40": 9.4,
+   "vendor": "Teledyne FLIR",
+   "cwe": "CWE-319"
+  },
+  {
+   "id": "CVE-2026-15587",
+   "cvss40": 9.4,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-346"
+  },
+  {
+   "id": "CVE-2026-15623",
+   "cvss40": 9.4,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-89"
+  },
+  {
+   "id": "CVE-2026-16337",
+   "cvss40": 9.4,
+   "vendor": "dotCMS",
+   "cwe": "CWE-269"
+  },
+  {
+   "id": "CVE-2026-16438",
+   "cvss40": 9.4,
+   "vendor": "Mitsubishi Electric Corporation",
+   "cwe": "CWE-266"
+  },
+  {
+   "id": "CVE-2026-18397",
+   "cvss40": 9.4,
+   "vendor": "Thales",
+   "cwe": "CWE-130"
+  },
+  {
+   "id": "CVE-2026-19410",
+   "cvss40": 9.4,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-345"
+  },
+  {
+   "id": "CVE-2026-19759",
+   "cvss40": 9.4,
+   "vendor": "Google Cloud",
+   "cwe": "CWE-863"
+  },
+  {
+   "id": "CVE-2026-2334",
+   "cvss40": 9.4,
+   "vendor": "vsDesk",
+   "cwe": "CWE-434"
+  }
+ ]
+}

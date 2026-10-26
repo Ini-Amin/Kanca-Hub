@@ -27,14 +27,12 @@ from scripts.kancahub import (
 
 
 class TestUnifiedMenuStructure(unittest.TestCase):
-    """Test the UNIFIED_MENU structure and parity against the old 2-page union."""
+    """Test the UNIFIED_MENU structure and category-based layout."""
 
     def test_single_list_no_page_concept(self) -> None:
-        # Assert UNIFIED_MENU is a flat single list
         self.assertIsInstance(UNIFIED_MENU, list)
         self.assertGreater(len(UNIFIED_MENU), 0)
 
-        # Ensure no page-related variables remain in menu items
         for item in UNIFIED_MENU:
             self.assertEqual(len(item), 4, f"Item {item} should be a 4-tuple (key, desc, cmd_str, cmd_args)")
             key, desc, cmd_str, cmd_args = item
@@ -43,19 +41,8 @@ class TestUnifiedMenuStructure(unittest.TestCase):
             self.assertIsInstance(cmd_str, str)
             self.assertTrue(cmd_args is None or isinstance(cmd_args, list))
 
-    def test_end_to_end_option_exists(self) -> None:
-        # Check that top option "0" is the guided end-to-end setup
-        top_item = UNIFIED_MENU[0]
-        self.assertEqual(top_item[0], "0")
-        self.assertEqual(top_item[2], "end-to-end")
-        self.assertIn("end-to-end", top_item[1].lower())
-
     def test_parity_against_old_pages_union(self) -> None:
-        # Old Page 1 command strings.
-        # NOTE: 'proxy start' was intentionally changed to 'proxy gateway' so the
-        # menu item is NON-INTERACTIVE and can run as a background job (the guided
-        # 'proxy start' prompts for a mode, which would block a background job).
-        # The feature (start a proxy gateway) is preserved under the new command.
+        # All commands from the original two-page menu must still be present.
         old_page1_commands = {
             "stack signup",
             "doctor",
@@ -66,7 +53,6 @@ class TestUnifiedMenuStructure(unittest.TestCase):
             "github farm",
             "grok inject",
         }
-        # Old Page 2 command strings
         old_page2_commands = {
             "mail test",
             "mail otp",
@@ -80,35 +66,38 @@ class TestUnifiedMenuStructure(unittest.TestCase):
         old_union = old_page1_commands | old_page2_commands
         self.assertEqual(len(old_union), 16)
 
-        # Extract current command strings
-        current_commands = {item[2] for item in UNIFIED_MENU if item[2] != "end-to-end"}
+        current_commands = {item[2] for item in UNIFIED_MENU}
 
-        # Parity check: every single previously-listed command must still be present
         missing = old_union - current_commands
         self.assertEqual(missing, set(), f"Commands missing from unified menu: {missing}")
         self.assertTrue(old_union.issubset(current_commands))
 
-        # Total items: 16 old commands + 1 end-to-end + 1 mitm + 1 autofarm + 1 otp
-        # + 3 vendor farms (abliteration, ZCode, AutoClaw) + 3 VPN pool = 26.
-        # Memory (search/ask/index) is agents-only now (docs/AGENT_MEMORY.md) —
-        # deliberately NOT in the human menu.
-        self.assertEqual(len(UNIFIED_MENU), 26)
+        # 28 items total: sequential keys "1" through "28"
+        self.assertEqual(len(UNIFIED_MENU), 28)
         self.assertIn("autofarm", current_commands)
         self.assertIn("otp", current_commands)
         self.assertIn("autoclaw claim", current_commands)
+        self.assertIn("freeai radox", current_commands)
+        self.assertIn("freeai beatapi", current_commands)
+        self.assertIn("freeai status", current_commands)
         self.assertNotIn("memory search", current_commands)
 
-        # Keys run "0".."27" minus the two removed menu entries ("10", "17")
-        expected_keys = [str(i) for i in range(28) if i not in (10, 17)]
+        expected_keys = [str(i) for i in range(1, 29)]
         actual_keys = [item[0] for item in UNIFIED_MENU]
         self.assertEqual(actual_keys, expected_keys)
 
+    def test_unique_keys(self) -> None:
+        keys = [item[0] for item in UNIFIED_MENU]
+        self.assertEqual(len(keys), len(set(keys)), "Duplicate keys found")
+
     def test_stage_headers_coverage(self) -> None:
-        self.assertIn("0", MENU_STAGE_HEADERS)
+        # Headers keyed by first item of each category: A=1, B=8, C=16, D=20, E=24
         self.assertIn("1", MENU_STAGE_HEADERS)
-        self.assertIn("5", MENU_STAGE_HEADERS)
-        self.assertIn("12", MENU_STAGE_HEADERS)
-        self.assertIn("15", MENU_STAGE_HEADERS)
+        self.assertIn("8", MENU_STAGE_HEADERS)
+        self.assertIn("16", MENU_STAGE_HEADERS)
+        self.assertIn("20", MENU_STAGE_HEADERS)
+        self.assertIn("24", MENU_STAGE_HEADERS)
+        self.assertEqual(len(MENU_STAGE_HEADERS), 5)
 
 
 class TestRenderMenu(unittest.TestCase):
@@ -129,8 +118,8 @@ class TestRenderMenu(unittest.TestCase):
         # Check footer
         import re
         plain = re.sub(r"\x1b\[[0-9;]*m", "", output)
-        self.assertIn("[h] Help & command reference", plain)
-        self.assertIn("[q] Exit", plain)
+        self.assertIn("[h]  Help & command reference", plain)
+        self.assertIn("[q]  Exit", plain)
 
         # Ensure pagination strings do NOT appear
         self.assertNotIn("page 1/2", output)

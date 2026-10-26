@@ -12,6 +12,8 @@ failure modes this suite exists to catch are the quiet ones:
 Run after ANY change to run_four_gates / gate_* / stage5_report:
     python3 tests/test_four_gates.py        (or pytest tests/test_four_gates.py)
 """
+import importlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -179,32 +181,54 @@ def main() -> int:
     print("6b. _h1_dup_check tells 'no duplicates' apart from 'request failed'")
     # check_h1_dups() collapses both into []; its only difference is a line on
     # stderr. Read that correctly or the gate waves findings through outages.
-    bh = str(Path(os.environ["ABH_DIR"]) / "bughunter")
-    if bh not in sys.path:
-        sys.path.insert(0, bh)
-    import tools.validate as vmod
-    real_h1 = vmod.check_h1_dups
-    try:
-        def _failed(p, k):
-            print("  HackerOne duplicate check failed: HTTP Error 429: Too Many",
-                  file=sys.stderr)
-            return []
-        vmod.check_h1_dups = _failed
-        hits, reachable, detail = H._h1_dup_check("acme", "oauth")
-        check(hits == [] and not reachable, f"failure detected, not read as clean ({detail[:60]})")
+    validate_path = Path(os.environ["ABH_DIR"]) / "bughunter" / "tools" / "validate.py"
+    if not validate_path.is_file():
+        # ABH_DIR might have been overwritten by an earlier test (e.g. test_gigs_api)
+        real_abh = Path("/home/amen/Agentic-Bug-Hunter")
+        if (real_abh / "bughunter" / "tools" / "validate.py").is_file():
+            validate_path = real_abh / "bughunter" / "tools" / "validate.py"
+            bh_dir = str(real_abh / "bughunter")
+            if bh_dir not in sys.path:
+                sys.path.insert(0, bh_dir)
+        else:
+            print("  SKIP 6b: validate.py not found at", validate_path)
+            validate_path = None
+    else:
+        bh_dir = str(Path(os.environ["ABH_DIR"]) / "bughunter")
+        if bh_dir not in sys.path:
+            sys.path.insert(0, bh_dir)
+    if validate_path:
+        # Clear any stale 'tools' namespace package from sys.modules so the real
+        # bughunter.tools package (with __init__.py) gets loaded from bh_dir
+        for k in list(sys.modules.keys()):
+            if k == "tools" or k.startswith("tools."):
+                del sys.modules[k]
+        spec = importlib.util.spec_from_file_location("tools.validate", validate_path)
+        vmod = importlib.util.module_from_spec(spec)
+        sys.modules["tools.validate"] = vmod
+        spec.loader.exec_module(vmod)
+        real_h1 = vmod.check_h1_dups
+        try:
+            def _failed(p, k):
+                print("  HackerOne duplicate check failed: HTTP Error 429: Too Many",
+                      file=sys.stderr)
+                return []
+            vmod.check_h1_dups = _failed
+            hits, reachable, detail = H._h1_dup_check("acme", "oauth")
+            check(hits == [] and not reachable, f"failure detected, not read as clean ({detail[:60]})")
 
-        vmod.check_h1_dups = lambda p, k: []
-        hits, reachable, detail = H._h1_dup_check("acme", "oauth")
-        check(hits == [] and reachable, "genuine empty result reads as reachable")
+            vmod.check_h1_dups = lambda p, k: []
+            hits, reachable, detail = H._h1_dup_check("acme", "oauth")
+            check(hits == [] and reachable, "genuine empty result reads as reachable")
 
-        vmod.check_h1_dups = lambda p, k: [{"title": "dup"}]
-        hits, reachable, detail = H._h1_dup_check("acme", "oauth")
-        check(len(hits) == 1 and reachable, "hits come back through")
+            vmod.check_h1_dups = lambda p, k: [{"title": "dup"}]
+            hits, reachable, detail = H._h1_dup_check("acme", "oauth")
+            check(len(hits) == 1 and reachable, "hits come back through")
 
-        hits, reachable, detail = H._h1_dup_check("", "")
-        check(not reachable, f"missing program/keyword reported, not guessed ({detail})")
-    finally:
-        vmod.check_h1_dups = real_h1
+            hits, reachable, detail = H._h1_dup_check("", "")
+            check(not reachable, f"missing program/keyword reported, not guessed ({detail})")
+        finally:
+            vmod.check_h1_dups = real_h1
 
     # ---------- gate 3: VM-PoC ----------
     print("7. VM-PoC verifies by replaying, and fails when it cannot")
@@ -226,6 +250,10 @@ def main() -> int:
 
     print("8. real poc_bundler refuses a mutating method before any traffic")
     bundler = Path(os.environ["ABH_DIR"]) / "bughunter" / "tools" / "poc_bundler.py"
+    if not bundler.is_file():
+        real_bundler = Path("/home/amen/Agentic-Bug-Hunter/bughunter/tools/poc_bundler.py")
+        if real_bundler.is_file():
+            bundler = real_bundler
     if bundler.is_file():
         with tempfile.TemporaryDirectory() as td:
             p = subprocess.run(
@@ -402,23 +430,30 @@ def main() -> int:
         check(rows[0]["severity"] == "HIGH", "severity carried through")
 
         print("14. gate_findings reports what happened and only reports winners")
-        note = H.gate_findings(str(good), "example.com", program="acme",
-                               ins=INS, outs=OUTS, jobs_dir=Path(td) / "jobs",
-                               alert=False, h1=CLEAN_H1,
-                               challenge=lambda m, t: ("SUBMIT", ""))
-        check(note.startswith("2 gated"), f"counts the gated rows ({note})")
+        import zen_worker as _zw
+        _zw_avail = _zw.available
+        _zw.available = lambda: False
+        try:
+            note, _n = H.gate_findings(str(good), "example.com", program="acme",
+                                   ins=INS, outs=OUTS, jobs_dir=Path(td) / "jobs",
+                                   alert=False, h1=CLEAN_H1,
+                                   challenge=lambda m, t: ("SUBMIT", ""))
+            check(note.startswith("2 gated"), f"counts the gated rows ({note})")
+            check("cleared" in note, "says how many cleared")
+        finally:
+            _zw.available = _zw_avail
         check("cleared" in note, "says how many cleared")
 
         low = Path(td) / "low.json"
         low.write_text(json.dumps({"findings_log": [
             {"tool": "run_recon", "severity": "LOW", "text": "tech nginx"}]}),
             encoding="utf-8")
-        note = H.gate_findings(str(low), "example.com", jobs_dir=Path(td) / "jobs",
+        note, _n = H.gate_findings(str(low), "example.com", jobs_dir=Path(td) / "jobs",
                                alert=False, h1=CLEAN_H1)
         check("none above LOW" in note, f"LOW rows are not gated ({note})")
         empty = Path(td) / "empty.json"
         empty.write_text(json.dumps({"findings_log": []}), encoding="utf-8")
-        note = H.gate_findings(str(empty), "example.com", jobs_dir=Path(td) / "jobs",
+        note, _n = H.gate_findings(str(empty), "example.com", jobs_dir=Path(td) / "jobs",
                                alert=False, h1=CLEAN_H1)
         check(note == "no findings recorded", f"no rows is explicit ({note})")
 

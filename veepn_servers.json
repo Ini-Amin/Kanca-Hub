@@ -1,0 +1,47 @@
+[
+ {
+  "username": "8a638d554be9aba0b8c907cfc21e6628",
+  "password": "q3IWcHbMrVxf9OcF",
+  "region": "nl",
+  "regionName": "Amsterdam",
+  "regionDescription": "Netherlands, Amsterdam",
+  "type": 0,
+  "protocol": "https",
+  "port": 54932,
+  "rpz_port": 0,
+  "addresses": [
+   "maasdam-11-nl.nexorcdn.com"
+  ],
+  "config": ""
+ },
+ {
+  "username": "8a638d554be9aba0b8c907cfc21e6628",
+  "password": "q3IWcHbMrVxf9OcF",
+  "region": "nl",
+  "regionName": "Amsterdam",
+  "regionDescription": "Netherlands, Amsterdam",
+  "type": 0,
+  "protocol": "https",
+  "port": 28662,
+  "rpz_port": 0,
+  "addresses": [
+   "maasdam-7-nl.nexorcdn.com"
+  ],
+  "config": ""
+ },
+ {
+  "username": "8a638d554be9aba0b8c907cfc21e6628",
+  "password": "q3IWcHbMrVxf9OcF",
+  "region": "nl",
+  "regionName": "Amsterdam",
+  "regionDescription": "Netherlands, Amsterdam",
+  "type": 0,
+  "protocol": "https",
+  "port": 46878,
+  "rpz_port": 0,
+  "addresses": [
+   "maasdam-9-nl.nexorcdn.com"
+  ],
+  "config": ""
+ }
+]

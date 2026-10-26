@@ -325,8 +325,8 @@ def _label_store() -> dict:
     if _LABEL_STORE_CACHE is not None:
         return _LABEL_STORE_CACHE
     out: dict = {}
-    for name in ("slider_labels_store.json", "slider_mined.json",
-                 "slider_verified.json"):
+    for name in ("slider_verified.json", "slider_labels_store.json",
+                 "slider_mined.json"):
         p = DATA_DIR.parent / name
         if not p.exists():
             continue
@@ -1030,11 +1030,18 @@ async def solve_aliyun(page, *, model: str = VISION_MODEL, log=print,
         box = await _slider_box(page)
         if not box:
             continue
-        # CLOSED-LOOP landing: press, probe the piece's real position mid-drag,
-        # correct, release. invert()/COEF only matter as a rough prior now --
-        # the probes measure the true per-puzzle movement curve live.
         before = await oracle.snapshot()
-        released, probes = await _drag_exact(page, box, float(t), log)
+        if os.environ.get("HUMANIZED_DRAG", "1") == "1":
+            try:
+                from human_slider import drag_humanized_playwright
+                drag_dx = invert(float(t))
+                released = await drag_humanized_playwright(page, box, drag_dx, log)
+                probes = [(drag_dx, float(t))]
+            except Exception as e:
+                log(f"  [slider] humanized drag error: {e}, falling back to _drag_exact")
+                released, probes = await _drag_exact(page, box, float(t), log)
+        else:
+            released, probes = await _drag_exact(page, box, float(t), log)
         if not images:                     # late-arriving widget images
             imgs = imgs or await _read_images(page)
             images = _save_puzzle_images(pid, imgs[0], imgs[1]) if imgs else {}

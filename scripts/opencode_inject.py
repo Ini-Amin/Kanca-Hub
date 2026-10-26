@@ -9,8 +9,8 @@ failover rotates accounts instead of retrying one dead key.
 
 READ THIS BEFORE TRUSTING THE RESULT
 ------------------------------------
-A Zen **free-tier** key does not work as an OpenAI-compatible endpoint. Measured
-on this box 2026-10-22 against the endpoint the catalog declares
+A Zen **free-tier** key does not work as a raw OpenAI-compatible endpoint.
+Measured on this box 2026-10-22 against the endpoint the catalog declares
 (https://opencode.ai/inference/openai/v1):
 
     POST /chat/completions  ->  403
@@ -19,13 +19,20 @@ on this box 2026-10-22 against the endpoint the catalog declares
 
 That is not a path or header mistake: the catalog's own provider entry names
 `https://opencode.ai/inference/openai/v1` and lists `OPENCODE_API_KEY` in `env`,
-and the request still refuses. Zen auth in the CLI is OAuth device-flow
-(`/auth/device/code` -> refresh_token -> access_token), so a bare key is not the
-credential the free tier checks.
+and the request still refuses. It is a request-SHAPE check, so curl and plain
+HTTP clients always lose it.
 
-Injection therefore makes sense for a PAID key, or for a future provider whose
-free tier does accept keys. This tool does not decide that for you -- it prints
-the verdict per key so a dead key is visible instead of silently injected.
+BUT the key itself is live and valuable. Measured 2026-10-22: with
+`auth.json` set to {"opencode": {"type": "api", "key": "oc_sk_..."}}, the real
+CLI answered 20/20 requests on `opencode/glm-5.3-flash-free` with no 429, while
+the anonymous (no-key) path was returning FreeUsageLimitError on every call.
+Two different `oc_sk_` keys both worked, 4/4 each. So a key is what buys
+headroom -- it just has to be spent through the CLI, not through curl.
+
+Practical consequence: inject keys here so 9router has them on file, but the
+serving path must be the local daemon (`scripts/opencode_bridge.py`), which
+drives the real binary. A 403 from the probe below is EXPECTED and does not
+mean the key is dead; use `opencode_farm.py verify --key ...` for a real verdict.
 
 USAGE
     opencode_inject.py --from-auth-json ~/.local/share/opencode/auth.json
@@ -80,21 +87,29 @@ def collect(args) -> list[tuple[str, str]]:
     if args.from_json:
         p = Path(args.from_json).expanduser()
         if p.is_file():
+            raw = p.read_text(errors="replace")
+            items = []
             try:
-                d = json.loads(p.read_text(errors="replace"))
-            except ValueError as exc:
-                print("cannot parse %s: %s" % (p, exc), file=sys.stderr)
-                d = []
-            items = d if isinstance(d, list) else [d]
+                d = json.loads(raw)
+                items = d if isinstance(d, list) else [d]
+            except ValueError:
+                # Fall back to jsonl (e.g. reports/hcaptcha_review/api_keys.jsonl)
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        try:
+                            items.append(json.loads(line))
+                        except Exception:
+                            pass
             for it in items:
                 if isinstance(it, str):
                     out.append((p.name, it))
                 elif isinstance(it, dict):
-                    key = it.get("apiKey") or it.get("key") or it.get("token")
+                    key = (it.get("apiKey") or it.get("key") or
+                           it.get("token") or it.get("api_key"))
                     label = it.get("email") or it.get("name") or p.name
                     if isinstance(key, str) and key.strip():
                         out.append((label, key.strip()))
-
     if args.from_auth_json:
         p = Path(args.from_auth_json).expanduser()
         if p.is_file():

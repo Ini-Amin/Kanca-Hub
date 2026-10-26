@@ -12,6 +12,9 @@ import argparse, base64, csv, io, json, os, re, socket, subprocess, sys, tempfil
 from pathlib import Path
 
 API = "http://www.vpngate.net/api/iphone/"
+API_MIRRORS = [
+    "https://raw.githubusercontent.com/GeorgeXie2333/vpngate-list-mirror/main/data/vpngate.csv",
+]
 PID = Path.home() / ".cache" / "vpngate.pid"
 
 # The relay list must be fetched through a working egress on hosts whose direct
@@ -68,7 +71,19 @@ def relays(country=None):
     key = (country or "").upper()
     if key in _RELAY_CACHE:
         return _RELAY_CACHE[key]
-    raw = _api_opener().open(API, timeout=30).read().decode("utf-8", "ignore")
+    raw = None
+    for api_url in [API] + API_MIRRORS:
+        try:
+            opener = _api_opener() if api_url == API else urllib.request.build_opener()
+            with opener.open(api_url, timeout=8) as resp:
+                data = resp.read().decode("utf-8", "ignore")
+                if "OpenVPN_ConfigData_Base64" in data:
+                    raw = data
+                    break
+        except Exception:
+            continue
+    if not raw:
+        return []
     rows = csv.DictReader(io.StringIO("\n".join(l for l in raw.splitlines()
                                                 if not l.startswith("*")).lstrip("#")))
     out = [r for r in rows if r.get("OpenVPN_ConfigData_Base64")

@@ -59,7 +59,7 @@ def test_gates_still_run_when_zen_unavailable():
     os.environ["OPENCODE_BIN"] = "/nonexistent/opencode"
     A.ABH = td
     try:
-        note = A.gate_findings(sid, "example.test", alert=False)
+        note, _n = A.gate_findings(sid, "example.test", alert=False)
         assert "gated" in note, note
     finally:
         A.ABH = old_abh
@@ -78,7 +78,7 @@ def test_false_positive_dropped_before_gates():
     Z.triage_finding = lambda f, **kw: {"verdict": "FALSE", "confidence": 95,
                                         "reason": "zero matches"}
     try:
-        note = A.gate_findings(sid, "example.test", alert=False)
+        note, _n = A.gate_findings(sid, "example.test", alert=False)
         assert "rejected by triage" in note, note
     finally:
         A.ABH, Z.available, Z.triage_finding = old_abh, old_avail, old_tri

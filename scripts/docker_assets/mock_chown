@@ -1,0 +1,8 @@
+#!/bin/sh
+rm -f /home/androidusr/emulator/*.lock 2>/dev/null
+case "$*" in
+    *"/dev/kvm"*)
+        exit 0
+        ;;
+esac
+exec /usr/bin/chown "$@"

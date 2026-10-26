@@ -23,9 +23,24 @@ def test(host):
     buf=b""
     while b"\r\n\r\n" not in buf: buf+=ss.recv(200)
     return buf.startswith(b"HTTP/1.1 200")
+def check_credentials_valid(creds, host="us-central-152.totallyacdn.com", timeout=4):
+    """Fast handshake test: verifies credentials aren't rejected with 407 or exhausted."""
+    try:
+        import base64
+        auth = base64.b64encode(f"{creds['username']}:{creds['password']}".encode()).decode()
+        s = socket.create_connection((host, 443), timeout=timeout)
+        ss = ssl.create_default_context().wrap_socket(s, server_hostname=host)
+        ss.sendall(f"CONNECT example.com:80 HTTP/1.1\r\nHost: example.com:80\r\nProxy-Authorization: Basic {auth}\r\n\r\n".encode())
+        buf = ss.recv(200)
+        ss.close()
+        return buf.startswith(b"HTTP/1.1 200")
+    except Exception:
+        return False
+
 def get_credentials(force_refresh=False):
     """Get valid Windscribe proxy credentials {username, password}.
-    Checks cached credentials, farmed accounts, or auto-registers a fresh account."""
+    Checks cached credentials with auto-validation; automatically auto-registers
+    a fresh account on the fly whenever the cache is missing or expired."""
     import base64, urllib.request
     from pathlib import Path
     cache_path = Path.home() / ".cache/auto-freecf/windscribe_creds.json"
@@ -33,7 +48,8 @@ def get_credentials(force_refresh=False):
         try:
             d = json.loads(cache_path.read_text())
             if d.get("username") and d.get("password"):
-                return d
+                if check_credentials_valid(d):
+                    return d
         except Exception:
             pass
     farm_file = Path("/home/amen/Auto-FreeCF-vendor-refs/artifacts/vpnre/ws_farm_accounts.jsonl")
@@ -60,9 +76,10 @@ def get_credentials(force_refresh=False):
                     u = base64.b64decode(creds["username"]).decode()
                     p = base64.b64decode(creds["password"]).decode()
                     out = {"username": u, "password": p}
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_text(json.dumps(out))
-                    return out
+                    if check_credentials_valid(out):
+                        cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        cache_path.write_text(json.dumps(out))
+                        return out
             except Exception:
                 continue
     try:

@@ -93,26 +93,31 @@ class TestAppErrorDetection(unittest.TestCase):
             got += c
         self.assertEqual(got, raw)
 
-    def test_abuse_3012_advances_both_chain_and_account(self):
-        """2026-10-15: a 3012 is a per-ACCOUNT block (same request succeeded on
-        the next account), so it must rotate accounts AND advance the model
-        chain. Only rotating the model left blocked accounts in the pool."""
+    def test_abuse_3012_advances_chain_but_not_account(self):
+        """3012 policy reversed in 42df972 ("stop rotating accounts on
+        farm-wide 3012"): measured 2026-10-19 the flag is FARM-WIDE -- 25
+        accounts, both mail domains, eight egress IPs all 3012 identically
+        while billing still shows an intact plan. Rotating then burns four
+        accounts per request and amplifies the trigger pattern. The chain
+        still advances (failover to GLM-5.3-Flash); `_call_failover` allows
+        exactly one account probe to cover the per-account case."""
         err = self.m.UpstreamAppError(3012, "unusual activity", b'{"code":3012}', 405)
         self.assertTrue(self.m._try_next_model(err))
-        self.assertTrue(self.m._try_another_account(err))
+        self.assertFalse(self.m._try_another_account(err))
 
     def test_abuse_3012_from_peek_still_advances_chain(self):
         """Regression: _peek_app_error builds the error with the DEFAULT
         http_code=429, so a real anti-abuse body is app_code=3012 / code=429.
         Matching only on HTTP 405 relayed 3012 to the client instead of chaining
-        to GLM-5.3-Flash (observed live 2026-10-14)."""
+        to GLM-5.3-Flash (observed live 2026-10-14). Account rotation is still
+        refused -- see the farm-wide note above."""
         err, _ = self.m._peek_app_error(
             FakeResponse(b'{"code":3012,"msg":"request has been blocked due to unusual activity."}'))
         self.assertIsInstance(err, self.m.UpstreamAppError)
         self.assertEqual(err.app_code, 3012)
         self.assertEqual(err.code, 429)
         self.assertTrue(self.m._try_next_model(err))
-        self.assertTrue(self.m._try_another_account(err))
+        self.assertFalse(self.m._try_another_account(err))
 
     def test_401_rotates_account_not_model(self):
         err = self.m.UpstreamAppError(0, "unauthorized", b"{}", 401)

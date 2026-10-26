@@ -118,25 +118,42 @@ def jwt_for(email):
     return read(p(os.path.join("jwt", email + ".txt"))).strip()
 
 
-def device_mid():
-    try:
-        return json.load(open(os.path.expanduser("~/.zcode/v2/telemetry-state.json")))["deviceMid"]
-    except Exception:
-        return "56e5b07f-d86e-4adc-b4f4-2384a5243378"
+def device_mid(email=""):
+    """Stable per-ACCOUNT device id.
+
+    Measured 2026-10-24: sending the desktop app's single device-mid for every
+    farmed account made z.ai treat the whole farm as ONE device, and
+    /billing/preview answered `plans: []` — the 1024 Dev Day coupon was hidden.
+    Repeating the same request with a fresh uuid for the same account returned
+    `plans: [zcode-v3-start-plan-1024]`. So the id must be derived per account
+    and stay stable for that account (rotating it every call would look like a
+    device factory instead).
+
+    Derived from the account name with UUIDv5 so it is deterministic, unique,
+    and needs no storage.
+    """
+    import uuid
+    if not email:
+        try:
+            return json.load(open(os.path.expanduser("~/.zcode/v2/telemetry-state.json")))["deviceMid"]
+        except Exception:
+            return "56e5b07f-d86e-4adc-b4f4-2384a5243378"
+    ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+    return str(uuid.uuid5(ns, "zcode-device:" + email.strip().lower()))
 
 
 def billing(email, ep="balance", extra=""):
     jwt = jwt_for(email)
     if not jwt:
         raise RuntimeError("no JWT for %s (run: zcode.py mint %s)" % (email, email))
-    H = {"Authorization": "Bearer " + jwt, "User-Agent": "ZCode/3.14.5",
+    H = {"Authorization": "Bearer " + jwt, "User-Agent": "ZCode/3.16.3",
          "http-referer": "https://zcode.z.ai", "x-platform": "linux-x64",
-         "x-zcode-app-version": "3.14.5", "x-release-channel": "production",
+         "x-zcode-app-version": "3.16.3", "x-release-channel": "production",
          "x-client-language": "en-US", "x-client-timezone": "Asia/Jakarta",
          "x-os-category": "linux", "x-os-version": "7.2.8", "x-title": "Z Code@electron",
-         "x-device-mid": device_mid(),
+         "x-device-mid": device_mid(email),
          "x-request-id": "00000000-0000-4000-8000-%012d" % (time.time() % 1e12)}
-    url = "https://zcode.z.ai/api/v1/zcode-plan/billing/%s?app_version=3.14.5%s" % (ep, extra)
+    url = "https://zcode.z.ai/api/v1/zcode-plan/billing/%s?app_version=3.16.3%s" % (ep, extra)
     with urllib.request.urlopen(urllib.request.Request(url, headers=H), timeout=25) as r:
         d = json.loads(r.read())
     if d.get("code") != 0:
@@ -204,6 +221,74 @@ def cmd_mint(a):
         if os.path.exists(out) and email == os.environ.get("ZB_EMAIL"):
             # keep the shared fallback in sync (bridge server reads it)
             write(os.path.join(STATE, "zc_jwt.txt"), read(out).strip() + "\n")
+
+def cmd_remint(a):
+    """Smart batch re-minting of accounts with plan quota, prioritizing
+    queued 3012 accounts and accounts with positive remaining headroom."""
+    accts = dict(accounts())
+    q = load_json(p("remint_queue.json"), {})
+    bal = load_json(p("balance.json"), {})
+
+    scored = []
+    now = time.time()
+    for email, pw in accts.items():
+        if a.email and email != a.email:
+            continue
+        jf = p(os.path.join("jwt", email + ".txt"))
+        age_hours = (now - os.path.getmtime(jf)) / 3600.0 if os.path.exists(jf) else 9999.0
+
+        if not a.force and email not in q and age_hours < a.max_age_hours:
+            continue
+
+        b_info = bal.get(email, {})
+        rem_units = 0
+        if isinstance(b_info, dict):
+            for b in b_info.get("buckets", []):
+                if isinstance(b, dict):
+                    rem_units += b.get("remaining_units") or 0
+
+        priority = (1e12 if email in q else 0) + rem_units + (age_hours * 1000)
+        scored.append((priority, email, pw, age_hours, rem_units))
+
+    scored.sort(key=lambda x: -x[0])
+    limit = a.limit if a.limit and a.limit > 0 else len(scored)
+    selected = scored[:limit]
+
+    print(f"[*] Auto re-mint queue: {len(selected)} accounts to process (out of {len(scored)} eligible)")
+    if not selected:
+        print("  All accounts have fresh JWTs (< %.1fh) and no pending queue." % a.max_age_hours)
+        return
+
+    if not _ensure_cdp_chrome():
+        sys.exit("no CDP Chrome on :9222 and no chrome binary found")
+
+    success = 0
+    for idx, (_, email, pw, age, rem) in enumerate(selected, 1):
+        if not _ensure_cdp_chrome():
+            time.sleep(1)
+            _ensure_cdp_chrome()
+        print(f"\n[{idx}/{len(selected)}] Re-minting {email} (age: {age:.1f}h, quota: {rem:,})...")
+        if not pw:
+            print(f"  [!] Skipped {email}: missing password")
+            continue
+        out = p(os.path.join("jwt", email + ".txt"))
+        env = dict(os.environ, ZB_EMAIL=email, ZB_PW=pw, ZB_OUT=out)
+        rc = subprocess.call([PY_BROWSER, MINT], env=env)
+        if rc == 0 and os.path.exists(out):
+            success += 1
+            print(f"  [✓] Successfully re-minted {email}")
+            if email in q:
+                del q[email]
+                write(p("remint_queue.json"), json.dumps(q, indent=2))
+        else:
+            print(f"  [✗] Failed to re-mint {email} (rc={rc})")
+
+        if idx < len(selected) and a.delay > 0:
+            time.sleep(a.delay)
+
+    print(f"\n[DONE] Auto re-mint completed: {success}/{len(selected)} succeeded.")
+    if success > 0:
+        inject_9router()
 
 
 # ---------------- persona / combos ----------------
@@ -274,11 +359,22 @@ def cmd_quota(a):
 
 # ---------------- watcher ----------------
 def _claim_direct(email, plan_id):
+    """POST billing/claim with the SAME per-account identity preview uses.
+
+    The claim endpoint must see the same x-device-mid as the preview request
+    that offered the coupon; sending the shared desktop id here is what made
+    every claim answer 3012 "unusual activity" while preview looked fine.
+    """
     jwt = jwt_for(email)
     body = json.dumps({"plan_id": plan_id}).encode()
     H = {"Authorization": "Bearer " + jwt, "Content-Type": "application/json",
-         "X-ZCode-App-Version": "3.14.5", "X-Platform": "linux-x64"}
-    req = urllib.request.Request("https://zcode.z.ai/api/v1/zcode-plan/billing/claim",
+         "User-Agent": "ZCode/3.16.3", "http-referer": "https://zcode.z.ai",
+         "x-zcode-app-version": "3.16.3", "x-release-channel": "production",
+         "x-client-language": "en-US", "x-client-timezone": "Asia/Jakarta",
+         "x-os-category": "linux", "x-os-version": "7.2.8", "x-title": "Z Code@electron",
+         "x-platform": "linux-x64", "x-device-mid": device_mid(email),
+         "x-request-id": "00000000-0000-4000-8000-%012d" % (time.time() % 1e12)}
+    req = urllib.request.Request("https://zcode.z.ai/api/v1/zcode-plan/billing/claim?app_version=3.16.3",
                                  data=body, headers=H, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
@@ -412,6 +508,20 @@ def _plan_claim_tick(email, pw, plan_id):
 
 def _watch_tick():
     cache = load_json(p("balance.json"), {})
+
+    # 0) Process queued accounts that encountered 3012 or dead JWT
+    remint_q = load_json(p("remint_queue.json"), {})
+    if remint_q:
+        accts_map = dict(accounts())
+        for q_email, meta in list(remint_q.items()):
+            pw = accts_map.get(q_email)
+            if pw and _mint_guard(q_email):
+                event("auto_remint", "%s (reason: %s)" % (q_email, meta.get("reason", "queue")))
+                cmd_mint(argparse.Namespace(email=q_email, all=False, password=pw))
+                remint_q.pop(q_email, None)
+                write(p("remint_queue.json"), json.dumps(remint_q, indent=2))
+                break
+
     for email, pw in accounts():
         # An account with no JWT can't be billed at all -- and never self-heals
         # (the generic handler below would just log billing_err every tick).
@@ -655,6 +765,13 @@ def main():
     x = sa.add_parser("rm"); x.add_argument("email")
 
     s = sub.add_parser("mint"); s.add_argument("email", nargs="?"); s.add_argument("--all", action="store_true"); s.add_argument("--password")
+    s = sub.add_parser("remint")
+    s.add_argument("email", nargs="?", help="Specific email to re-mint (optional)")
+    s.add_argument("--limit", type=int, default=5, help="Max accounts to re-mint (default: 5)")
+    s.add_argument("--max-age-hours", type=float, default=24.0, help="Skip accounts with JWTs newer than this (default: 24h)")
+    s.add_argument("--delay", type=float, default=3.0, help="Delay between accounts in seconds (default: 3s)")
+    s.add_argument("--force", action="store_true", help="Force re-mint regardless of JWT age")
+
 
     s = sub.add_parser("persona")
     s.add_argument("action", choices=["on", "off", "show"])
@@ -688,6 +805,8 @@ def main():
         {"add": cmd_account_add, "list": cmd_account_list, "rm": cmd_account_rm}.get(a.action, cmd_account_list)(a)
     elif a.cmd == "mint":
         cmd_mint(a)
+    elif a.cmd == "remint":
+        cmd_remint(a)
     elif a.cmd == "persona":
         cmd_persona(a)
     elif a.cmd == "models":

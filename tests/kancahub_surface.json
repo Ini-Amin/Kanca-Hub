@@ -50,6 +50,17 @@
 "sudo_password",
 "tool"
 ],
+"9router models": [
+"action",
+"all_models",
+"concurrency",
+"emit_fallbacks",
+"filter",
+"help",
+"models",
+"retries",
+"timeout"
+],
 "9router proxy": [
 "action",
 "help",
@@ -59,9 +70,12 @@
 ],
 "abliteration": [
 "cdp",
+"country",
 "extra",
 "help",
-"mode"
+"mode",
+"no_proxy",
+"proxy"
 ],
 "adb": [
 "adb_cmd",
@@ -181,6 +195,26 @@
 "help",
 "host",
 "port"
+],
+"freeai": [
+"freeai_cmd",
+"help"
+],
+"freeai beatapi": [
+"attempts",
+"headless",
+"help"
+],
+"freeai keys": [
+"help"
+],
+"freeai radox": [
+"attempts",
+"headless",
+"help"
+],
+"freeai status": [
+"help"
 ],
 "github": [
 "github_cmd",
@@ -375,6 +409,33 @@
 ],
 "mobile status": [
 "help"
+],
+"notrack": [
+"extra",
+"help",
+"mode"
+],
+"opencode": [
+"api_key",
+"continuous",
+"count",
+"country",
+"dry_run",
+"email",
+"free_only",
+"from_auth_json",
+"from_file",
+"from_json",
+"headed",
+"help",
+"job",
+"keep_open",
+"model",
+"no_proxy",
+"no_store",
+"oc_cmd",
+"prompt",
+"proxy"
 ],
 "otp": [
 "help",

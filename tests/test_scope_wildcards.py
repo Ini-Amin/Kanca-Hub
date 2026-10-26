@@ -74,11 +74,14 @@ def test_wildcard_with_apex_denied_yields_no_seed():
 
 
 def test_guard_accepts_target_and_rejects_strangers():
-    if not (BUGBUNTER / "tools" / "scope_checker.py").is_file():
+    checker_path = BUGBUNTER / "tools" / "scope_checker.py"
+    if not checker_path.is_file():
         return  # engine not checked out next to the orchestrator
-    sys.path.insert(0, str(BUGBUNTER))
-    from tools.scope_checker import ScopeChecker
-
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("scope_checker", checker_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ScopeChecker = mod.ScopeChecker
     allow, deny = _flags(A.scope_flags(OKTA_IN, OKTA_OUT))
     sc = ScopeChecker(domains=allow, excluded_domains=deny)
     seeds = _rank(B._scannable(OKTA_IN, OKTA_IN, OKTA_OUT), OKTA_IN, OKTA_OUT)

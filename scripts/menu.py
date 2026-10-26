@@ -4,106 +4,120 @@ from __future__ import annotations
 import argparse
 import sys
 
-# Menu keys that start LONG-RUNNING servers/loops -> run as background jobs.
-# (Everything else is a normal, quick, interactive command.)
-MENU_BACKGROUND: dict[str, str] = {
-    "2": "gateway",     # Start the proxy gateway  (PetaniProxy --serve/--daemon)
-    "4": "harvest",     # Harvest proxies          (long harvest)
-}
+# ── Menu item definition ─────────────────────────────────────────────────
+# Each item: (key, description, cmd_str, cmd_args, status)
+# status: None = normal, "blocked" = known dead, "note" = has caveat
 
-# The argv each background menu item runs (as its own process). These must be
-# NON-INTERACTIVE so running them with no stdin never blocks or errors.
-MENU_BACKGROUND_CMD: dict[str, list[str]] = {
-    "2": ["proxy", "gateway", "--port", "8888", "--target", "30"],  # rotating gateway
-    "4": ["proxy", "harvest", "--target", "20"],                    # long harvest
-}
+MenuEntry = tuple[str, str, str, list[str] | None, str | None]
 
-UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = [
-    # Top option: guided pipeline
-    ("0", "Run end-to-end setup (guided pipeline)", "end-to-end", None),
-
-
-    # Group 1-2: Egress & Diagnostics
-    ("1", "Check everything is healthy", "doctor", ["doctor"]),
-    ("2", "Start the proxy gateway (background)", "proxy gateway", ["proxy", "gateway"]),
-    ("3", "Manage WARP tunnel", "warp", ["warp"]),
-    ("4", "Harvest proxies (background)", "proxy harvest", ["proxy", "harvest"]),
-
-    # Group 3: Accounts (github/thk/gmail/grok/stack)
-    ("5", "GitHub Education account farm", "github farm", ["github", "farm"]),
-    ("6", "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"]),
-    ("7", "Login to existing Cloudflare accounts", "stack login", ["stack", "login"]),
-    ("8", "Create TokenHarbor keys", "thk batch", ["thk", "batch"]),
-    ("9", "Grok farm", "grok run", ["grok", "run"]),
-    ("11", "Gmail account farm", "gmail farm", ["gmail", "farm"]),
-
-    # Group 4: 9Router (inject/sync)
-    ("12", "Inject Grok tokens into 9Router", "grok inject", ["grok", "inject"]),
-    ("13", "Prune dead 9Router connections", "stack sync --prune", ["stack", "sync", "--prune"]),
-    ("14", "Wire TokenHarbor env (harbor)", "thk setup-env", ["thk", "setup-env"]),
-
-    # Group 5: Mail & Docs
-    ("15", "School mailbox: test login", "mail test", ["mail", "test"]),
-    ("16", "School mailbox: wait for OTP", "mail otp", ["mail", "otp"]),
-    ("18", "List teacher-doc countries", "yowes list", ["yowes", "list"]),
-
-    # Group 6: 9Router IDE interception
-    ("19", "9Router MITM proxy status (route IDE traffic)", "9router mitm status", ["9router", "mitm", "status"]),
-
-    # Group 7: Adapt any site
-    ("20", "Autofarm any website (paste URL -> adapt a pipeline)", "autofarm", ["autofarm"]),
-
-    # Group 8: OTP mailboxes
-    ("21", "Cheap OTP mailboxes (Litensi pay-per-code)", "otp", ["otp", "profile"]),
-
-    # Group 9: Vendor farms (vendored tools in ~/Auto-FreeCF-vendor-refs)
-    ("22", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"]),
-    ("23", "ZCode: z.ai Start Plan -> glm pool", "zcode claim --connect", ["zcode", "claim", "--", "--connect"]),
-    ("24", "AutoClaw: 1-click z.ai OAuth claim (+800)", "autoclaw claim", ["autoclaw", "claim"]),
-    ("28", "RadoxAI signup (10M tokens/mo free)", "freeai radox", ["freeai", "radox"]),
-    ("29", "BeatAPI signup (free credits)", "freeai beatapi", ["freeai", "beatapi"]),
-    ("30", "Free-AI farm status (radox + beatapi)", "freeai status", ["freeai", "status"]),
-
-    # Group 10: Free VPN-fleet egress
-    ("25", "VPN pool: status + flag cooldowns", "vpn status", ["vpn", "status"]),
-    ("26", "VPN pool: list entries", "vpn list", ["vpn", "list"]),
-    ("27", "VPN pool: farm Windscribe accounts", "vpn farm", ["vpn", "farm"]),
+CATEGORIES: list[tuple[str, str, list[MenuEntry]]] = [
+    ("A", "Health & Egress", [
+        ("1", "Check everything is healthy", "doctor", ["doctor"], None),
+        ("2", "Start the proxy gateway (background)", "proxy gateway", ["proxy", "gateway"], None),
+        ("3", "Manage WARP tunnel", "warp", ["warp"], None),
+        ("4", "Harvest proxies (background)", "proxy harvest", ["proxy", "harvest"], None),
+        ("5", "VPN pool: status + flag cooldowns", "vpn status", ["vpn", "status"], None),
+        ("6", "VPN pool: list entries", "vpn list", ["vpn", "list"], None),
+        ("7", "VPN pool: farm Windscribe accounts", "vpn farm", ["vpn", "farm"], None),
+    ]),
+    ("B", "Account Farms", [
+        ("8",  "GitHub Education account farm", "github farm", ["github", "farm"], None),
+        ("9",  "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"], None),
+        ("10", "Login to existing Cloudflare accounts", "stack login", ["stack", "login"], None),
+        ("11", "Create TokenHarbor keys", "thk batch", ["thk", "batch"], None),
+        ("12", "Grok farm", "grok run", ["grok", "run"], None),
+        ("13", "Gmail account farm (needs Litensi SMS)", "gmail farm", ["gmail", "farm"], "note"),
+        ("14", "ZCode: z.ai Start Plan → glm pool", "zcode claim --connect", ["zcode", "claim", "--", "--connect"], None),
+        ("15", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"], None),
+    ]),
+    ("C", "9Router & Bridges", [
+        ("16", "Inject Grok tokens into 9Router", "grok inject", ["grok", "inject"], None),
+        ("17", "Prune dead 9Router connections", "stack sync --prune", ["stack", "sync", "--prune"], None),
+        ("18", "Wire TokenHarbor env (harbor)", "thk setup-env", ["thk", "setup-env"], None),
+        ("19", "9Router MITM proxy status", "9router mitm status", ["9router", "mitm", "status"], None),
+    ]),
+    ("D", "Mail & Verification", [
+        ("20", "School mailbox: test login", "mail test", ["mail", "test"], None),
+        ("21", "School mailbox: wait for OTP", "mail otp", ["mail", "otp"], None),
+        ("22", "List teacher-doc countries", "yowes list", ["yowes", "list"], None),
+        ("23", "Cheap OTP mailboxes (Litensi)", "otp", ["otp", "profile"], None),
+    ]),
+    ("E", "Tools", [
+        ("24", "Autofarm any website (paste URL → pipeline)", "autofarm", ["autofarm"], None),
+        ("25", "AutoClaw: z.ai OAuth claim", "autoclaw claim", ["autoclaw", "claim"], "blocked"),
+        ("26", "RadoxAI signup (1 domain/acct)", "freeai radox", ["freeai", "radox"], "note"),
+        ("27", "BeatAPI signup (free credits)", "freeai beatapi", ["freeai", "beatapi"], None),
+        ("28", "Free-AI farm status", "freeai status", ["freeai", "status"], None),
+    ]),
 ]
 
-MENU_STAGE_HEADERS: dict[str, str] = {
-    "0": "[0] Guided Pipeline Setup",
-    "1": "[1-2] Egress & Diagnostics (proxy · WARP · doctor)",
-    "5": "[3] Account Farms (GitHub · Cloudflare · TokenHarbor · Grok · Gmail)",
-    "12": "[4] 9Router Integration (inject · sync · prune)",
-    "15": "[5] Mailbox & Verification Docs (mail · docs)",
-    "19": "[6] IDE Interception (MITM · Antigravity/Copilot/Kiro)",
-    "20": "[7] Adapt Any Website (autofarm)",
-    "21": "[8] OTP Mailboxes (Litensi)",
-    "22": "[9] Vendor & Free-AI Farms (abliteration · ZCode · AutoClaw · radox · beatapi)",
-    "25": "[10] Free VPN-fleet egress",
+# Flat view for backward compat (render, dispatch, tests)
+UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = []
+for _cat_key, _cat_name, _items in CATEGORIES:
+    for _k, _d, _c, _a, _s in _items:
+        UNIFIED_MENU.append((_k, _d, _c, _a))
+
+# Status tags per key
+_STATUS: dict[str, str | None] = {}
+for _cat_key, _cat_name, _items in CATEGORIES:
+    for _k, _d, _c, _a, _s in _items:
+        if _s:
+            _STATUS[_k] = _s
+
+# Stage headers keyed by the FIRST item key in each category
+MENU_STAGE_HEADERS: dict[str, str] = {}
+for _cat_key, _cat_name, _items in CATEGORIES:
+    if _items:
+        MENU_STAGE_HEADERS[_items[0][0]] = f"[{_cat_key}] {_cat_name}"
+
+# Menu keys that start LONG-RUNNING servers/loops -> run as background jobs.
+MENU_BACKGROUND: dict[str, str] = {
+    "2": "gateway",
+    "4": "harvest",
 }
 
-# Menu keys that are account farms -> the menu asks for count/pace/egress in-CLI.
-MENU_FARM_KEYS = {"5", "8", "9", "11", "7"}
+MENU_BACKGROUND_CMD: dict[str, list[str]] = {
+    "2": ["proxy", "gateway", "--port", "8888", "--target", "30"],
+    "4": ["proxy", "harvest", "--target", "20"],
+}
+
+# Menu keys that are account farms -> the menu asks for count/pace/egress.
+MENU_FARM_KEYS = {"8", "10", "11", "12", "13"}
+
+# Items needing custom interactive prompts before dispatch.
+_INTERACTIVE_HANDLERS: dict[str, str] = {
+    "24": "_handle_autofarm",
+    "25": "_handle_autoclaw",
+}
+
+_STATUS_LABELS: dict[str, str] = {
+    "blocked": " \x1b[31m[blocked]\x1b[0m",
+    "note":    " \x1b[33m[!]\x1b[0m",
+}
 
 
 def render_menu() -> str:
     """Render the unified menu as text (non-interactive, testable)."""
     import kancahub
     lines = []
-    lines.append(f" {kancahub.C['bold']}Unified Command Menu:{kancahub.C['reset']}")
-    for key, desc, cmd_str, _ in kancahub.UNIFIED_MENU:
-        if key in kancahub.MENU_STAGE_HEADERS:
-            lines.append(f"\n {kancahub.C['bold']}{kancahub.C['cyan']}── {kancahub.MENU_STAGE_HEADERS[key]} ──{kancahub.C['reset']}")
-        cmd_part = f" {kancahub.C['cyan']}({cmd_str}){kancahub.C['reset']}" if cmd_str else ""
-        lines.append(f"  [{kancahub.col('bold', key)}] {desc:<42}{cmd_part}")
+    lines.append(f" {kancahub.C['bold']}KancaHub{kancahub.C['reset']}")
     lines.append("")
-    lines.append(f"  [{kancahub.col('bold', 'h')}] Help & command reference")
-    lines.append(f"  [{kancahub.col('bold', 'q')}] Exit")
+    for cat_key, cat_name, items in CATEGORIES:
+        lines.append(f" {kancahub.C['bold']}{kancahub.C['cyan']}── [{cat_key}] {cat_name} ──{kancahub.C['reset']}")
+        for key, desc, cmd_str, _, status in items:
+            cmd_part = f" {kancahub.C['cyan']}({cmd_str}){kancahub.C['reset']}"
+            tag = _STATUS_LABELS.get(status or "", "")
+            lines.append(f"  [{kancahub.col('bold', key):>4}] {desc:<44}{cmd_part}{tag}")
+        lines.append("")
+    lines.append(f"  [{kancahub.col('bold', '0')}]  Run end-to-end setup (guided pipeline)")
+    lines.append(f"  [{kancahub.col('bold', 'h')}]  Help & command reference")
+    lines.append(f"  [{kancahub.col('bold', 'q')}]  Exit")
     lines.append("")
-    lines.append(kancahub.col("dim", "  Tip: if a farm is IP-blocked (GitHub/TokenHarbor), tether your phone and"))
-    lines.append(kancahub.col("dim", "       re-run with --proxy none (a mobile/carrier IP is the free fix)."))
     return "\n".join(lines)
+
+
+def _all_keys() -> list[str]:
+    return [item[0] for item in UNIFIED_MENU]
 
 
 def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = None) -> int:
@@ -117,9 +131,9 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
     Stops and reports honest error if any step fails.
     """
     import kancahub
-    print(kancahub.col("bold", "\n════════════════════════════════════════════════════════════════"))
-    print(kancahub.col("bold", "               KancaHub End-to-End Setup Pipeline                "))
-    print(kancahub.col("bold", "════════════════════════════════════════════════════════════════"))
+    print(kancahub.col("bold", "\n════════════════════════════════════════════════════════════════════════"))
+    print(kancahub.col("bold", "                  KancaHub End-to-End Setup Pipeline                    "))
+    print(kancahub.col("bold", "════════════════════════════════════════════════════════════════════════"))
     print(kancahub.col("dim",  "  Safe sequential flow: Egress -> Farm -> 9Router Inject -> Sync\n"))
 
     farms = [
@@ -158,7 +172,6 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
     _, farm_label, farm_args, inject_args, sync_args = selected_farm
     print(kancahub.col("cyan", f"\n▶ Selected pipeline target: {farm_label}\n"))
 
-    # Ask for count/pace/egress IN THE CLI so end-to-end is fully guided too.
     farm_args = kancahub._menu_ask_farm_options(f_choice, list(farm_args))
     print(kancahub.col("dim", f"  → will run: kancahub {' '.join(farm_args)}\n"))
 
@@ -198,7 +211,7 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
 
     # ── Step (c): Inject to 9Router ──
     if inject_args and "--inject" in farm_args:
-        print(kancahub.col("dim", f"[Step 3/4] Already injected by the batch (--inject). Skipping.\n"))
+        print(kancahub.col("dim", "[Step 3/4] Already injected by the batch (--inject). Skipping.\n"))
     elif inject_args:
         print(kancahub.col("bold", f"[Step 3/4] Injecting credentials into 9Router ({' '.join(inject_args)})…"))
         rc_inject = kancahub.dispatch(p, p.parse_args(inject_args))
@@ -219,22 +232,22 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
             return rc_sync
         print(kancahub.col("green", "✓ Step 4 complete: Synced with 9Router.\n"))
 
-    print(kancahub.col("green", "════════════════════════════════════════════════════════════════"))
+    print(kancahub.col("green", "════════════════════════════════════════════════════════════════════════"))
     print(kancahub.col("green", f"✓ End-to-end setup for {farm_label} completed successfully!"))
-    print(kancahub.col("green", "════════════════════════════════════════════════════════════════\n"))
+    print(kancahub.col("green", "════════════════════════════════════════════════════════════════════════\n"))
     return 0
 
 
 def _farm_kind(key: str, argv: list[str]) -> str:
     """Normalize a menu key / argv into a farm kind: github|thk|grok|gmail|other."""
-    joined = " ".join(argv)
-    if "github" in joined:
+    flat = " ".join(argv).lower()
+    if "github" in flat:
         return "github"
-    if "thk" in joined:
+    if "thk" in flat:
         return "thk"
-    if "grok" in joined:
+    if "grok" in flat:
         return "grok"
-    if "gmail" in joined:
+    if "gmail" in flat:
         return "gmail"
     return "other"
 
@@ -243,8 +256,7 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
     """Prompt IN THE CLI for common farm options and append them to argv.
 
     Keeps everything inside `kancahub` (no need to remember flags). Every prompt
-    has a default, so just pressing Enter keeps sensible behavior. Works for both
-    the unified-menu keys and the end-to-end pipeline keys.
+    has a default, so just pressing Enter keeps sensible behavior.
     """
     import kancahub
     def _ask(prompt: str, default: str) -> str:
@@ -260,7 +272,6 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
 
     print(kancahub.col("dim", "   (Enter = keep default; these run inside this CLI)"))
 
-    # 1) how many accounts
     n = _ask("how many accounts", "1")
     if kind == "thk":
         argv = ["thk", "batch", n]
@@ -269,11 +280,10 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
     elif kind == "gmail":
         argv = ["gmail", "farm", "--count", n]
     elif kind == "github":
-        argv = [a for a in argv if a not in ("--max-accounts",)]  # drop dupes if re-run
+        argv = [a for a in argv if a not in ("--max-accounts",)]
         if n.isdigit() and n != "1":
             argv += ["--max-accounts", n]
 
-    # 1b) thk only: per-IP cap, inject into 9Router, where to store
     if kind == "thk":
         print(kancahub.col("dim", f"   (TokenHarbor allows ~{kancahub.THK_PER_IP_MAX} signups per IP, then locks it ~1h; "
                                   f"{kancahub.THK_PER_IP_DEFAULT} is safe — the IP rotates automatically after that)"))
@@ -287,13 +297,11 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
         if store in ("9router", "ledger", "both"):
             argv += ["--store", store]
 
-    # 2) pacing (github only supports --pace today; thk is limited by a per-IP count, not speed)
     if kind != "thk":
         pace = _ask("pace (fast/normal/safe)", "normal")
         if kind == "github" and pace in ("fast", "normal", "safe"):
             argv += ["--pace", pace]
 
-    # 3) egress  (auto = best available ladder incl. mobile; none = your raw connection)
     egress = _ask("egress — auto=best-available(incl. phone) / none=direct / mobile / warp", "auto")
     if egress == "mobile":
         argv += ["--mobile-rotate"]
@@ -302,6 +310,81 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
     return argv
 
 
+# ── Interactive handlers for items needing custom prompts ─────────────
+
+def _handle_autofarm(p: argparse.ArgumentParser) -> None:
+    """Autofarm interactive prompt: URL, mailbox, options."""
+    import kancahub
+    try:
+        url = input(f" {kancahub.C['bold']}Target signup/login URL: {kancahub.C['reset']}").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if not url:
+        return
+    dom = input(f" {kancahub.C['bold']}Mailbox [1=my.id, 2=biz.id, 3=litensi, 4=static, 5=real gmail, or type your own domain]: {kancahub.C['reset']}").strip()
+    if dom == "2":
+        domain, mail = "kancalabs.biz.id", "auto"
+    elif dom == "3":
+        domain, mail = "kancalabs.my.id", "litensi"
+    elif dom == "4":
+        domain, mail = "kancalabs.my.id", "static"
+    elif dom == "5":
+        domain, mail = "kancalabs.my.id", "gmail"
+    elif "@" in dom or "." in dom:
+        domain = dom.lstrip("@").strip().lower()
+        mail = "relay"
+    else:
+        domain, mail = "kancalabs.my.id", "auto"
+    cmd_args = ["autofarm", url, "--domain", domain, "--mail", mail]
+    inj = input(f" {kancahub.C['bold']}Inject into 9Router? (y/N): {kancahub.C['reset']}").strip().lower()
+    if inj in ("y", "yes"):
+        cmd_args.append("--inject-9router")
+    hl = input(f" {kancahub.C['bold']}Run headless? (y/N): {kancahub.C['reset']}").strip().lower()
+    if hl in ("y", "yes"):
+        cmd_args.append("--headless")
+    print(kancahub.col("cyan", f"\n▶ Running: kancahub {' '.join(cmd_args)}\n"))
+    try:
+        kancahub.dispatch(p, p.parse_args(cmd_args))
+    except Exception as e:  # noqa: BLE001
+        print(kancahub.col("red", f"Error: {e}"))
+
+
+def _handle_autoclaw(p: argparse.ArgumentParser) -> None:
+    """AutoClaw interactive prompt — currently blocked."""
+    import kancahub
+    print(kancahub.col("red", "\n  AutoClaw is currently blocked (631001 on all pooled accounts)."))
+    print(kancahub.col("dim", "  See AGENTS.md for details.\n"))
+    try:
+        go = input(f" {kancahub.C['bold']}Try anyway? (y/N): {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if go not in ("y", "yes"):
+        return
+    print(kancahub.col("cyan", "\n── AutoClaw 2.0.3 (z.ai 1-Click OAuth Claim) ──"))
+    import autoclaw_client as ac
+    default_inv = ac.get_default_invite_code()
+    if default_inv:
+        prompt_txt = f" {kancahub.C['bold']}Invite code to claim [Enter for {default_inv}, q to cancel]: {kancahub.C['reset']}"
+    else:
+        prompt_txt = f" {kancahub.C['bold']}Invite code to claim (+800 tokens, Enter to skip, q to cancel): {kancahub.C['reset']}"
+    try:
+        raw = input(prompt_txt).strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if raw.lower() in ("q", "quit", "exit", "cancel"):
+        return
+    bind_code = raw or default_inv
+    cmd_args = ["autoclaw", "claim"]
+    if bind_code:
+        cmd_args.extend(["--bind", bind_code])
+    try:
+        kancahub.dispatch(p, p.parse_args(cmd_args))
+    except Exception as e:  # noqa: BLE001
+        print(kancahub.col("red", f"Error: {e}"))
+
+
+# ── Background job management ─────────────────────────────────────────
+
 def _jobs_menu(jobs: "JobRegistry") -> None:
     """List/inspect/stop the background jobs started from the menu."""
     import kancahub
@@ -309,7 +392,7 @@ def _jobs_menu(jobs: "JobRegistry") -> None:
         names = list(jobs.jobs)
         print(kancahub.col("bold", "\n  Background jobs:\n"))
         if not names:
-            print(kancahub.col("dim", "  (none) — start one with menu option [2] gateway or [4] harvest\n"))
+            print(kancahub.col("dim", "  (none) — start one with [2] gateway or [4] harvest\n"))
             return
         for i, n in enumerate(names, 1):
             state = kancahub.col("green", "● running") if jobs.alive(n) else kancahub.col("dim", "○ stopped")
@@ -344,10 +427,11 @@ def _jobs_menu(jobs: "JobRegistry") -> None:
 
 
 def interactive_mode(p: argparse.ArgumentParser) -> int:
-    """Beginner-friendly unified interactive menu when run without arguments."""
+    """Interactive menu loop."""
     import kancahub
     print(kancahub.get_ascii_banner())
     jobs = kancahub.JobRegistry()
+    valid_keys = set(_all_keys())
 
     while True:
         print(kancahub.render_menu())
@@ -357,8 +441,7 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
         print()
 
         try:
-            max_k = kancahub.UNIFIED_MENU[-1][0]
-            choice = input(f" {kancahub.C['bold']}Select an option [0-{max_k}, j, h, q]: {kancahub.C['reset']}").strip().lower()
+            choice = input(f" {kancahub.C['bold']}Select [1-{UNIFIED_MENU[-1][0]}, 0, j, h, q]: {kancahub.C['reset']}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             jobs.stop_all()
             print("\nExiting.")
@@ -386,90 +469,36 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
             print()
             continue
 
-        if choice == "20":
-            try:
-                url = input(f" {kancahub.C['bold']}Target signup/login URL: {kancahub.C['reset']}").strip()
-            except (EOFError, KeyboardInterrupt):
-                continue
-            if not url:
-                continue
-            dom = input(f" {kancahub.C['bold']}Mailbox [1=my.id, 2=biz.id, 3=litensi, 4=static, 5=real gmail, or type your own domain]: {kancahub.C['reset']}").strip()
-            if dom == "2":
-                domain, mail = "kancalabs.biz.id", "auto"
-            elif dom == "3":
-                domain, mail = "kancalabs.my.id", "litensi"
-            elif dom == "4":
-                domain, mail = "kancalabs.my.id", "static"
-            elif dom == "5":
-                domain, mail = "kancalabs.my.id", "gmail"
-            elif "@" in dom or "." in dom:
-                domain = dom.lstrip("@").strip().lower()
-                mail = "relay"
-            else:
-                domain, mail = "kancalabs.my.id", "auto"
-            cmd_args = ["autofarm", url, "--domain", domain, "--mail", mail]
-            inj = input(f" {kancahub.C['bold']}Inject into 9Router? (y/N): {kancahub.C['reset']}").strip().lower()
-            if inj in ("y", "yes"):
-                cmd_args.append("--inject-9router")
-            hl = input(f" {kancahub.C['bold']}Run headless? (y/N): {kancahub.C['reset']}").strip().lower()
-            if hl in ("y", "yes"):
-                cmd_args.append("--headless")
-            print(kancahub.col("cyan", f"\n▶ Running: kancahub {' '.join(cmd_args)}\n"))
-            try:
-                kancahub.dispatch(p, p.parse_args(cmd_args))
-            except Exception as e:  # noqa: BLE001
-                print(kancahub.col("red", f"Error: {e}"))
-            print()
-            try:
-                input(f" {kancahub.C['bold']}Press Enter to return to menu...{kancahub.C['reset']}")
-            except (EOFError, KeyboardInterrupt):
-                jobs.stop_all()
-                return 0
-            print()
-            continue
-        if choice == "24":
-            print(kancahub.col("cyan", "\n── AutoClaw 2.0.3 (z.ai 1-Click OAuth Claim) ──"))
-            import autoclaw_client as ac
-            default_inv = ac.get_default_invite_code()
-            if default_inv:
-                prompt_txt = f" {kancahub.C['bold']}Invite code to claim [Enter for {default_inv}, q to cancel]: {kancahub.C['reset']}"
-            else:
-                prompt_txt = f" {kancahub.C['bold']}Invite code to claim (+800 tokens, Enter to skip, q to cancel): {kancahub.C['reset']}"
-            try:
-                raw = input(prompt_txt).strip()
-            except (EOFError, KeyboardInterrupt):
-                continue
-            if raw.lower() in ("q", "quit", "exit", "cancel"):
-                continue
-            bind_code = raw or default_inv
-            cmd_args = ["autoclaw", "claim"]
-            if bind_code:
-                cmd_args.extend(["--bind", bind_code])
-            try:
-                kancahub.dispatch(p, p.parse_args(cmd_args))
-            except Exception as e:  # noqa: BLE001
-                print(kancahub.col("red", f"Error: {e}"))
-            print()
-            try:
-                input(f" {kancahub.C['bold']}Press Enter to return to menu...{kancahub.C['reset']}")
-            except (EOFError, KeyboardInterrupt):
-                jobs.stop_all()
-                return 0
-            print()
+        if choice not in valid_keys:
+            print(kancahub.col("yellow", f"  Invalid option. Choose 1-{UNIFIED_MENU[-1][0]}, 0, h, j, or q."))
             continue
 
+        # Dispatch: custom handler, background, farm, or generic
+        handler_name = _INTERACTIVE_HANDLERS.get(choice)
+        if handler_name:
+            handler_fn = globals()[handler_name]
+            try:
+                handler_fn(p)
+            except Exception as e:  # noqa: BLE001
+                print(kancahub.col("red", f"Error: {e}"))
+            print()
+            try:
+                input(f" {kancahub.C['bold']}Press Enter to return to menu...{kancahub.C['reset']}")
+            except (EOFError, KeyboardInterrupt):
+                jobs.stop_all()
+                return 0
+            print()
+            continue
 
         match = next((item for item in kancahub.UNIFIED_MENU if item[0] == choice), None)
         if not match:
-            print(kancahub.col("yellow", f"  Please enter a valid option between 0 and {kancahub.UNIFIED_MENU[-1][0]}, h, or q."))
             continue
 
         _key, _desc, cmd_str, cmd_args = match
         if not cmd_args:
             continue
 
-        # Long-running / server-y items run in the BACKGROUND so the menu is never
-        # stuck on PetaniProxy — the flow continues in the same CLI.
+        # Background items
         if _key in kancahub.MENU_BACKGROUND:
             job = kancahub.MENU_BACKGROUND[_key]
             print(kancahub.col("cyan", f"\n▶ Starting in background: kancahub {cmd_str}\n"))
@@ -477,7 +506,7 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
             print(kancahub.col("dim", "  the menu stays usable — choose [j] to see/stop jobs.\n"))
             continue
 
-        # Farm items: ask for count/pace/egress IN THE CLI (all inside kancahub).
+        # Farm items: ask for count/pace/egress
         if _key in kancahub.MENU_FARM_KEYS:
             print()
             cmd_args = kancahub._menu_ask_farm_options(_key, list(cmd_args))
@@ -504,9 +533,8 @@ def beginner_entry(p: argparse.ArgumentParser) -> int:
     try:
         from beginner import beginner_menu
     except Exception:
-        return kancahub.interactive_mode(p)  # fall back to the classic menu
+        return kancahub.interactive_mode(p)
 
-    # offer advanced escape on first screen
     print(kancahub.get_ascii_banner())
     print(kancahub.col("bold", "  New here? Just answer the questions.\n"))
     print(kancahub.col("dim", "  (advanced users: run `kancahub menu` for the full command list)\n"))

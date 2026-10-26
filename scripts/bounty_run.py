@@ -992,6 +992,23 @@ def cmd_dispatch(a):
             print("blu tools:", out.strip() or ("ERR " + err.strip()))
         seeds = _scannable(job["targets"], ins, outs)
         print("gate 1 seeds in scope:", ", ".join(seeds) or "-")
+        # Rank seeds by the measured vendor hazard from the CVE research
+        # (data/empirical_risk.json). A Zimbra/SonicWall edge box is exploited
+        # 20-40x more often than a generic host, so it deserves the scan budget
+        # first. Ranking is advisory only -- gate 1 already decided scope.
+        try:
+            sys.path.insert(0, str(HERE))
+            from empirical_targeting import rank_hosts
+            ranked = rank_hosts([_host_of(t) or t for t in seeds])
+            top = [r for r in ranked if r["priority"] > 1.0][:8]
+            if top:
+                print("empirical priority (vendor hazard vs 0.4474% baseline):")
+                for r in top:
+                    print("  %6.2fx  %-42s %s" % (r["priority"], r["host"], r["why"]))
+            else:
+                print("empirical priority: no vendor signal in the seed set")
+        except Exception as exc:
+            print("empirical priority: skipped (%s)" % str(exc)[:80])
         for t in job["targets"]:
             h = _host_of(t)
             if h and h not in seeds:
@@ -1036,9 +1053,10 @@ def cmd_dispatch(a):
     # Without it, `subfinder` not being on PATH produced an empty subs_raw.txt and
     # the run reported a clean program ("0 discovered") — the most dangerous
     # possible output, because it looks like success.
+    wd_a = "/tmp/bj-a-" + re.sub(r"[^A-Za-z0-9_.-]", "_", jid)
     phase_a = (TOOLPATH +
                "command -v subfinder >/dev/null || { echo ---TOOLMISSING--- >&2; exit 42; }; "
-               "cd /tmp && rm -rf bj && mkdir bj && cd bj; "
+               f"rm -rf {wd_a} && mkdir -p {wd_a} && cd {wd_a}; "
                "for h in %s; do subfinder -silent -d \"$h\" 2>/dev/null; done | sort -u > subs_raw.txt; "
                "echo ---SUBS---; cat subs_raw.txt; echo ---END---" % roots)
     if os.environ.get("BOUNTY_REMOTE"):
@@ -1194,13 +1212,31 @@ def cmd_triage(a):
         "- A host is in scope if it matches ANY in-scope entry and NO out-of-scope entry.\n"
         "- Every host in the recon below has ALREADY passed that test. Do not claim a\n"
         "  listed host is out of scope unless an explicit deny entry matches it.\n")
+    # Tell the planner what is empirically worth attacking. Without this it
+    # orders checks by vibes; with it, an exposed Zimbra/SonicWall/Citrix box is
+    # prioritised over a generic host, matching the measured KEV conversion rates.
+    empirical_note = ""
+    try:
+        sys.path.insert(0, str(HERE))
+        from empirical_targeting import rank_hosts
+        hosts = [l.split()[0] for l in live.splitlines() if l.strip()][:40]
+        ranked = [r for r in rank_hosts(hosts) if r["priority"] > 1.0][:6]
+        if ranked:
+            empirical_note = (
+                "\nEMPIRICAL PRIORITY (measured KEV conversion vs 0.4474% baseline; "
+                "prefer these when choosing checks):\n" +
+                "\n".join("- %s  %.1fx  (%s)" % (r["host"], r["priority"], r["vendor"])
+                           for r in ranked) + "\n")
+    except Exception:
+        pass
+
     plan = chat(PLANNER,
                 "Bug bounty hunt plan. Program: %s. In scope: %s. Out of scope (NEVER touch): %s.\n"
-                "%sRecon counts: %s\n%s\n"
+                "%s%sRecon counts: %s\n%s\n"
                 "List the top 5 checks in order, each with an exact tool command. "
                 "Only ever touch the in-scope hosts above."
                 % (job["program"], job["in_scope"], job["out_of_scope"], scope_note,
-                   counts, recon[:4000]))
+                   empirical_note, counts, recon[:4000]))
     (d / "plan.md").write_text(plan)
     # The drafter can come back empty on a transient upstream hiccup (429/bridge
     # busy). An empty draft then goes to the challengers, which correctly say

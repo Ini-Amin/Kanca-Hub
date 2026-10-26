@@ -429,6 +429,39 @@ def parse_abh_output(text: str) -> dict:
         out["tool_errors"] = len(re.findall(r"\b(?:raised exception|Tool .* (?:failed|blocked))\b", text))
     return out
 
+def read_session_stats(session_id: str, target: str = "") -> dict:
+    """Real step/finding counts from agent_session.json, when stdout lost them.
+
+    ABH prints `Steps executed:` and `Findings:` only in its closing block, so a
+    run the caller kills with `timeout` (rc=124) never prints them and
+    parse_abh_output reports steps=0 findings=0 — which reads as "the agent did
+    nothing" when the session file says otherwise. `Session:` IS printed at
+    activation with flush=True, so the id usually survives a killed run.
+
+    Measured 2026-10-23, sandbox-api.fireblocks.io: the digest said
+    `rc=124 steps=0 findings=0` while agent_session.json held step_count=24 and
+    completed_steps=24 — 24 real steps reported as zero.
+
+    Deliberately refuses to fall back to "newest session for this target": that
+    can be a session from an earlier run, and attributing someone else's steps
+    to this hunt is the same class of error as reporting zero.
+    """
+    if not session_id:
+        return {"steps": 0, "findings": 0}
+    p = _resolve_session_file(session_id, target)
+    if not p:
+        return {"steps": 0, "findings": 0}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return {"steps": 0, "findings": 0}
+    if not isinstance(d, dict):
+        return {"steps": 0, "findings": 0}
+    return {
+        "steps": int(d.get("step_count") or 0),
+        "findings": len(d.get("findings_log") or []),
+    }
+
 
 # ── Stage 4 — the four pre-submit gates ─────────────────────────────────────
 #
@@ -1087,8 +1120,16 @@ def load_abh_findings(session_file: str, target: str = "") -> list[dict]:
 def gate_findings(session_file: str, target: str, program: str = "",
                   ins=(), outs=(), jobs_dir: Path | None = None,
                   alert: bool = True, h1=None, poc=None, challenge=None,
-                  env: dict | None = None) -> str:
-    """Stages 4 + 5 for one hunt. Returns a compact note for the run digest.
+                  env: dict | None = None) -> tuple[str, int]:
+    """Stages 4 + 5 for one hunt. Returns (compact note, findings CLEARED).
+
+    The second element is what a caller should report as "temuan". ABH's own
+    `Findings:` count is len(findings_log), and every row there is one line of
+    tool output — a recon summary, a scanner verdict saying "SQLi: 0", a file
+    path. Measured 2026-10-23 on www.okta.com: 12 rows, all stamped HIGH, and
+    the run reported "12 temuan" while the session's own summary.txt showed
+    CONFIRMED SQLi 0 / RCE 0 / SSTI 0 / SAML 0. Only a row that clears the four
+    gates (after advisory triage) is a finding.
 
     LOW/INFO rows are not gated: they cannot be submitted anyway, and routing
     each one through DUPCHECK would spend a rate-limited HackerOne query on
@@ -1096,10 +1137,10 @@ def gate_findings(session_file: str, target: str, program: str = "",
     """
     rows = load_abh_findings(session_file, target)
     if not rows:
-        return "no findings recorded"
+        return "no findings recorded", 0
     high = [r for r in rows if r["severity"] in HIGH_VALUE]
     if not high:
-        return "%d finding(s), none above LOW — not gated" % len(rows)
+        return "%d finding(s), none above LOW — not gated" % len(rows), 0
 
     # Advisory triage by a free OpenCode model, BEFORE the four gates.
     #
@@ -1136,7 +1177,7 @@ def gate_findings(session_file: str, target: str, program: str = "",
         say("  triage skipped: %s: %s" % (type(exc).__name__, exc))
 
     if not high:
-        return "all candidate findings rejected by triage (no gates run)"
+        return "all candidate findings rejected by triage (no gates run)", 0
 
     cleared: list[dict] = []
     blocked_at: dict[str, int] = {}
@@ -1159,7 +1200,7 @@ def gate_findings(session_file: str, target: str, program: str = "",
     if blocked_at:
         parts += ", blocked " + " ".join(
             "%s:%d" % (k, v) for k, v in sorted(blocked_at.items()))
-    return parts
+    return parts, len(cleared)
 
 
 def main() -> int:
@@ -1421,6 +1462,16 @@ def main() -> int:
                     summary.append(line)
                     continue
             got = parse_abh_output(text)
+            # rc=124 (the caller's timeout) kills ABH before it prints its
+            # closing summary, leaving a session id but steps=0. Ask the session
+            # file instead of reporting a run that worked as having done nothing.
+            if got["steps"] == 0 and got["session"]:
+                real = read_session_stats(got["session"], target)
+                if real["steps"] > 0:
+                    got["steps"] = real["steps"]
+                    got["findings"] = got["findings"] or real["findings"]
+                    say("  recovered from session: steps=%d log_rows=%d"
+                        % (real["steps"], real["findings"]))
             completed = (rc == 0 and got["steps"] > 0)
             # A run where every tool call errored is INCONCLUSIVE, not hunted.
             # Both look like steps>0 findings=0, and retiring the program on the
@@ -1428,10 +1479,10 @@ def main() -> int:
             inconclusive = completed and got["steps"] > 0 and got["tool_errors"] >= got["steps"]
             if inconclusive:
                 line.update(status="hunt-inconclusive",
-                            note="rc=%d steps=%d tool_errors=%d findings=%d seeds=%d" % (
+                            note="rc=%d steps=%d tool_errors=%d log_rows=%d seeds=%d" % (
                                 rc, got["steps"], got["tool_errors"],
                                 got["findings"], len(seeds)),
-                            steps=got["steps"], findings=got["findings"],
+                            steps=got["steps"],
                             session=got["session"])
                 say("  INCONCLUSIVE: every one of %d step(s) errored — nothing was "
                     "actually tested, so this is not a clean program"
@@ -1440,11 +1491,16 @@ def main() -> int:
                 continue
             # seeds= belongs in the summary line too: "steps>0" alone says the
             # hunt ran, not how much surface it was handed.
+            # `findings=` is deliberately NOT set here: it is filled in below
+            # from what survived the four gates. The raw ABH number goes in the
+            # note as `log_rows=` because ABH defines it as len(findings_log)
+            # and every row in that log is one line of tool output —
+            # measurements, recon summaries and zero-result counters included.
             line.update(status="hunted" if completed else ("hunt-empty" if rc == 0 else "hunt-failed"),
-                        note="rc=%d steps=%d findings=%d seeds=%d%s" % (
+                        note="rc=%d steps=%d log_rows=%d seeds=%d%s" % (
                             rc, got["steps"], got["findings"], len(seeds),
                             (" tool_errors=%d" % got["tool_errors"]) if got["tool_errors"] else ""),
-                        steps=got["steps"], findings=got["findings"],
+                        steps=got["steps"],
                         session=got["session"])
             if not completed:
                 tail = [l for l in text.strip().splitlines() if l.strip()][-3:]
@@ -1456,15 +1512,21 @@ def main() -> int:
             # If steps==0 (e.g. LLM failure or circuit-breaker trip on step 1),
             # leave the program in the rotation to retry.
             if completed:
+                cleared = 0
                 try:
-                    gn = gate_findings(got.get("session") or "", target,
-                                       program=slug, ins=ins, outs=outs)
+                    gn, cleared = gate_findings(got.get("session") or "", target,
+                                                program=slug, ins=ins, outs=outs)
                 except Exception as e:  # noqa: BLE001
                     # Isolated: a gate crash must not decide whether the program
                     # is retired. That verdict belongs to the hunt, and letting
                     # an exception here loop a target forever would be worse
                     # than one unreviewed finding.
                     gn = "gate error: %s: %s" % (type(e).__name__, e)
+                    cleared = 0
+                # "temuan" in the digest means findings that cleared the gates.
+                # Left at ABH's raw len(findings_log), a run that found nothing
+                # reports every scanner summary line as a finding.
+                line["findings"] = cleared
                 if gn:
                     line["note"] = "%s | gates: %s" % (line["note"], gn)
                     say("  gates: %s" % gn)

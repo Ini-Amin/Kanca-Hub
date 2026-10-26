@@ -535,4 +535,10 @@ finally:
 
 print()
 print("RESULT:", "ALL PASS" if fails == 0 else "%d FAILURES" % fails)
-sys.exit(1 if fails else 0)
+def test_bounty_scope():
+    """Pytest entrypoint for bounty scope assertions."""
+    assert fails == 0, f"{fails} bounty-scope check(s) failed"
+
+
+if __name__ == "__main__":
+    sys.exit(1 if fails else 0)

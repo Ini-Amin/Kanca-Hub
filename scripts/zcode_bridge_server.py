@@ -34,12 +34,12 @@ LEGACY_FALLBACK_JWT = "/tmp/opencode/zc_jwt.txt"  # pre-2026-10-14 path; read-on
 
 # Captured verbatim from the app's own model request (mitmproxy flow, 2026-10-10).
 APP_HEADERS = {
-    "user-agent": "ZCode/3.14.5 ai-sdk/provider-utils/4.0.27 runtime/node.js/24",
+    "user-agent": "ZCode/3.16.3 ai-sdk/provider-utils/4.0.27 runtime/node.js/24",
     "anthropic-version": "2023-06-01",
     "anthropic-beta": "mid-conversation-system-2026-04-07",
     "http-referer": "https://zcode.z.ai",
     "x-title": "Z Code@electron",
-    "x-zcode-app-version": "3.14.5",
+    "x-zcode-app-version": "3.16.3",
     "x-platform": "linux-x64",
     "x-release-channel": "production",
     "x-client-language": "en-US",
@@ -147,18 +147,11 @@ def persona_scope():
 
 
 def merge_system(client_system, force_persona=False, requested="", resolved=""):
-    """WAF gate: ZCode's own prompt must lead. Persona (if on) sits after it,
-    then the client's own system."""
-    blocks = list(SYSTEM_BLOCKS)
-    if persona_active(force_persona, requested, resolved):
-        txt = persona_text()
-        if txt:
-            blocks.append({"type": "text", "text": txt})
-    if not client_system:
-        return blocks
-    if isinstance(client_system, str):
-        client_system = [{"type": "text", "text": client_system}]
-    return blocks + list(client_system)
+    """WAF gate: ZCode API strictly rejects requests if body['system'] contains anything
+    other than ZCode official desktop client's exact prompt blocks.
+    To preserve full client system instructions safely, non-official prompts are
+    never appended to body['system']; they are handled in the message stream."""
+    return list(SYSTEM_BLOCKS)
 
 
 # ---------- usage + quota ----------
@@ -310,35 +303,86 @@ def bridge_event(kind, msg):
         pass
     sys.stderr.write("[bridge] %s\n" % line)
 
+def queue_remint(email: str, reason: str = ""):
+    """Queue an account for automated re-minting by zcode-watch or CLI."""
+    if not email:
+        return
+    q_file = os.path.join(STATE, "remint_queue.json")
+    try:
+        data = json.loads(_read(q_file, "{}"))
+    except Exception:
+        data = {}
+    if email not in data:
+        data[email] = {"ts": time.time(), "reason": reason}
+        tmp = q_file + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, q_file)
+            bridge_event("remint_queued", "%s queued for remint (%s)" % (email, reason))
+        except OSError:
+            pass
 
-def upstream_headers(email=""):
+
+def device_mid(email=""):
+    import uuid
+    ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+    return str(uuid.uuid5(ns, f"zcode-device:{(email or '').lower().strip()}"))
+
+
+VALID_SESSION_TYPES = ("main", "subagent", "other")
+
+
+def upstream_headers(email="", session_type="main", enable_cache=False):
     h = dict(APP_HEADERS)
     jwt = read_jwt(email)
     h["authorization"] = "Bearer " + jwt
     h["x-api-key"] = jwt
+    h["x-device-mid"] = device_mid(email)
+    st = (session_type or "main").strip().lower()
+    h["x-zcode-session-type"] = st if st in VALID_SESSION_TYPES else "main"
+    if enable_cache and "prompt-caching" not in h.get("anthropic-beta", ""):
+        h["anthropic-beta"] = h["anthropic-beta"] + ",prompt-caching-2024-07-31"
     for k in ("x-request-id", "x-query-id", "x-zcode-trace-id", "x-session-id"):
         h[k] = str(uuid.uuid4())
     return h
 
 
-def upstream_proxy():
-    """Configured upstream egress proxy (http://host:port). Empty = direct.
+def upstream_shards():
+    """Configured upstream egress shards (list of proxy URLs; "" or "direct" = direct).
 
-    z.ai's WAF blocks this host's home IP with an HTML 405 page, so the bridge
-    points its upstream at a clean egress (LightVela's WARP wireproxy, reached
-    over an SSH tunnel — see scripts/systemd/zcode-egress-tunnel.service).
-    Order: $ZCODE_UPSTREAM_PROXY, then config.json {"egress": {"proxy": ...}}.
-    Read live so the value can change without a restart."""
+    Supports multi-egress sharding to scale parallel throughput without burning a
+    single IP with WAF 405 / 3012.
+    Order:
+      1. $ZCODE_UPSTREAM_SHARDS (comma-separated)
+      2. config.json {"egress": {"shards": [...]}}
+      3. $ZCODE_UPSTREAM_PROXY or config.json {"egress": {"proxy": ...}}
+    """
+    raw = os.environ.get("ZCODE_UPSTREAM_SHARDS", "").strip()
+    if raw:
+        shards = [x.strip() for x in raw.split(",") if x.strip()]
+        if shards:
+            return ["" if s == "direct" else s for s in shards]
+    eg = load_config().get("egress") or {}
+    cfg_shards = eg.get("shards")
+    if isinstance(cfg_shards, list) and cfg_shards:
+        shards = [str(x).strip() for x in cfg_shards if str(x).strip()]
+        if shards:
+            return ["" if s == "direct" else s for s in shards]
     p = os.environ.get("ZCODE_UPSTREAM_PROXY", "").strip()
     if not p:
-        p = str((load_config().get("egress") or {}).get("proxy") or "").strip()
-    return p
+        p = str(eg.get("proxy") or "").strip()
+    return ["" if p == "direct" else p]
 
 
-def _safe_egress() -> str:
-    """upstream_proxy() with any embedded password redacted. Health endpoints
-    get logged/polled broadly; proxy creds must never appear in them."""
-    p = upstream_proxy() or "direct"
+def upstream_proxy():
+    """Primary upstream egress proxy (backward-compatible helper)."""
+    shards = upstream_shards()
+    return shards[0] if shards else ""
+
+
+def _redact_proxy(p: str) -> str:
+    p = p or "direct"
     try:
         from urllib.parse import urlparse
         u = urlparse(p if "://" in p else "http://" + p)
@@ -349,24 +393,52 @@ def _safe_egress() -> str:
     return p
 
 
-def egress_opener():
-    """urllib opener for the upstream call. Uses the configured proxy when its
-    port is live; falls back to a direct opener so a down tunnel degrades to
-    'blocked' (visible 405) instead of 'unreachable' (connection refused)."""
-    import socket, urllib.request
+def _safe_egress() -> str:
+    """upstream_proxy() with any embedded password redacted."""
+    shards = upstream_shards()
+    if len(shards) <= 1:
+        return _redact_proxy(shards[0] if shards else "")
+    return ",".join(_redact_proxy(s) for s in shards)
+
+
+def _is_proxy_reachable(proxy: str) -> bool:
+    if not proxy:
+        return True
+    import socket
     from urllib.parse import urlparse
-    proxy = upstream_proxy()
+    u = urlparse(proxy if "://" in proxy else "http://" + p if (p := proxy) else "")
+    try:
+        s = socket.create_connection((u.hostname, u.port or 80), timeout=1.5)
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def pick_shard_for_account(email: str) -> str:
+    """Deterministically pin an account to a healthy egress shard."""
+    import zlib
+    shards = upstream_shards()
+    healthy = [s for s in shards if _is_proxy_reachable(s) and not _shard_in_cooldown(s)]
+    if not healthy:
+        healthy = [s for s in shards if _is_proxy_reachable(s)] or [""]
+    if len(healthy) == 1:
+        return healthy[0]
+    h = zlib.crc32((email or "default").lower().encode())
+    return healthy[h % len(healthy)]
+
+
+def egress_opener(proxy=None):
+    """urllib opener for the upstream call."""
+    import urllib.request
+    if proxy is None:
+        proxy = upstream_proxy()
     if proxy:
-        u = urlparse(proxy if "://" in proxy else "http://" + proxy)
-        try:
-            s = socket.create_connection((u.hostname, u.port or 80), timeout=1.5)
-            s.close()
+        if _is_proxy_reachable(proxy):
             return urllib.request.build_opener(
                 urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
-        except OSError:
-            bridge_event("egress", "proxy %s down -> direct (expect WAF 405)" % proxy)
+        bridge_event("egress", "proxy %s down -> direct (expect WAF 405)" % _redact_proxy(proxy))
     return urllib.request.build_opener()
-
 
 class UpstreamAppError(Exception):
     """Upstream replied HTTP 200 with an application-level error body, e.g.
@@ -499,12 +571,33 @@ def _try_next_model(err):
     return getattr(err, "app_code", None) in (1005, 3012)
 
 
-def call_upstream(payload, email="", timeout=600):
+def _payload_has_cache_control(payload):
+    for b in payload.get("system") or []:
+        if isinstance(b, dict) and b.get("cache_control"):
+            return True
+    for m in payload.get("messages") or []:
+        c = m.get("content")
+        if isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict) and b.get("cache_control"):
+                    return True
+    return False
+
+
+def call_upstream(payload, email="", timeout=600, session_type="main", proxy=None):
     import urllib.error
-    opener = egress_opener()
+    if proxy is None:
+        proxy = pick_shard_for_account(email)
+    try:
+        opener = egress_opener(proxy)
+    except TypeError:
+        opener = egress_opener()
+    has_cache = _payload_has_cache_control(payload)
     for attempt in range(2):
-        req = urllib.request.Request(UPSTREAM, data=json.dumps(payload).encode(),
-                                     headers=upstream_headers(email), method="POST")
+        req = urllib.request.Request(
+            UPSTREAM, data=json.dumps(payload).encode(),
+            headers=upstream_headers(email, session_type=session_type, enable_cache=has_cache),
+            method="POST")
         try:
             resp = opener.open(req, timeout=timeout)
         except urllib.error.HTTPError as e:
@@ -632,40 +725,78 @@ class UpstreamBusy(Exception):
         return json.dumps({"code": 429, "msg": self.msg}).encode()
 
 
-_UPSTREAM_SLOT = threading.Semaphore(1)   # one upstream SETUP at a time
+_UPSTREAM_SLOT = threading.Semaphore(1)   # legacy symbol kept for tests
 _UPSTREAM_GUARD = threading.Lock()
 _UPSTREAM_INFLIGHT = 0
-UPSTREAM_MAX_WAITING = 2   # 1 running + 2 queued; the rest get 429 immediately
-UPSTREAM_MIN_GAP = 3.0     # seconds between upstream call setups
+UPSTREAM_MAX_WAITING = int(os.environ.get("ZCODE_MAX_WAITING", "8"))
+UPSTREAM_MIN_GAP = float(os.environ.get("ZCODE_MIN_GAP", "2.0"))
 _UPSTREAM_LAST_TS = 0.0
 
+_SHARD_STATES = {}
+_SHARD_COOLDOWNS = {}
 
-def gated_call_upstream(payload, email="", timeout=600):
-    """Serialize upstream access and shed overload instead of amplifying it.
 
-    Without this, N concurrent clients each walk the 4-account failover chain,
-    so one client's retry storm becomes 4N upstream hits and every exit gets
-    WAF/reset-burned. With it: 1 call runs, 2 wait, the rest get an immediate
-    429 the caller can back off on — no z.ai traffic spent on them at all."""
-    global _UPSTREAM_INFLIGHT, _UPSTREAM_LAST_TS
+def _shard_in_cooldown(proxy: str) -> bool:
+    until = _SHARD_COOLDOWNS.get(proxy or "", 0.0)
+    return time.time() < until
+
+
+def mark_shard_cooldown(proxy: str, seconds: float = 120.0, reason: str = ""):
+    key = proxy or ""
+    if "127.0.0.1" in key or "localhost" in key:
+        return
+    _SHARD_COOLDOWNS[key] = time.time() + seconds
+    bridge_event("shard_cooldown", "shard %s cooled down %ds (%s)" % (_redact_proxy(key), int(seconds), reason))
+
+
+def _get_shard_state(proxy: str):
+    key = proxy or ""
     with _UPSTREAM_GUARD:
-        if _UPSTREAM_INFLIGHT >= 1 + UPSTREAM_MAX_WAITING:
+        st = _SHARD_STATES.get(key)
+        if st is None:
+            st = {
+                "slot": threading.Semaphore(1),
+                "inflight": 0,
+                "last_ts": 0.0,
+            }
+            _SHARD_STATES[key] = st
+        return st
+
+
+def gated_call_upstream(payload, email="", timeout=600, session_type="main"):
+    """Per-egress-shard serialized upstream access.
+
+    Each configured egress shard gets its own setup semaphore, min_gap, and waiting
+    queue, so N shards run N parallel pipelines safely without triggering per-IP
+    WAF 405 or 3012 velocity flags."""
+    global _UPSTREAM_INFLIGHT, _UPSTREAM_LAST_TS
+    proxy = pick_shard_for_account(email)
+    st = _get_shard_state(proxy)
+    min_gap = 1.5 if session_type in ("subagent", "other") else UPSTREAM_MIN_GAP
+    with _UPSTREAM_GUARD:
+        if st["inflight"] >= 1 + UPSTREAM_MAX_WAITING:
             raise UpstreamBusy()
+        st["inflight"] += 1
         _UPSTREAM_INFLIGHT += 1
     try:
-        _UPSTREAM_SLOT.acquire()
+        st["slot"].acquire()
         try:
-            gap = UPSTREAM_MIN_GAP - (time.time() - _UPSTREAM_LAST_TS)
+            gap = min_gap - (time.time() - st["last_ts"])
             if gap > 0:
                 time.sleep(gap)
-            return call_upstream(payload, email, timeout)
+            resp, err = call_upstream(payload, email, timeout, session_type=session_type, proxy=proxy)
+            if err is not None and (getattr(err, "code", None) == 405 or getattr(err, "app_code", None) == 3012):
+                mark_shard_cooldown(proxy, 120.0, "405/3012")
+            return resp, err
         finally:
-            _UPSTREAM_LAST_TS = time.time()
-            _UPSTREAM_SLOT.release()
+            now = time.time()
+            st["last_ts"] = now
+            _UPSTREAM_LAST_TS = now
+            st["slot"].release()
     finally:
         with _UPSTREAM_GUARD:
+            st["inflight"] -= 1
             _UPSTREAM_INFLIGHT -= 1
-
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -806,6 +937,10 @@ class Handler(BaseHTTPRequestHandler):
                          "msg": "bridge: no account with quota for %s" % " -> ".join(models)})
         return False
 
+    def _session_type(self):
+        st = (self.headers.get("x-zcode-session-type") or "").strip().lower()
+        return st if st in VALID_SESSION_TYPES else "main"
+
     def _call_failover(self, payload, model):
         """send upstream; rotate to the next usable account on a dead JWT (401)
         or an application-level quota error (code 1005 / 3009 / 3010) instead of
@@ -816,13 +951,14 @@ class Handler(BaseHTTPRequestHandler):
         # plan-less ones first (see usable_accounts()).
         queue = usable_accounts(model, exclude=tried)
         blocked_3012 = 0
+        session_type = self._session_type()
         while len(tried) < 4:
             email = self.account if not tried else (queue.pop(0) if queue else None)
             if email is None or email in tried:
                 break
             tried.append(email)
             try:
-                resp, err = gated_call_upstream(payload, email)
+                resp, err = gated_call_upstream(payload, email, session_type=session_type)
             except UpstreamBusy as e:
                 return None, e
             if err is None:
@@ -835,13 +971,16 @@ class Handler(BaseHTTPRequestHandler):
             # Rotating four accounts per request is what turned a block into a
             # pattern; the client gets the error and fails over to another model.
             if getattr(err, "app_code", None) == 3012:
+                queue_remint(email, "3012")
                 blocked_3012 += 1
-                if blocked_3012 >= 2:
+                if blocked_3012 >= 4:
                     bridge_event("block", "3012 on %d accounts -> farm-wide; "
                                  "stopping rotation, relaying to client" % blocked_3012)
                     break
                 bridge_event("failover", "3012 on %s -> one cross-account probe" % email)
                 continue
+            if getattr(err, "code", None) == 401:
+                queue_remint(email, "401_dead_jwt")
             if not _try_another_account(err):
                 break
             bridge_event("failover", "%s on %s -> trying next account"
@@ -981,11 +1120,17 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             blocks = []
             if isinstance(content, str) and content:
-                blocks.append({"type": "text", "text": content})
+                b = {"type": "text", "text": content}
+                if m.get("cache_control"):
+                    b["cache_control"] = m["cache_control"]
+                blocks.append(b)
             elif isinstance(content, list):
                 for c in content:
                     if c.get("type") == "text":
-                        blocks.append({"type": "text", "text": c.get("text", "")})
+                        b = {"type": "text", "text": c.get("text", "")}
+                        if c.get("cache_control"):
+                            b["cache_control"] = c["cache_control"]
+                        blocks.append(b)
             for tc in m.get("tool_calls") or []:
                 fn = tc.get("function", {})
                 try:
@@ -996,6 +1141,15 @@ class Handler(BaseHTTPRequestHandler):
                                "name": fn.get("name", ""), "input": args})
             if blocks:
                 msgs.append({"role": role, "content": blocks})
+        if sys_text and msgs:
+            for m in msgs:
+                if m.get("role") == "user":
+                    c = m.get("content")
+                    if isinstance(c, list) and c and c[0].get("type") == "text":
+                        c[0]["text"] = f"[System Instruction: {sys_text}]\n\n" + c[0]["text"]
+                    elif isinstance(c, str):
+                        m["content"] = f"[System Instruction: {sys_text}]\n\n" + c
+                    break
         if req.get("tools"):
             tools = [{"name": t.get("function", {}).get("name"),
                       "description": t.get("function", {}).get("description", ""),
@@ -1003,7 +1157,7 @@ class Handler(BaseHTTPRequestHandler):
                      for t in req["tools"] if t.get("type") == "function"]
         payload = {"model": req.get("model"), "max_tokens": req.get("max_tokens") or 4096,
                    "messages": msgs or [{"role": "user", "content": "hi"}],
-                   "system": sys_text or "You are a helpful assistant."}
+                   "system": list(SYSTEM_BLOCKS)}
         if tools:
             payload["tools"] = tools
         tc = req.get("tool_choice")

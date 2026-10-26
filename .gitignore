@@ -140,8 +140,11 @@ session-ses_*.md
 # is a dead end (876 MB of torch weights, architecture mismatch -- see docs),
 # rea/ is an upstream agent checkout, PloxCardGen is unrelated scratch.
 Sider_CAPTCHA_Solver/
+rea
 rea/
 PloxCardGen/
+.config/
+*.zip
 
 # opencode / railbox scratch (ASUS pull-only clone)
 .opencode/
@@ -155,3 +158,4 @@ reports/
 artifacts/
 grokbot-shim/artifacts/
 grokbot-shim/logs/
+cmd/kancaproxy/kancaproxy

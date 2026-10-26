@@ -862,9 +862,8 @@ def build_parser() -> argparse.ArgumentParser:
     oc = sub.add_parser("opencode",
                         help="OpenCode CLI: free Zen models as workers (status|models|run|zen)")
     oc.add_argument("oc_cmd", nargs="?", default="status",
-                    choices=["status", "models", "run", "zen", "login", "signup", "key", "inject"],
-                    help="status (default) | models | run | zen | signup (console/signup) | "
-                         "key (console/account) | inject (write key into 9router)")
+                    choices=["status", "models", "run", "zen", "login", "signup", "key", "inject", "bridge", "farm", "captcha"],
+                    help="status (default) | models | run | zen | login | signup | key | inject | bridge | farm | captcha")
     oc.add_argument("--api-key", default=None, metavar="KEY",
                     help="`inject`: OpenCode Zen API key to add to 9router")
     oc.add_argument("--from-file", default=None, metavar="PATH",
@@ -885,6 +884,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="prompt for `run`")
     oc.add_argument("--free-only", action="store_true",
                     help="`models` only: show models with 'free' in the id")
+    oc.add_argument("--headed", action="store_true",
+                    help="`farm`/`captcha`: show the browser so hCaptcha can be solved by hand")
+    oc.add_argument("--continuous", action="store_true",
+                    help="`captcha`: keep registering new accounts (unattended dataset growth)")
+    oc.add_argument("--keep-open", type=int, default=None, metavar="SECS",
+                    help="`captcha`: how long each capture session stays open")
+    oc.add_argument("--count", type=int, default=1,
+                    help="`farm`: accounts to attempt (default 1)")
     oc.add_argument("--job", default=None, choices=["ping", "triage"],
                     help="`zen` job to run (default ping)")
     oc.add_argument("--proxy", default=None, metavar="MODE",

@@ -57,9 +57,9 @@ def col(name: str, text: str) -> str:
 
 def banner(title: str) -> None:
     print()
-    print(col("cyan", "═" * 68))
+    print(col("cyan", " " + "═" * 70))
     print(col("bold", f"  {title}"))
-    print(col("cyan", "═" * 68))
+    print(col("cyan", " " + "═" * 70))
 
 
 def get_ascii_banner() -> str:
@@ -74,10 +74,10 @@ def get_ascii_banner() -> str:
  ██╔═██╗ ██╔══██║██║╚██╗██║██║     ██╔══██║██╔══██║██║   ██║██╔══██╗
  ██║  ██╗██║  ██║██║ ╚████║╚██████╗██║  ██║██║  ██║╚██████╔╝██████╔╝
  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝{reset}"""
-    box_top = f"{cyan} ╔══════════════════════════════════════════════════════════════════════╗{reset}"
-    tagline = "one CLI for the whole account-farming toolkit"
+    box_top = f"{cyan} ╔{'═' * 70}╗{reset}"
+    tagline = "account farming · bounty hunting · bridge management"
     box_mid = f"{cyan} ║ {bold}{tagline.center(68)}{reset}{cyan} ║{reset}"
-    box_bot = f"{cyan} ╚══════════════════════════════════════════════════════════════════════╝{reset}"
+    box_bot = f"{cyan} ╚{'═' * 70}╝{reset}"
     return f"{art}\n{box_top}\n{box_mid}\n{box_bot}"
 
 
@@ -191,12 +191,29 @@ EGRESS_TARGETS = {
     "github": "https://github.com/signup",
     "grok": "https://accounts.x.ai/sign-up",
     "thk": "https://tokenharbor.ai/",
+    # abliteration.ai sits behind Cloudflare Turnstile. A direct connection is
+    # blocked outright (the vendor CLI prints "signup will likely be blocked"),
+    # and the run stops right after the inbox is created -- measured on this box
+    # 2026-10-22. Probing the sign-up page is what makes --proxy auto pick an
+    # egress that can actually reach it.
+    "abliteration": "https://abliteration.ai/sign-up",
+    # Probe the CONSOLE, not the API. The operator flow is
+    #   https://opencode.ai/console/signup   (create account)
+    #   https://opencode.ai/console/account  (name a key, copy it)
+    # and the console is what Cloudflare challenges during signup. Probing the
+    # zen API instead would pass on an exit that can reach the API but not the
+    # console, which is the opposite of what `opencode signup` needs.
+    "opencode": "https://opencode.ai/console/signup",
 }
 
 # Country routing policy per farm group (allow/exclude sets).
 # thk excludes ID because TokenHarbor rejects Indonesian egress IPs.
 EGRESS_COUNTRY = {
     "thk": {"exclude": {"ID"}},
+    # No country restriction observed for abliteration; leave empty so auto
+    # egress may use any verified exit.
+    "abliteration": {},
+    "opencode": {},
 }
 
 _AUTO_GATEWAYS: list = []          # gateways spawned by auto_egress (kept alive)

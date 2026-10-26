@@ -16,15 +16,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-def _egress(host, port, auth=None, timeout=14):
-    """Egress IP via HTTPS-CONNECT proxy using curl_cffi (chrome TLS in-tunnel)."""
+def _egress(host, port, auth=None, proto="https", timeout=14):
+    """Egress IP via HTTP/HTTPS-CONNECT proxy using curl_cffi (chrome TLS in-tunnel)."""
     try:
         from curl_cffi import requests as cr
-        px=f"https://{host}:{port}"
+        px=f"{proto}://{host}:{port}"
         if auth:
             import base64
             user,pw=base64.b64decode(auth).decode().split(":",1)
-            px=f"https://{user}:{pw}@{host}:{port}"
+            px=f"{proto}://{user}:{pw}@{host}:{port}"
         r=cr.get("https://api.ipify.org?format=json", proxy=px, impersonate="chrome131", timeout=timeout)
         return r.json().get("ip")
     except Exception:
@@ -87,11 +87,45 @@ def veepn_entries(cc="nl"):
                 for s in d]
     except Exception:
         return []
+def fastly_entries(cc=None):
+    try:
+        import fastly_serverlist
+        recs = fastly_serverlist.fetch_serverlist()
+        candidates = fastly_serverlist.parse_servers(recs)
+        if cc:
+            candidates = [c for c in candidates if c["country_code"].lower() == cc.lower()]
+        entries = []
+        for c in candidates[:4]:
+            entries.append({
+                "provider": "fastly",
+                "proxy": {"server": f"https://{c['host']}:{c['port']}"},
+                "region": c["country_code"],
+                "note": "Mozilla 50GB Anycast Node"
+            })
+        return entries
+    except Exception:
+        return []
+def urban_vpn_entries(cc=None):
+    try:
+        import urban_vpn as uv
+        px = uv.get_proxy(cc or "JP")
+        return [{
+            "provider": "urban_vpn",
+            "proxy": {
+                "server": f"http://{px['host']}:{px['port']}",
+                "username": px["username"],
+                "password": px["password"],
+            },
+            "region": px["country"],
+            "note": "UrbanVPN 85-Country Residential Network"
+        }]
+    except Exception:
+        return []
+
 
 def all_entries(cc=None):
     warp = [warp_entry()] if (warp_entry() and not cc) else []
-    return warp + veepn_entries(cc) + windscribe_entries(cc) + browsec_entries(cc)
-
+    return warp + urban_vpn_entries(cc) + fastly_entries(cc) + veepn_entries(cc) + windscribe_entries(cc) + browsec_entries(cc)
 def best(country=None, include_warp=True):
     """First entry whose tunnel actually reaches ipify (validated, not just listed).
     With a country filter, WARP is skipped (system tunnel has no per-country egress)."""
@@ -103,17 +137,17 @@ def best(country=None, include_warp=True):
     for e in entries:
         p=e.get("proxy")
         if p is None: return e  # warp system-level, trust status
+        proto = p.get("server", "https://").split("://")[0]
         hostport=p["server"].split("//")[1]
         host,port=hostport.rsplit(":",1)
         auth=None
         if p.get("username"):
             import base64
             auth=base64.b64encode(f"{p['username']}:{p['password']}".encode()).decode()
-        ip=_egress(host,port,auth)
+        ip=_egress(host,port,auth,proto=proto)
         if ip:
             e["egress_ip"]=ip
             return e
-    return None
 
 if __name__=="__main__":
     cmd=sys.argv[1] if len(sys.argv)>1 else "get"

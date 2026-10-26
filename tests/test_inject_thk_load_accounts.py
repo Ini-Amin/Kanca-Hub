@@ -132,7 +132,10 @@ class TestSourceTable(unittest.TestCase):
     def test_zcode_source_wants_round_robin(self):
         # one connection row per account -> rotate, else 3009s under concurrency
         self.assertTrue(SOURCES["zcode"]["round_robin"])
-        self.assertNotIn("round_robin", SOURCES["thk"])   # THK stays fallback
+        # THK round-robins too since bf0eb54 ("thk round-robin"): TokenHarbor
+        # free-tier keys share one bucket pool, so pinning the first row
+        # starves the rest.
+        self.assertTrue(SOURCES["thk"]["round_robin"])
 
     def test_thk_source_is_per_key_and_verified(self):
         t = SOURCES["thk"]
@@ -190,7 +193,11 @@ class TestEnsureRoundRobin(unittest.TestCase):
 
     def test_non_round_robin_source_is_a_noop(self):
         con = self._con()
-        self.assertFalse(ensure_round_robin(con, dict(SOURCES["thk"]), False))
+        # No live source is non-round-robin any more (thk joined in bf0eb54),
+        # so simulate one by stripping the flag from a copy.
+        src = dict(SOURCES["zcode"])
+        src.pop("round_robin", None)
+        self.assertFalse(ensure_round_robin(con, src, False))
         data = json.loads(con.execute("SELECT data FROM settings WHERE id=1").fetchone()[0])
         self.assertEqual(data, {})
         con.close()
