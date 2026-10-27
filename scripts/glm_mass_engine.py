@@ -268,7 +268,7 @@ Source Code:
 """
         k = keys[idx % len(keys)]
         try:
-            raw = chat_bridge(prompt, model=MODEL_FLASH, session_type="subagent", key=k, max_tokens=32768)
+            raw = chat_bridge(prompt, model=MODEL_FLASH, session_type="subagent", key=k, max_tokens=131072)
             start = raw.find("{")
             end = raw.rfind("}")
             if start != -1 and end != -1:
