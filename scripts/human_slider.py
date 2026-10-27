@@ -110,8 +110,14 @@ async def drag_humanized_playwright(
 ) -> bool:
     """Execute humanized drag using high-density Playwright mouse events."""
     # Start near center of handle with realistic initial offset
-    sx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
-    sy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
+    w = box.get("width", 0)
+    h = box.get("height", 0)
+    if w > 0 and h > 0:
+        sx = box["x"] + w * random.uniform(0.35, 0.65)
+        sy = box["y"] + h * random.uniform(0.35, 0.65)
+    else:
+        sx = box.get("cx", box["x"])
+        sy = box.get("cy", box["y"])
 
     # 1. Natural hover before click
     await page.mouse.move(sx + random.uniform(-10, 10), sy + random.uniform(-5, 5))
