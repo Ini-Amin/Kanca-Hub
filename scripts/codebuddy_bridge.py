@@ -150,6 +150,8 @@ def execute_codebuddy(model: str, prompt: str, timeout: int = 120) -> str:
 
 
 class CodeBuddyBridgeHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def _send_json(self, status: int, data: dict):
         body = json.dumps(data).encode("utf-8")
         self.send_response(status)
@@ -246,37 +248,39 @@ class CodeBuddyBridgeHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
             self.end_headers()
 
-            c1 = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": created_ts,
-                "model": model,
-                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-            }
-            self.wfile.write(f"data: {json.dumps(c1)}\n\n".encode("utf-8"))
+            def emit(chunk: dict):
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
 
-            c2 = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": created_ts,
-                "model": model,
-                "choices": [{"index": 0, "delta": {"content": answer}, "finish_reason": None}],
-            }
-            self.wfile.write(f"data: {json.dumps(c2)}\n\n".encode("utf-8"))
-
-            c3 = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": created_ts,
-                "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-            self.wfile.write(f"data: {json.dumps(c3)}\n\n".encode("utf-8"))
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
+            try:
+                emit({
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_ts,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                })
+                emit({
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_ts,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"content": answer}, "finish_reason": None}],
+                })
+                emit({
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_ts,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                })
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                self.close_connection = True
         else:
             resp = {
                 "id": chat_id,
