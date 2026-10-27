@@ -19,7 +19,9 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.error
@@ -396,42 +398,121 @@ def cmd_hunt_sast(job_id: str) -> None:
 
     log(f"Gate 1 verified: {len(targets)} in-scope targets for {job_id}")
     findings_file = job_path / "glm_sast_findings.json"
+    bundles_dir = job_path / "bundles"
+    bundles_dir.mkdir(parents=True, exist_ok=True)
 
-    # Stage 1: Broad Surface Harvest & Flash Filter
     stage1_candidates = []
-    for t in targets[:15]:  # Process top targets
-        log(f"Stage 1 (GLM-5.3-Flash): Probing {t}")
+    discovered_endpoints = set()
+
+    # Stage 0: Harvest JS Bundles & HTML Assets from Target
+    for t in targets[:10]:
+        log(f"Stage 0: Harvesting HTML and client bundles from {t}")
         try:
             req = urllib.request.Request(t, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                body = r.read().decode("utf-8", "replace")[:60000]
-                prompt = f"""Review this web asset for security vulnerabilities (sensitive endpoints, leaked API keys, IDOR patterns, DOM XSS sources/sinks, GraphQL introspections).
-Target: {t}
-Content:
-```html
-{body[:35000]}
-```
-
-Return ONLY a JSON list of candidate findings:
-[{{"type": "vuln_type", "evidence": "exact quote or line", "parameter": "name", "confidence": "high|medium|low"}}]
-"""
-                resp = chat_bridge(prompt, model=MODEL_FLASH, session_type="subagent", max_tokens=1500)
-                start = resp.find("[")
-                end = resp.rfind("]")
-                if start != -1 and end != -1:
-                    cands = json.loads(resp[start : end + 1])
-                    for c in cands:
-                        c["target"] = t
-                        stage1_candidates.append(c)
+            with urllib.request.urlopen(req, timeout=12) as r:
+                html_content = r.read().decode("utf-8", "replace")
+                # Save HTML
+                (bundles_dir / "index.html").write_text(html_content, encoding="utf-8")
+                
+                # Find script tags
+                script_srcs = re.findall(r'src=["\']([^"\']+\.js[^"\']*)["\']', html_content)
+                for s in script_srcs:
+                    bundle_url = s if s.startswith("http") else urllib.parse.urljoin(t, s)
+                    fname = Path(urllib.parse.urlparse(bundle_url).path).name
+                    if fname and not (bundles_dir / fname).exists():
+                        log(f"  Downloading bundle {fname} from {bundle_url}")
+                        try:
+                            b_req = urllib.request.Request(bundle_url, headers={"User-Agent": "Mozilla/5.0"})
+                            with urllib.request.urlopen(b_req, timeout=15) as br:
+                                (bundles_dir / fname).write_bytes(br.read())
+                        except Exception as be:
+                            log(f"  Failed to fetch bundle {fname}: {be}")
         except Exception as e:
-            log(f"  Fetch error on {t}: {e}")
+            log(f"  Error fetching {t}: {e}")
 
-    log(f"Stage 1 complete: {len(stage1_candidates)} potential candidates discovered")
+    # Stage 1A: AST Scan on Harvested Bundles using Validated Opengrep Rules
+    rules_dir = AUTO_CF_DIR / "validated_ast_rules" / "javascript"
+    opengrep_bin = shutil.which("opengrep") or str(Path.home() / ".local" / "bin" / "opengrep")
+    if rules_dir.exists() and os.path.exists(opengrep_bin) and any(bundles_dir.glob("*.js")):
+        log(f"Stage 1A: Running Opengrep AST scan on {bundles_dir} with validated rules...")
+        cmd = [opengrep_bin, "--config", str(rules_dir), "--max-target-bytes", "25000000", "--json", str(bundles_dir)]
+        try:
+            s_res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if s_res.stdout.strip():
+                ast_data = json.loads(s_res.stdout.strip())
+                for r in ast_data.get("results", []):
+                    check_id = r.get("check_id", "").split(".")[-1]
+                    line = r.get("start", {}).get("line", 1)
+                    msg = r.get("extra", {}).get("message", "").strip()
+                    snippet = r.get("extra", {}).get("lines", "").strip()[:180]
+                    stage1_candidates.append({
+                        "type": "AST_VULNERABILITY",
+                        "rule_id": check_id,
+                        "target": str(Path(r.get("path", "")).name),
+                        "evidence": f"Line {line}: {msg}\nSnippet: {snippet}",
+                        "parameter": check_id,
+                        "confidence": "medium"
+                    })
+                log(f"  Opengrep AST matched {len(ast_data.get('results', []))} candidate sinks")
+        except Exception as se:
+            log(f"  AST Scan error: {se}")
 
+    # Stage 1B: Extract API endpoints and probe for unauthenticated exposure
+    for js_file in bundles_dir.glob("*.js"):
+        try:
+            txt = js_file.read_text(encoding="utf-8", errors="ignore")
+            eps = set(re.findall(r'/(?:api|v[0-9]|auth|oauth|user|admin|service)/[a-zA-Z0-9_/-]+', txt))
+            discovered_endpoints.update(eps)
+        except Exception:
+            pass
+
+    log(f"Stage 1B: Discovered {len(discovered_endpoints)} API endpoints in client code. Testing active responses...")
+    for ep in sorted(discovered_endpoints)[:25]:
+        for t in targets[:1]:
+            test_url = urllib.parse.urljoin(t, ep)
+            try:
+                req = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    b_len = int(resp.headers.get("Content-Length") or 0)
+                    resp_bytes = resp.read()
+                    text_body = resp_bytes.decode("utf-8", "replace")[:500]
+                    log(f"  [HTTP {resp.status}] {ep} ({len(resp_bytes)} bytes)")
+                    if resp.status == 200 and len(resp_bytes) > 20:
+                        stage1_candidates.append({
+                            "type": "UNAUTHENTICATED_ENDPOINT_EXPOSURE",
+                            "target": test_url,
+                            "evidence": f"HTTP 200 OK without Authorization header. Response: {text_body[:250]}",
+                            "parameter": ep,
+                            "confidence": "high"
+                        })
+            except urllib.error.HTTPError as he:
+                if he.code in (401, 405):
+                    body_text = he.read().decode("utf-8", "replace")[:250]
+                    if "version" in ep or "info" in ep:
+                        stage1_candidates.append({
+                            "type": "INFORMATION_DISCLOSURE",
+                            "target": test_url,
+                            "evidence": f"HTTP {he.code} with exposed body data: {body_text}",
+                            "parameter": ep,
+                            "confidence": "medium"
+                        })
+            except Exception:
+                pass
+
+    # Deduplicate candidate findings by signature
+    unique_candidates = []
+    seen_signatures = set()
+    for c in stage1_candidates:
+        sig = f"{c.get('type')}:{c.get('rule_id') or c.get('parameter')}:{c.get('target')}"
+        if sig not in seen_signatures:
+            seen_signatures.add(sig)
+            unique_candidates.append(c)
+
+    log(f"Stage 1 Complete: {len(unique_candidates)} unique candidate signatures surfaced for Stage 2 deep reasoning")
     # Stage 2: Deep Exploit Verification (GLM-5.3 Thinking)
     verified_findings = []
-    for c in stage1_candidates:
-        log(f"Stage 2 (GLM-5.3 Thinking): Adversarially verifying {c.get('type')} on {c.get('target')}")
+    for c in unique_candidates:
+        log(f"Stage 2 (GLM-5.3 Thinking): Adversarially verifying {c.get('type')} ({c.get('parameter')}) on {c.get('target')}")
         prompt = f"""You are an adversarial security auditor. Your job is to PROVE or DISPROVE this candidate vulnerability.
 Target: {c.get('target')}
 Finding Type: {c.get('type')}
@@ -460,6 +541,7 @@ Output ONLY JSON:
                 if v.get("verdict") == "CONFIRMED":
                     c["verification"] = v
                     verified_findings.append(c)
+                    findings_file.write_text(json.dumps(verified_findings, indent=2))
                     log(f"  [CONFIRMED] {c.get('type')} (CVSS {v.get('cvss_estimate')}) on {c.get('target')}")
                 else:
                     log(f"  [FALSE POSITIVE KILLED] {c.get('type')}: {v.get('reasoning')[:80]}")
