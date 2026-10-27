@@ -112,7 +112,7 @@ def process_groundtruth(limit: int = 10, lang: str = "javascript", log=print) ->
         log(f"Synthesizing raw positive & negative test cases for {cve_id} via multi-tier chain...")
 
         prompt = build_testcase_prompt(cve_id, rule_content, f"Distilled rule for {cve_id}")
-        raw, used_model = chat_any(fallback_models, prompt, max_tokens=3000, timeout=120)
+        raw, used_model = chat_any(fallback_models, prompt, max_tokens=131072, timeout=600)
         log(f"  model replied: {used_model} ({len(raw)} chars)")
         cleaned = raw
         if "```json" in cleaned:

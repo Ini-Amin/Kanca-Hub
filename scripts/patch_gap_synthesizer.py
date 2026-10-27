@@ -55,7 +55,7 @@ Output ONLY valid JSON:
   "test_language": "javascript"
 }}
 """
-    raw, used_model = chat_any(FALLBACK_MODELS, prompt, max_tokens=16000, timeout=420)
+    raw, used_model = chat_any(FALLBACK_MODELS, prompt, max_tokens=131072, timeout=600)
     if not raw.strip():
         log(f"  Empty response for {cve_id}")
         return None
@@ -134,7 +134,7 @@ def run_synthesis_and_audit(limit: int = 3, log=print) -> None:
             m_bypass = _count_matches(cve_folder / f"bypass.{ext}")
             m_safe = _count_matches(cve_folder / f"safe.{ext}")
 
-            is_proven = (m_weak > 0 or m_bypass > 0) and (m_safe == 0)
+            is_proven = (m_weak > 0 and m_bypass > 0) and (m_safe == 0)
             gate_status = "PROVEN_VALID" if is_proven else ("LEAKY_RULE" if m_safe > 0 else "NO_MATCH")
             log(f"  [SANDBOX GATE] {cve_id} -> {gate_status} (weak={m_weak}, bypass={m_bypass}, safe={m_safe})")
             res["gate_status"] = gate_status

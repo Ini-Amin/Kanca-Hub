@@ -45,6 +45,21 @@ CveDB = HOME / ".config" / "auto-freecf" / "cve.db"
 R9 = os.environ.get("BOUNTY_R9_BASE", "http://127.0.0.1:20128/v1")
 BOX = os.environ.get("BOUNTY_BOX", "blu")
 
+# Completion cap, in tokens. 131072 is what Zcode/GLM-5.3 actually accepts —
+# anything larger is rejected upstream with "max_tokens must be in [1, 131072]".
+# max_tokens is a CEILING, not a spend: a model stops when it is done, so raising
+# it only removes truncation and costs nothing when the answer is short. The old
+# 1200 on the drafter cut report drafts mid-sentence, and the challengers then
+# reviewed a fragment. MAX_INPUT_CHARS bounds how much of the recon/draft we hand
+# back to the model; it exists because the previous 2500-char slice on the draft
+# would have shown a challenger ~1% of a long draft.
+# 400k chars ~= 100k tokens: fits the smallest context in the fallback chain
+# (CodeBuddy/deepseek-1017, 128k) with room for the answer, and stops slicing a
+# GLM draft that can legally reach 131k tokens. The old 120k showed a challenger
+# roughly a quarter of a maximum-length draft and the rest was invisible to it.
+MAX_TOKENS = int(os.environ.get("BOUNTY_MAX_TOKENS", "131072"))
+MAX_INPUT_CHARS = int(os.environ.get("BOUNTY_MAX_INPUT_CHARS", "400000"))
+
 # PATH prefix for the recon tools, resolved HERE in Python rather than written as
 # "$HOME/go/bin" inside the shell snippet.
 #
@@ -83,7 +98,7 @@ def r9_key():
 
 
 
-def chat_any(models, prompt, max_tokens=4096, timeout=240, attempts=2):
+def chat_any(models, prompt, max_tokens=MAX_TOKENS, timeout=600, attempts=2):
     """Try each model in order until one returns content. A single upstream blip
     (405/503/429/empty) must not fail the whole stage — it was being recorded as
     a verdict-less 'triage-failed' and a transport error looked like a finding
@@ -100,14 +115,33 @@ def chat_any(models, prompt, max_tokens=4096, timeout=240, attempts=2):
                 last = "%s: %s" % (type(e).__name__, str(e)[:120])
             time.sleep(4)
     return "", last
-def chat(model, prompt, max_tokens=4096, timeout=240):
+def chat(model, prompt, max_tokens=MAX_TOKENS, timeout=600):
     """Chat via laptop 9Router. Handles JSON and SSE (ocz/) bodies."""
     body = {"model": model, "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}]}
     req = urllib.request.Request(
         R9 + "/chat/completions", data=json.dumps(body).encode(),
         headers={"Authorization": "Bearer " + r9_key(), "Content-Type": "application/json"})
-    raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "replace")
+    try:
+        raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        # Not every model in the fallback chain honours 131072. A 400 that names
+        # max_tokens is a cap complaint, not a real failure: retry that model once
+        # at a value every OpenAI-compatible upstream accepts, so one strict
+        # provider cannot drop the whole chain on a transport-shaped error.
+        detail = e.read().decode("utf-8", "replace")
+        if e.code == 400 and "max_tokens" in detail:
+            # Retry at the cap the provider itself names ("between 1 and 65536",
+            # "must be in [1, 131072]") instead of a blind 8192. The old fixed
+            # 8192 silently cut every atria draft to a fraction of the 65536 it
+            # actually allows, which is what made the stage look token-starved.
+            m = re.search(r"(?:between 1 and|in \[1,)\s*(\d+)", detail)
+            cap = int(m.group(1)) if m else 8192
+            if cap < max_tokens:
+                print("  %s caps max_tokens at %d, retrying there" % (model, cap),
+                      file=sys.stderr)
+                return chat(model, prompt, max_tokens=cap, timeout=timeout)
+        raise RuntimeError("HTTP %d: %s" % (e.code, detail[:300]))
     # 9Router quirks: SSE (data:/:) for ocz/*, leading whitespace, and a
     # trailing "data: [DONE]" appended to plain JSON bodies. Normalize first.
     if "\ndata: " in raw[:600] or raw.lstrip().startswith(("data:", ":")):
@@ -1291,8 +1325,8 @@ def cmd_triage(a):
         "List the top 5 checks in order, each with an exact tool command. "
         "Only ever touch the in-scope hosts above."
         % (job["program"], job["in_scope"], job["out_of_scope"], scope_note,
-           empirical_note, counts, recon[:4000]))
-    plan, plan_model = chat_any([PLANNER] + DRAFTER_FALLBACK, plan_prompt, timeout=180)
+           empirical_note, counts, recon[:MAX_INPUT_CHARS]))
+    plan, plan_model = chat_any([PLANNER] + DRAFTER_FALLBACK, plan_prompt, timeout=600)
     if not plan.strip():
         plan = "# Default Automated Plan\n1. Active endpoints verification\n2. Nuclei high/critical scan\n"
     (d / "plan.md").write_text(plan)
@@ -1302,9 +1336,9 @@ def cmd_triage(a):
     # finding that failed review. That is a false negative dressed as a verdict.
     # Try the whole drafting family before declaring failure.
     draft_prompt = ("Draft ONE candidate finding from this recon (or say NONE). Only use in-scope hosts.\n"
-                    "%s\nPlan:\n%s" % (recon[:4000], plan[:2000]))
+                    "%s\nPlan:\n%s" % (recon[:MAX_INPUT_CHARS], plan[:MAX_INPUT_CHARS]))
     draft, draft_model = chat_any([DRAFTER] + PLANNER_FALLBACK + CHALLENGERS,
-                                  draft_prompt, max_tokens=1200, timeout=300)
+                                  draft_prompt, max_tokens=MAX_TOKENS, timeout=600)
     if not draft.strip():
         (d / "draft.md").write_text(
             "# DRAFT FAILED (no draft produced)\n\n"
@@ -1323,7 +1357,7 @@ def cmd_triage(a):
                             "Challenge this draft finding. Try to prove it is a duplicate, "
                             "out of scope, unexploitable, or a hallucination. Draft:\n%s\n"
                             "Reply VERDICT: KILL:<reason> or VERDICT: SURVIVES:<why>"
-                            % draft[:2500], timeout=300)
+                            % draft[:MAX_INPUT_CHARS], timeout=600)
         verdicts.append("%s -> %s" % (ch, v[:300] if v.strip() else "ERROR (no reply)"))
         time.sleep(5)
     killed = [v for v in verdicts if "KILL" in v.upper()]
@@ -1360,7 +1394,9 @@ def cmd_report(a):
     else:
         head = "BOUNTY DRAFT %s (manual submit only):\n" % jid
 
-    ids = send((head + text)[:3500])
+    # notify.send() already chunks at 4000 chars; slicing here only threw away
+    # the second half of every long draft.
+    ids = send(head + text)
     print("telegram:", ids, "| null_result:", null_result)
 
 

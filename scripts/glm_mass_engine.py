@@ -89,7 +89,10 @@ def chat_bridge(
     session_type: str = "subagent",
     key: str = "",
     timeout: int = 180,
-    max_tokens: int = 4096,
+    # Ceiling, not a spend: a short answer stops early, so this only removes
+    # truncation. 4096 cut rule YAML and triage JSON mid-token, which then read
+    # as "the model hallucinated" instead of "we capped it".
+    max_tokens: int = 131072,
 ) -> str:
     """Execute a completion via ZCode bridge with automatic 9Router GLM fallback."""
     keys = load_bridge_keys()
@@ -265,7 +268,7 @@ Source Code:
 """
         k = keys[idx % len(keys)]
         try:
-            raw = chat_bridge(prompt, model=MODEL_FLASH, session_type="subagent", key=k, max_tokens=8192)
+            raw = chat_bridge(prompt, model=MODEL_FLASH, session_type="subagent", key=k, max_tokens=32768)
             start = raw.find("{")
             end = raw.rfind("}")
             if start != -1 and end != -1:
@@ -336,7 +339,7 @@ Return ONLY a JSON object:
 """
         k = keys[idx % len(keys)]
         try:
-            raw = chat_bridge(prompt, model=MODEL_THINKING, session_type="other", key=k, max_tokens=16000)
+            raw = chat_bridge(prompt, model=MODEL_THINKING, session_type="other", key=k, max_tokens=131072, timeout=600)
             start = raw.find("{")
             end = raw.rfind("}")
             if start != -1 and end != -1:
@@ -533,7 +536,7 @@ Output ONLY JSON:
 }}
 """
         try:
-            raw = chat_bridge(prompt, model=MODEL_THINKING, session_type="subagent", max_tokens=16000)
+            raw = chat_bridge(prompt, model=MODEL_THINKING, session_type="subagent", max_tokens=131072, timeout=600)
             start = raw.find("{")
             end = raw.rfind("}")
             if start != -1 and end != -1:
