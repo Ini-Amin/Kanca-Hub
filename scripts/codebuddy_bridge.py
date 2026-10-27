@@ -44,7 +44,7 @@ logging.basicConfig(
 log = logging.getLogger("codebuddy-bridge")
 
 _WORKING_TOKENS: list[str] = []
-
+_TOKEN_ROTATION_COUNTER: int = 0
 
 def load_codebuddy_tokens() -> list[str]:
     """Load valid CodeBuddy access tokens from 9Router DB and disk cache."""
@@ -111,7 +111,14 @@ def execute_codebuddy(model: str, prompt: str, timeout: int = 300) -> str:
         cb_model = "kimi-k3"
     elif "1017" in m_lower or "deepseek" in m_lower:
         cb_model = "deepseek-v4.1-flash"
-    for idx, token in enumerate(tokens):
+    global _TOKEN_ROTATION_COUNTER
+    n_tok = len(tokens)
+    start_idx = _TOKEN_ROTATION_COUNTER % n_tok if n_tok else 0
+    _TOKEN_ROTATION_COUNTER += 1
+    ordered_indices = [(start_idx + i) % n_tok for i in range(n_tok)]
+
+    for idx in ordered_indices:
+        token = tokens[idx]
         env = dict(os.environ)
         env["CODEBUDDY_AUTH_TOKEN"] = token
         env["PATH"] = f"/home/amen/.npm-global/bin:{env.get('PATH', '')}"
