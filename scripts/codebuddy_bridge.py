@@ -90,8 +90,7 @@ def get_token(preferred_index: int = 0) -> str:
     return tokens[preferred_index % len(tokens)]
 
 
-def execute_codebuddy(model: str, prompt: str, timeout: int = 120) -> str:
-    """Execute prompt through CodeBuddy CLI with verified auth token."""
+def execute_codebuddy(model: str, prompt: str, timeout: int = 300) -> str:
     tokens = load_codebuddy_tokens()
     last_err = ""
 
@@ -181,19 +180,30 @@ class CodeBuddyBridgeHandler(BaseHTTPRequestHandler):
             return
 
         if self.path in ("/v1/models", "/models"):
+            models_raw = [
+                "CodeBuddy/deepseek-v4.1-flash",
+                "CodeBuddy/deepseek-1017",
+                "CodeBuddy/hy3",
+                "CodeBuddy/glm-5.3",
+                "CodeBuddy/glm-5.2",
+                "CodeBuddy/gpt-6-astra",
+                "CodeBuddy/gpt-5.6-sol",
+                "CodeBuddy/kimi-k3",
+                "deepseek-v4.1-flash",
+                "deepseek-1017",
+                "hy3",
+                "glm-5.3",
+            ]
             models_list = [
-                {"id": "CodeBuddy/deepseek-v4.1-flash", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "CodeBuddy/deepseek-1017", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "CodeBuddy/hy3", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "CodeBuddy/glm-5.3", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "CodeBuddy/glm-5.2", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "CodeBuddy/gpt-6-astra", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "CodeBuddy/gpt-5.6-sol", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "CodeBuddy/kimi-k3", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "deepseek-v4.1-flash", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "deepseek-1017", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "hy3", "object": "model", "owned_by": "tencent-codebuddy"},
-                {"id": "glm-5.3", "object": "model", "owned_by": "tencent-codebuddy"},
+                {
+                    "id": m,
+                    "object": "model",
+                    "owned_by": "tencent-codebuddy",
+                    "context_length": 1000000,
+                    "context_window": 1000000,
+                    "max_output_tokens": 64000,
+                }
+                for m in models_raw
             ]
             self._send_json(200, {"object": "list", "data": models_list})
             return

@@ -265,7 +265,7 @@ Source Code:
 """
         k = keys[idx % len(keys)]
         try:
-            raw = chat_bridge(prompt, model=MODEL_FLASH, session_type="subagent", key=k, max_tokens=2048)
+            raw = chat_bridge(prompt, model=MODEL_FLASH, session_type="subagent", key=k, max_tokens=8192)
             start = raw.find("{")
             end = raw.rfind("}")
             if start != -1 and end != -1:
@@ -336,7 +336,7 @@ Return ONLY a JSON object:
 """
         k = keys[idx % len(keys)]
         try:
-            raw = chat_bridge(prompt, model=MODEL_THINKING, session_type="other", key=k, max_tokens=3000)
+            raw = chat_bridge(prompt, model=MODEL_THINKING, session_type="other", key=k, max_tokens=16000)
             start = raw.find("{")
             end = raw.rfind("}")
             if start != -1 and end != -1:
@@ -533,7 +533,7 @@ Output ONLY JSON:
 }}
 """
         try:
-            raw = chat_bridge(prompt, model=MODEL_THINKING, session_type="subagent", max_tokens=2500)
+            raw = chat_bridge(prompt, model=MODEL_THINKING, session_type="subagent", max_tokens=16000)
             start = raw.find("{")
             end = raw.rfind("}")
             if start != -1 and end != -1:

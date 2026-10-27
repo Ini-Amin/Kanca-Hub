@@ -83,7 +83,7 @@ def r9_key():
 
 
 
-def chat_any(models, prompt, max_tokens=600, timeout=240, attempts=2):
+def chat_any(models, prompt, max_tokens=4096, timeout=240, attempts=2):
     """Try each model in order until one returns content. A single upstream blip
     (405/503/429/empty) must not fail the whole stage — it was being recorded as
     a verdict-less 'triage-failed' and a transport error looked like a finding
@@ -100,7 +100,7 @@ def chat_any(models, prompt, max_tokens=600, timeout=240, attempts=2):
                 last = "%s: %s" % (type(e).__name__, str(e)[:120])
             time.sleep(4)
     return "", last
-def chat(model, prompt, max_tokens=600, timeout=240):
+def chat(model, prompt, max_tokens=4096, timeout=240):
     """Chat via laptop 9Router. Handles JSON and SSE (ocz/) bodies."""
     body = {"model": model, "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}]}

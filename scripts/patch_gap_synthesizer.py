@@ -55,7 +55,7 @@ Output ONLY valid JSON:
   "test_language": "javascript"
 }}
 """
-    raw, used_model = chat_any(FALLBACK_MODELS, prompt, max_tokens=3500, timeout=120)
+    raw, used_model = chat_any(FALLBACK_MODELS, prompt, max_tokens=16000, timeout=420)
     if not raw.strip():
         log(f"  Empty response for {cve_id}")
         return None
@@ -119,20 +119,27 @@ def run_synthesis_and_audit(limit: int = 3, log=print) -> None:
         (cve_folder / f"safe.{ext}").write_text(res.get("safe_code", ""), encoding="utf-8")
         (cve_folder / "analysis.json").write_text(json.dumps(res, indent=2), encoding="utf-8")
 
-        # Test in sandbox
+        # Test in sandbox with rigorous TPR and FPR validation per file
         if os.path.exists(OPENGREP_BIN):
             rule_file = cve_folder / "rule.yaml"
-            t_res = subprocess.run([OPENGREP_BIN, "--config", str(rule_file), "--json", str(cve_folder)],
-                                   capture_output=True, text=True, timeout=15)
-            try:
-                matches = json.loads(t_res.stdout).get("results", [])
-                matched_files = [Path(m.get("path", "")).name for m in matches]
-                log(f"  [SANDBOX VALIDATION] {cve_id}: Opengrep matched {len(matches)} files: {matched_files}")
-                res["sandbox_matches"] = matched_files
-            except Exception:
-                res["sandbox_matches"] = []
-        synthesized_results.append(res)
+            def _count_matches(fpath):
+                r = subprocess.run([OPENGREP_BIN, "--config", str(rule_file), "--json", str(fpath)],
+                                   capture_output=True, text=True, timeout=60)
+                try:
+                    return len(json.loads(r.stdout).get("results", []))
+                except Exception:
+                    return 0
 
+            m_weak = _count_matches(cve_folder / f"weak_patch.{ext}")
+            m_bypass = _count_matches(cve_folder / f"bypass.{ext}")
+            m_safe = _count_matches(cve_folder / f"safe.{ext}")
+
+            is_proven = (m_weak > 0 or m_bypass > 0) and (m_safe == 0)
+            gate_status = "PROVEN_VALID" if is_proven else ("LEAKY_RULE" if m_safe > 0 else "NO_MATCH")
+            log(f"  [SANDBOX GATE] {cve_id} -> {gate_status} (weak={m_weak}, bypass={m_bypass}, safe={m_safe})")
+            res["gate_status"] = gate_status
+            res["metrics"] = {"weak_matches": m_weak, "bypass_matches": m_bypass, "safe_matches": m_safe}
+        synthesized_results.append(res)
     log(f"Patch-gap synthesis complete: {len(synthesized_results)} novel rules and test suites created.")
 
     # Now append/update onetrust_pentest_app_audit.md with the patch-gap and weak-fix audit results
@@ -141,7 +148,8 @@ def run_synthesis_and_audit(limit: int = 3, log=print) -> None:
 
 def update_audit_report(variants: list[dict]) -> None:
     current_content = REPORT_PATH.read_text(encoding="utf-8") if REPORT_PATH.exists() else ""
-
+    if "## 5. In-Depth Patch-Gap" in current_content:
+        current_content = current_content.split("## 5. In-Depth Patch-Gap", 1)[0].rstrip()
     addendum = f"""
 
 ---
@@ -157,10 +165,12 @@ To address the limitations of static CVE matching, an autonomous patch-gap synth
 
 """
     for v in variants:
+        m = v.get("metrics") or {}
+        stat = v.get("gate_status", "UNKNOWN")
         addendum += f"""#### {v.get('cve_id')} — Weak Fix Variant Analysis
 * **Underlying Vector:** {v.get('weak_patch_vector')}
 * **Bypass Technique:** {v.get('bypass_technique')}
-* **Sandbox Verification Matches:** `{v.get('sandbox_matches', [])}` (Proven in sandbox environment)
+* **Sandbox Gate Verdict:** **{stat}** (TPR weak={m.get('weak_matches', 0)}, TPR bypass={m.get('bypass_matches', 0)}, FPR safe={m.get('safe_matches', 0)})
 * **Model Reasoning Engine:** `{v.get('used_model')}`
 
 """
