@@ -75,18 +75,23 @@ MAX_INPUT_CHARS = int(os.environ.get("BOUNTY_MAX_INPUT_CHARS", "400000"))
 TOOLPATH = "export PATH=\"%s:%s:%s\"; " % (
     HOME / "go" / "bin", HOME / ".local" / "bin", os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"))
 
-PLANNER = os.environ.get("BOUNTY_PLANNER", "CodeBuddy/deepseek-1017")
+# deepseek-1017 and deepseek-v4.1-flash are the SAME upstream model (the bridge
+# maps both to `deepseek-v4.1-flash`), but 9Router still carries stale metadata
+# for the 1017 alias — 128k context / 64k output — while the real model is
+# 1M/384k. With MAX_INPUT_CHARS at 400k the 128k alias sits right at the edge,
+# so the chain names the entry whose metadata matches reality.
+PLANNER = os.environ.get("BOUNTY_PLANNER", "CodeBuddy/deepseek-v4.1-flash")
 DRAFTER = os.environ.get("BOUNTY_DRAFTER", "Zcode/GLM-5.3")
 CHALLENGERS = os.environ.get(
-    "BOUNTY_CHALLENGERS", "CodeBuddy/deepseek-1017,atria/Atria-Dawn-Preview").split(",")
+    "BOUNTY_CHALLENGERS", "CodeBuddy/deepseek-v4.1-flash,atria/Atria-Dawn-Preview").split(",")
 # Fallback families: a single upstream 405/503/429 must not fail a stage.
-# Measured 2026-10-26: atria + CodeBuddy/deepseek-1017 + Zcode/GLM-5.3 answer;
+# Measured 2026-10-26: atria + CodeBuddy/deepseek-v4.1-flash + Zcode/GLM-5.3 answer;
 # ag/* and xperimential/* were returning 503 at this time, so they sit last.
-PLANNER_FALLBACK = ["atria/Atria-Dawn-Preview", "Zcode/GLM-5.3", "CodeBuddy/deepseek-1017",
+PLANNER_FALLBACK = ["atria/Atria-Dawn-Preview", "Zcode/GLM-5.3", "CodeBuddy/deepseek-v4.1-flash",
                     "ag/gemini-3.8-flash-high"]
-DRAFTER_FALLBACK = ["atria/Atria-Dawn-Preview", "CodeBuddy/deepseek-1017", "Zcode/GLM-5.3",
+DRAFTER_FALLBACK = ["atria/Atria-Dawn-Preview", "CodeBuddy/deepseek-v4.1-flash", "Zcode/GLM-5.3",
                     "ag/gemini-3.8-flash-high"]
-CHALLENGER_FALLBACK = ["Zcode/GLM-5.3", "CodeBuddy/deepseek-1017", "atria/Atria-Dawn-Preview",
+CHALLENGER_FALLBACK = ["Zcode/GLM-5.3", "CodeBuddy/deepseek-v4.1-flash", "atria/Atria-Dawn-Preview",
                        "ag/gemini-3.8-flash-high"]
 
 
