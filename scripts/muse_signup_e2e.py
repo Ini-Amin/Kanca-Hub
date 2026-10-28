@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
-"""scripts/muse_signup_e2e.py — Headless Registration for Muse.ai (Meta Personal AI Agent).
+"""scripts/muse_signup_e2e.py — Meta Muse (muse.ai) end-to-end onboarding.
 
-Automates full sign-up using disposable domain email (@kancalabs.my.id via Tempik)
-and Camoufox anti-detect browser:
-  1. Submits domain email on https://muse.ai/
-  2. Extracts 6-digit OTP from Tempik inbox
-  3. Fills OTP pin digits into Muse React form
-  4. Completes profile (First Name, Last Name, Birthday adult year)
-  5. Captures 'hatch_sess' and session cookies for 9Router 'muse-web' node
-  6. Saves credentials to ~/.config/auto-freecf/muse_accounts.json
+One resumable state machine instead of ad-hoc probing. Every stage writes the
+browser cookies plus the egress identity to a per-account state file, so a
+re-run resumes where the last one stopped instead of re-registering and burning
+a fresh OTP (the failure mode that got this account rate-limited).
+
+Stages, in order:
+  signup   new Meta identity: invite link -> email -> OTP -> profile details
+  agegate  /access/verification: link an adult Instagram/Facebook account
+           (credit card is refused by design: it needs a real card)
+  onboard  accept TOS -> name the agent -> wait for the Secure VM
+  chat     send a first message in the real UI and capture the agent's reply
+
+The Muse chat itself is an end-to-end encrypted gateway (noise x25519 +
+attestation), so it is driven through the browser rather than reimplemented.
+The API probes below are only used to *assert* a stage actually completed.
+
+Usage:
+  python3 scripts/muse_signup_e2e.py --via facebook --until chat
+  python3 scripts/muse_signup_e2e.py --resume satriakencang81 --until chat
+  python3 scripts/muse_signup_e2e.py --resume satriakencang81 --until agegate --headed
 """
 from __future__ import annotations
 
@@ -21,604 +33,775 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Repo path setup
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import scripts.mailboxes as M
 import scripts.persona as persona
-import scripts.urban_vpn as uv
-from camoufox.sync_api import Camoufox
 
-LEDGER_PATH = Path.home() / ".config/auto-freecf/muse_accounts.json"
-FB_LEDGER_PATH = Path.home() / ".config/auto-freecf/facebook_accounts.json"
-NINE_ROUTER_DB = Path.home() / ".9router/db/data.sqlite"
+HOME = Path.home()
+LEDGER_PATH = HOME / ".config/auto-freecf/muse_accounts.json"
+FB_LEDGER_PATH = HOME / ".config/auto-freecf/facebook_accounts.json"
+IG_LEDGER_PATH = HOME / ".config/auto-freecf/instagram_accounts.json"
+STATE_DIR = HOME / ".config/auto-freecf/muse_state"
+SHOT_DIR = HOME / ".config/auto-freecf/muse_shots"
+
+STAGES = ("signup", "agegate", "onboard", "chat")
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 
 
-def _fb_context_cookies(fb: dict) -> list[dict]:
-    """Saved Facebook session cookies, re-scoped to .facebook.com for Muse's Meta login."""
-    http_only = {"xs", "c_user", "datr", "fr", "sb", "presence", "ddid"}
-    out = []
-    for name, value in (fb.get("cookies") or {}).items():
-        out.append({
-            "name": name, "value": value, "domain": ".facebook.com", "path": "/",
-            "secure": True, "httpOnly": name in http_only, "sameSite": "None",
+# ---------------------------------------------------------------- state file
+
+def _state_path(key: str) -> Path:
+    return STATE_DIR / f"{key}.json"
+
+
+def load_state(key: str) -> dict:
+    p = _state_path(key)
+    if p.exists():
+        st = json.loads(p.read_text())
+        # A state file written before the jar existed only has the per-domain
+        # map, and `run()` used to inject `state["cookies"]` — a key that never
+        # existed — so a "resume" silently ran anonymous (401 on every API).
+        if not st.get("cookie_jar"):
+            st["cookie_jar"] = _jar_from_map(st.get("cookies_by_domain") or {})
+        return st
+    # Adopt an account that predates this state file from the shared ledger.
+    for a in _ledger(LEDGER_PATH):
+        if a.get("email", "").split("@")[0] == key:
+            print(f"[adopt] {a['email']} from {LEDGER_PATH.name}")
+            jar = a.get("cookie_jar") or _jar_from_map(
+                {"muse.ai": a.get("cookies") or {},
+                 "facebook.com": a.get("fb_cookies") or {}})
+            return {
+                "key": key,
+                "email": a["email"],
+                "name": a.get("name") or "Muse User",
+                "dob": ("June", "15", "1998"),
+                "via": a.get("auth_via") or "email",
+                "invite": a.get("invite_code"),
+                "stage": a.get("stage") or "agegate",
+                "cookie_jar": jar,
+                "created_at": a.get("created_at") or _now(),
+            }
+    return {"key": key, "stage": "signup", "cookie_jar": [], "created_at": _now()}
+
+
+def _jar_from_map(by_domain: dict) -> list[dict]:
+    """{domain: {name: value}} -> Playwright cookie jar.
+
+    `__Host-*` / `__Secure-*` cookies must carry NO Domain attribute (Chromium
+    rejects them otherwise) and the session then looks logged-out, which is a
+    maddening failure because every other cookie looks fine.
+    """
+    jar: list[dict] = []
+    for dom, cookies in by_domain.items():
+        if not cookies:
+            continue
+        for name, value in cookies.items():
+            c = {"name": name, "value": value, "path": "/", "secure": True}
+            if not (name.startswith("__Host") or name.startswith("__Secure")):
+                c["domain"] = dom if dom.startswith(".") else f".{dom}"
+            jar.append(c)
+    return jar
+
+
+def save_state(state: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    state["updated_at"] = _now()
+    p = _state_path(state["key"])
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.replace(p)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------- ledgers
+
+def _ledger(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return []
+
+
+def pick_facebook(email: str = "") -> dict:
+    accounts = _ledger(FB_LEDGER_PATH)
+    if not accounts:
+        raise RuntimeError(f"no Facebook accounts in {FB_LEDGER_PATH}")
+    if not email:
+        for a in accounts:
+            if a.get("email") == "satriakencang81@kancalabs.my.id":
+                return a
+        return accounts[0]
+    for a in accounts:
+        if a["email"].lower() == email.lower():
+            return a
+    raise RuntimeError(f"Facebook account {email} not in {FB_LEDGER_PATH}")
+
+
+def pick_instagram(email: str = "") -> dict:
+    """An Instagram login we own; it is the free age anchor (birth_year > 18)."""
+    accounts = _ledger(IG_LEDGER_PATH)
+    if not accounts:
+        raise RuntimeError(f"no Instagram accounts in {IG_LEDGER_PATH}")
+    if email:
+        for a in accounts:
+            if a["email"].lower() == email.lower():
+                return a
+    for a in accounts:
+        if a.get("password") and int(a.get("birth_year") or 0) <= datetime.now().year - 18:
+            return a
+    raise RuntimeError(f"no usable Instagram account (needs password + adult birth_year) in {IG_LEDGER_PATH}")
+
+
+# ---------------------------------------------------------------- browser
+
+def _load_env_files() -> None:
+    """Pull provider keys from the shared env files (tinyfish.env, .env)."""
+    for name in ("tinyfish.env", ".env"):
+        p = HOME / ".config" / "auto-freecf" / name
+        if not p.exists():
+            continue
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
+def open_browser(headless: bool, sticky: bool, country: str):
+    """Return (playwright, browser, context, page, egress_meta)."""
+    if not os.environ.get("XAUTHORITY"):
+        xauth = list(Path("/run/user/1000").glob("xauth_*"))
+        if xauth:
+            os.environ["XAUTHORITY"] = str(xauth[0])
+    if not os.environ.get("DISPLAY"):
+        os.environ["DISPLAY"] = ":0"
+
+    meta: dict = {"provider": "direct", "country": ""}
+    pw = None
+    if sticky:
+        _load_env_files()
+        from scripts.github_bd_signup import _tinyfish_session
+        from playwright.sync_api import sync_playwright
+        pw = sync_playwright().start()
+        ws = _tinyfish_session(country)
+        browser = pw.chromium.connect_over_cdp(ws)
+        ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+        meta = {"provider": "TinyFish stealth residential (sticky)", "country": country}
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    else:
+        from camoufox.sync_api import Camoufox
+        kwargs: dict = {"headless": headless, "humanize": True, "locale": "en-US", "geoip": False}
+        proxy = None
+        if country:
+            import scripts.proxy_pool as pp
+            best = pp.best(country=country)
+            if not best or not best.get("proxy"):
+                raise RuntimeError(f"no working {country} proxy in proxy_pool")
+            proxy = best["proxy"]
+            kwargs["proxy"] = proxy
+            meta = {"provider": best.get("provider", "proxy_pool"), "country": country,
+                    "egress_ip": best.get("egress_ip"), "region": best.get("region")}
+        browser = Camoufox(**kwargs).__enter__()
+        ctx = browser.new_context(viewport={"width": 1280, "height": 900},
+                                  extra_http_headers={"Accept-Language": "en-US,en;q=0.9"})
+        page = ctx.new_page()
+    ctx.set_default_timeout(30000)
+    page.set_default_timeout(30000)
+    return pw, browser, ctx, page, meta
+
+
+def record_egress(page, meta: dict) -> dict:
+    """Read the exit IP/ASN once and store it with the account (no rotation later)."""
+    try:
+        page.goto("https://ipinfo.io/json", timeout=25000)
+        info = json.loads(page.locator("body").inner_text())
+        meta.update({
+            "egress_ip": info.get("ip"),
+            "isp": (info.get("org") or "").split(" ", 1)[-1] or info.get("org"),
+            "asn": (info.get("org") or "").split(" ")[0],
+            "city": info.get("city"),
+            "region": info.get("region"),
+            "hostname": info.get("hostname"),
         })
-    return out
+    except Exception as e:
+        meta["egress_error"] = str(e)
+    return meta
 
 
-def _wait_otp(box, timeout: float = 100.0) -> str | None:
-    """Muse sends 'Confirmation code NNNNNN' from Meta; the preheader carries a decoy 6-digit."""
-    end = time.time() + timeout
+def shot(page, name: str) -> str:
+    SHOT_DIR.mkdir(parents=True, exist_ok=True)
+    p = SHOT_DIR / f"{name}-{int(time.time())}.png"
+    try:
+        page.screenshot(path=str(p), full_page=False)
+    except Exception:
+        pass
+    return str(p)
+
+
+def body_text(page) -> str:
+    try:
+        return page.locator("body").inner_text()[:4000]
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------- api asserts
+
+def api_get(page, path: str):
+    return page.evaluate("""async (p) => {
+        const r = await fetch(p, {credentials: 'include', cache: 'no-store'});
+        let body = null;
+        try { body = await r.json(); } catch (e) { body = await r.text(); }
+        return {status: r.status, body};
+    }""", path)
+
+
+def ccv_status(page) -> dict:
+    return api_get(page, "/api/hatch/ccv-status")
+
+
+def linking_options(page) -> list[str]:
+    r = api_get(page, "/api/hatch/age-confirmation/linking-options")
+    if r["status"] != 200 or not isinstance(r["body"], dict):
+        return []
+    return list(r["body"].get("linkable_account_types") or [])
+
+
+# ---------------------------------------------------------------- stages
+
+def stage_signup(page, ctx, state, *, invite: str, via: str, fb: dict | None) -> None:
+    """Create the Meta identity. Only runs when there is no session yet."""
+    if via == "facebook" and fb:
+        _inject(page, ctx, fb.get("cookies", {}), ".facebook.com")
+    url = f"https://muse.ai/invite/{invite}" if invite else "https://muse.ai/"
+    page.goto(url, wait_until="domcontentloaded", timeout=45000)
+    time.sleep(2)
+    print(f"    landed: {page.url}")
+    shot(page, "signup-01-landing")
+
+    if "muse.ai/access" in page.url or "/app" in page.url:
+        print("    already authenticated — skipping signup")
+        state["stage"] = "agegate"
+        return
+
+    email = state["email"]
+    box = M.open_mailbox("tempik", domain=email.split("@")[1], local_part=email.split("@")[0])
+    seen = {m.get("id") for m in box.read() if m.get("id")}
+
+    inp = page.wait_for_selector('input[placeholder*="Mobile number or email"], input[type="email"]',
+                                 timeout=45000, state="attached")
+    inp.fill(email)
+    time.sleep(0.5)
+    page.locator('button:has-text("Continue")').first.click()
+    page.wait_for_selector("text=Enter your code to sign up", timeout=25000)
+    print("    OTP screen reached")
+
+    otp = _await_otp(box, seen, 90)
+    if not otp:
+        raise RuntimeError("no Meta OTP arrived in 90s")
+    print(f"    OTP {otp}")
+
+    pins = page.locator('[data-slot="pin-digit"]').all()
+    if pins:
+        for i, d in enumerate(otp):
+            pins[i].click()
+            page.keyboard.press(d)
+            time.sleep(0.15)
+    else:
+        page.wait_for_selector('input[autocomplete="one-time-code"], input[name*="code" i]',
+                               timeout=15000, state="attached").fill(otp)
+    time.sleep(1.0)
+    box_cb = page.query_selector('input[type="checkbox"]')
+    if box_cb and not box_cb.is_checked():
+        box_cb.check()
+    for label in ("Confirm", "Continue", "Next"):
+        btn = page.locator(f'[role="button"]:has-text("{label}"), button:has-text("{label}")').first
+        if btn.count() and btn.is_visible():
+            btn.click()
+            break
+    time.sleep(5)
+    shot(page, "signup-02-after-otp")
+
+    if "Finish creating your account" in body_text(page):
+        print("    profile screen")
+        _fill_profile(page, state)
+        shot(page, "signup-03-profile")
+        page.locator('button:has-text("Confirm"), [role="button"]:has-text("Confirm")').first.click()
+        time.sleep(6)
+        shot(page, "signup-04-after-profile")
+
+    time.sleep(3)
+    if "A few things to know" in body_text(page):
+        print("    onboarding intro screen — clicking Get started")
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(1)
+        btn = page.locator('button:has-text("Get started")').first
+        if btn.count() and btn.is_visible():
+            btn.click()
+            time.sleep(5)
+    state["stage"] = "agegate"
+
+
+def _await_otp(box, seen: set, seconds: float) -> str | None:
+    end = time.time() + seconds
     while time.time() < end:
-        for m in reversed(box.read()):
-            blob = " ".join(str(m.get(k) or "") for k in ("subject", "text", "body"))
-            hit = re.search(r"Confirmation code\s*(\d{6})", blob, re.IGNORECASE)
-            if not hit:
-                hit = re.search(r"(?:code|verify|verification|otp)[^\d]{0,30}(\d{6})\b", blob, re.IGNORECASE)
+        for m in box.read():
+            if m.get("id") and m.get("id") in seen:
+                continue
+            subj = str(m.get("subject") or "")
+            blob = str(m.get("body") or m.get("text") or "")
+            for pat in (r"(?:use code|code)\s*(\d{6})\b", r"\b(\d{6})\b"):
+                hit = re.search(pat, subj, re.IGNORECASE)
+                if hit:
+                    return hit.group(1)
+            hit = re.search(r"(?:code|verify|verification|otp)[^\d]{0,30}(\d{6})\b", blob, re.IGNORECASE)
             if hit:
                 return hit.group(1)
-        time.sleep(2.5)
+        time.sleep(2)
     return None
 
 
-def _stage(page, tag: str) -> tuple[str, list[str]]:
-    try:
-        body = re.sub(r"\s+", " ", page.inner_text("body"))[:500]
-    except Exception:
-        body = ""
-    try:
-        pels = page.eval_on_selector_all(
-            "[data-pel-click]", "els => els.map(e => e.getAttribute('data-pel-click'))")
-    except Exception:
-        pels = []
-    print(f"      [{tag}] url={page.url}")
-    print(f"      [{tag}] pels={pels}")
-    print(f"      [{tag}] body: {body}")
-    return body, pels
+def _fill_profile(page, state: dict) -> None:
+    first, _, last = state["name"].partition(" ")
+    last = last or "Kanca"
+    page.locator('input[aria-label="First name"], input[placeholder*="First name"]').first.fill(first)
+    page.locator('input[aria-label="Last name"], input[placeholder*="Last name"]').first.fill(last)
+    month, day, year = state.get("dob", ("June", "15", "1998"))
+    for label, value in (("Month", month), ("Day", day), ("Year", year)):
+        try:
+            page.locator(f'button[aria-label="{label}"]').first.click()
+            time.sleep(0.4)
+            page.evaluate("""(v) => {
+                const el = Array.from(document.querySelectorAll('[role="option"],[data-slot="select-item"]'))
+                    .find(e => e.innerText.trim() === v);
+                if (el) el.click();
+            }""", value)
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"    [!] {label}: {e}")
 
 
-def _upsert_9router(acc: dict) -> None:
-    if not NINE_ROUTER_DB.exists():
-        return
-    import sqlite3
-    now = datetime.now(timezone.utc).isoformat()
-    conn_id = f"muse-web-{acc['email'].split('@')[0]}"
-    data = json.dumps({
-        "apiKey": acc["cookie_header"],
-        "testStatus": "active",
-        "providerSpecificData": {
-            "authMethod": "cookie",
-            "connectionProxyEnabled": False,
-            "connectionProxyUrl": "",
-            "connectionNoProxy": "",
-            "baseUrl": "https://muse.ai",
-        },
-    })
-    con = sqlite3.connect(NINE_ROUTER_DB)
-    cur = con.cursor()
-    row = cur.execute("SELECT id FROM providerConnections WHERE id = ?", (conn_id,)).fetchone()
-    if row:
-        cur.execute("UPDATE providerConnections SET data = ?, isActive = 1, updatedAt = ? WHERE id = ?",
-                    (data, now, conn_id))
-    else:
-        cur.execute(
-            "INSERT INTO providerConnections (id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (conn_id, "muse-web", "cookie", f"Muse Web ({acc['name']})", acc["email"], 0, 1, data, now, now))
-    con.commit()
-    con.close()
-    print(f"      [✓] 9Router connection '{conn_id}' upserted")
+def stage_agegate(page, ctx, state, *, via: str, ig: dict | None, fb: dict | None) -> None:
+    """Pass /access/verification by linking an adult social account.
 
-
-def run_muse_via_facebook(headless: bool = True, fb_index: int = -1) -> dict:
-    """Muse E2E seeded with an existing Facebook session.
-
-    Muse's only door is a Meta account identified by email/phone OTP, so the
-    Facebook account we already own supplies both halves: its email for the
-    Meta identity and its session cookies so any Accounts Center / FB link
-    step auto-approves instead of dead-ending on age verification.
+    Meta decides which anchor is still usable per identity: it answers
+    `{"url": null}` for a type that is already consumed (an identity created
+    through Facebook cannot then be age-attested by that same Facebook), so
+    every offered type is tried in preference order rather than assumed.
     """
-    fb_ledger = json.loads(FB_LEDGER_PATH.read_text())
-    fb = fb_ledger[fb_index]
-    email = fb["email"]
-    name = fb.get("name") or "Muse User"
-    first_name, last_name = (name.split()[0], name.split()[-1]) if " " in name else (name, "Kanca")
-    print(f"\n[*] Facebook seed: {email} ({name})")
+    page.goto("https://muse.ai/app", wait_until="domcontentloaded", timeout=45000)
+    time.sleep(3)
+    print(f"    landed: {page.url}")
+    shot(page, "age-01-landing")
 
-    local_part = email.split("@")[0]
-    box = M.open_mailbox("tempik", domain="kancalabs.my.id", local_part=local_part)
-    print(f"    [✓] Mailbox attached: {box.address}")
+    st = ccv_status(page)
+    print(f"    ccv-status: {st['status']} {st['body']}")
+    if st["status"] == 200 and isinstance(st["body"], dict) and st["body"].get("ccv_status") not in ("ccv_required", "blocked"):
+        print("    age gate already clear")
+        state["stage"] = "onboard"
+        return
+    if st["status"] == 200 and isinstance(st["body"], dict) and st["body"].get("ccv_status") == "blocked":
+        raise RuntimeError("age verification is blocked for this identity — needs a real card")
 
-    with Camoufox(headless=headless, humanize=True) as browser:
-        ctx = browser.new_context(viewport={"width": 1280, "height": 900})
-        ctx.add_cookies(_fb_context_cookies(fb))
-        page = ctx.new_page()
+    options = linking_options(page)
+    print(f"    linkable: {options}")
+    if not options:
+        raise RuntimeError(f"no social account can be linked (status {st['status']}) — the session is dead, re-run signup")
 
-        print("[1/6] muse.ai login with the Facebook account email…")
-        page.goto("https://muse.ai/", timeout=60000)
+    # Preference: the anchors we hold live cookies for first, then whatever is offered.
+    prefer = [t for t in ("facebook", "instagram") if t in options] or options
+    if via in prefer:
+        prefer.remove(via)
+        prefer.insert(0, via)
+
+    for want in prefer:
+        if want == "facebook" and fb:
+            _inject(page, ctx, fb.get("cookies", {}), ".facebook.com")
+        auth = api_get(page, f"/api/hatch/age-confirmation/linking-web-auth?account_type={want}")
+        body = auth["body"] if isinstance(auth["body"], dict) else {}
+        if auth["status"] != 200 or not body.get("url"):
+            print(f"    [{want}] unavailable (url={body.get('url')!r}) — next anchor")
+            continue
+        print(f"    linking via {want}")
+        attempt_id = body["attempt_id"]
+        popup = ctx.new_page()
+        popup.goto(body["url"], wait_until="domcontentloaded", timeout=60000)
         time.sleep(3)
-        page.click('[data-pel-click="logged_out_login_click"]')
-        inp = page.wait_for_selector('input[placeholder*="Mobile number or email"]', timeout=30000)
-        inp.fill(email)
-        time.sleep(0.6)
-        page.click('[data-pel-click="login_contact_continue_click"]')
-        time.sleep(6)
-        body, pels = _stage(page, "after-email")
+        print(f"    popup: {popup.url[:120]}")
+        shot(popup, "age-02-popup")
 
-        print("[2/6] Answering the Meta challenge…")
-        if "pin-digit" in page.content() or "code to sign" in body.lower() or "Enter your code" in body:
-            otp = _wait_otp(box)
-            if not otp:
-                raise RuntimeError("Muse OTP never arrived in the Tempik inbox")
-            print(f"      [✓] OTP {otp}")
-            pins = page.locator('[data-slot="pin-digit"]').all()
-            for i, d in enumerate(otp):
-                pins[i].click()
-                time.sleep(0.15)
-                page.keyboard.press(d)
-                time.sleep(0.1)
-            time.sleep(4)
-            _stage(page, "after-otp")
-        elif page.locator('input[type="password"]').count():
-            print("      [i] Password challenge (existing Meta account) — using the Facebook password")
-            page.locator('input[type="password"]').first.fill(fb.get("password", ""))
-            page.keyboard.press("Enter")
-            time.sleep(8)
-            _stage(page, "after-password")
+        if want == "instagram" and ig:
+            _instagram_login(popup, ig, state)
+        elif want == "facebook" and fb:
+            _facebook_confirm(popup, state)
 
-        print("[3/6] Profile / onboarding…")
-        for _ in range(6):
-            body, pels = _stage(page, "step")
-            if "Finish creating your account" in body:
-                page.evaluate(
-                    """(d) => {
-                    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                    const fn = document.querySelector('input[placeholder="First name"]');
-                    const ln = document.querySelector('input[placeholder="Last name"]');
-                    if (fn) { set.call(fn, d.first); fn.dispatchEvent(new Event('input', {bubbles:true})); }
-                    if (ln) { set.call(ln, d.last); ln.dispatchEvent(new Event('input', {bubbles:true})); }
-                    const y = Array.from(document.querySelectorAll('select')).find(s =>
-                        Array.from(s.options).some(o => o.value === '1998'));
-                    if (y) { y.value = '1998'; y.dispatchEvent(new Event('change', {bubbles:true})); }
-                }""", {"first": first_name, "last": last_name})
-                time.sleep(1)
-                try:
-                    page.click('button[data-slot="button"]:has-text("Confirm")', timeout=5000)
-                except Exception:
-                    pass
-                time.sleep(5)
-                continue
-            fb_link = next((p for p in pels if p and "link" in p.lower()
-                            and ("fb" in p.lower() or "facebook" in p.lower())), None)
-            if fb_link:
-                print(f"      [→] clicking Muse link step: {fb_link}")
-                page.click(f'[data-pel-click="{fb_link}"]')
-                time.sleep(8)
-                for pg in ctx.pages:
-                    if "facebook.com" in pg.url or "accounts" in pg.url:
-                        for label in ("Continue", "Allow", "Yes, finish setup", "Confirm"):
-                            try:
-                                pg.get_by_role("button", name=label).first.click(timeout=4000)
-                                print(f"      [→] {label} on {pg.url.split('?')[0]}")
-                                time.sleep(4)
-                                break
-                            except Exception:
-                                continue
-                continue
-            if ctx.cookies() and any(c["name"] == "hatch_sess" for c in ctx.cookies()):
-                break
-            time.sleep(4)
+        shot(popup, "age-03-after-login")
+        print(f"    popup now: {popup.url[:120]}")
 
-        print("[4/6] Waiting for hatch_sess…")
-        end = time.time() + 90
-        while time.time() < end:
-            if any(c["name"] == "hatch_sess" for c in ctx.cookies()):
-                break
-            time.sleep(3)
-        _stage(page, "final")
-
-        cookie_map = {c["name"]: c["value"] for c in ctx.cookies()}
-        hatch = cookie_map.get("hatch_sess")
-        if not hatch:
-            raise RuntimeError(f"no hatch_sess captured; cookies={sorted(cookie_map)} url={page.url}")
-
-        entry = {
-            "email": email,
-            "name": name,
-            "hatch_sess": hatch,
-            "cookie_header": "; ".join(f"{k}={v}" for k, v in cookie_map.items()),
-            "cookies": cookie_map,
-            "seed": "facebook",
-            "fb_email": email,
-            "status": "facebook_linked",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        import fcntl
-        LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(LEDGER_PATH.with_suffix(".lock"), "w") as lf:
-            fcntl.flock(lf, fcntl.LOCK_EX)
-            ledger = json.loads(LEDGER_PATH.read_text()) if LEDGER_PATH.exists() else []
-            ledger = [a for a in ledger if a.get("email") != email]
-            ledger.append(entry)
-            tmp = LEDGER_PATH.with_suffix(".tmp")
-            tmp.write_text(json.dumps(ledger, indent=2))
-            tmp.replace(LEDGER_PATH)
-            fcntl.flock(lf, fcntl.LOCK_UN)
-
-        print(f"\n[✓] MUSE VIA FACEBOOK OK — {email}")
-        print(f"    hatch_sess: {hatch[:32]}…")
-        print(f"    ledger: {LEDGER_PATH}")
-        _upsert_9router(entry)
-        return entry
-FB_LEDGER_PATH = Path.home() / ".config/auto-freecf/facebook_accounts.json"
-
-
-def _load_fb_account(fb_email: str) -> dict:
-    """Pick a Facebook account from the shared ledger (explicit email or first entry)."""
-    accounts = json.loads(FB_LEDGER_PATH.read_text())
-    if fb_email:
-        for a in accounts:
-            if a["email"].lower() == fb_email.lower():
-                return a
-        raise RuntimeError(f"Facebook account {fb_email} not in {FB_LEDGER_PATH}")
-    if not accounts:
-        raise RuntimeError(f"No Facebook accounts in {FB_LEDGER_PATH}")
-    return accounts[0]
-
-
-def _fb_cookies_for_context(fb_acc: dict) -> list[dict]:
-    out = []
-    for name, value in fb_acc.get("cookies", {}).items():
-        out.append({
-            "name": name, "value": value, "domain": ".facebook.com",
-            "path": "/", "secure": True, "httpOnly": name in ("xs", "fr"),
-        })
-    return out
-
-
-def _persist_fb_cookies(fb_acc: dict, context) -> None:
-    """Write refreshed .facebook.com cookies back to the Facebook ledger."""
-    fb_cookies = {c["name"]: c["value"] for c in context.cookies() if "facebook.com" in (c.get("domain") or "")}
-    if not fb_cookies:
-        return
-    accounts = json.loads(FB_LEDGER_PATH.read_text())
-    for a in accounts:
-        if a["email"] == fb_acc["email"]:
-            a["cookies"] = {**a.get("cookies", {}), **fb_cookies}
-            a["cookie_header"] = "; ".join(f"{k}={v}" for k, v in a["cookies"].items())
-            if "c_user" in fb_cookies:
-                a["c_user"] = fb_cookies["c_user"]
-            if "xs" in fb_cookies:
-                a["xs"] = fb_cookies["xs"]
-            a["muse_email"] = fb_acc["email"]
-            a["muse_linked_at"] = datetime.now(timezone.utc).isoformat()
+        nxt = _poll_link_completion(page, attempt_id)
+        try:
+            popup.close()
+        except Exception:
+            pass
+        if nxt == "continue":
             break
-    FB_LEDGER_PATH.write_text(json.dumps(accounts, indent=2))
-    print(f"      [✓] Facebook cookies refreshed & saved ({len(fb_cookies)} cookies)")
+        if nxt in ("blocked", "use_credit_card"):
+            raise RuntimeError(f"age linking refused by Meta: {nxt}")
+        print(f"    [{want}] did not resolve ({nxt}) — next anchor")
+
+    st = ccv_status(page)
+    print(f"    ccv-status after link: {st['body']}")
+    if isinstance(st["body"], dict) and st["body"].get("ccv_status") == "ccv_required":
+        raise RuntimeError("age gate still required after linking — inspect age-03 screenshot")
+    state["stage"] = "onboard"
 
 
-def _register_9router(entry: dict) -> None:
-    """Upsert the muse-web provider connection so 9Router can use this session."""
-    import sqlite3
-    db = Path.home() / ".9router/db/data.sqlite"
-    if not db.exists():
-        return
-    local = entry["email"].split("@")[0]
-    conn_id = f"muse-web-{local}"
-    data = {
-        "apiKey": entry["cookie_header"],
-        "testStatus": "active",
-        "providerSpecificData": {
-            "authMethod": "cookie",
-            "connectionProxyEnabled": False,
-            "connectionProxyUrl": "",
-            "connectionNoProxy": "",
-            "baseUrl": "https://muse.ai",
-        },
-    }
-    now = datetime.now(timezone.utc).isoformat()
-    con = sqlite3.connect(db)
-    con.execute(
-        "INSERT INTO providerConnections (id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?) "
-        "ON CONFLICT(id) DO UPDATE SET data=excluded.data, isActive=1, updatedAt=excluded.updatedAt",
-        (conn_id, "muse-web", "cookie", f"Muse Web ({entry['name']})", entry["email"], 0, 1,
-         json.dumps(data), now, now),
-    )
-    con.commit()
-    print(f"      [✓] 9Router connection '{conn_id}' registered (provider muse-web)")
+def _poll_link_completion(page, attempt_id: str, tries: int = 15) -> str | None:
+    """The UI polls this every 2s while the popup is open; same contract here."""
+    nxt = None
+    for i in range(tries):
+        r = page.evaluate("""async (aid) => {
+            const r = await fetch('/api/hatch/age-confirmation/linking-web-auth-completion',
+                {method:'POST', headers:{'Content-Type':'application/json'},
+                 body: JSON.stringify({attempt_id: aid}), credentials:'include', cache:'no-store'});
+            let b=null; try { b = await r.json(); } catch(e) { b = await r.text(); }
+            return {status:r.status, body:b};
+        }""", attempt_id)
+        nxt = (r["body"] or {}).get("next_action") if isinstance(r["body"], dict) else None
+        print(f"      [{i}] {r['status']} next_action={nxt}")
+        if nxt and nxt != "pending":
+            return nxt
+        time.sleep(2)
+    return nxt
 
 
-def run_muse_signup(headless: bool = True, password: str = "", local_part: str = "", country: str = "",
-                    fb_email: str = "") -> dict:
-    fb_acc = None
-    if fb_email or os.environ.get("MUSE_VIA_FACEBOOK"):
-        fb_acc = _load_fb_account(fb_email or os.environ.get("MUSE_VIA_FACEBOOK", ""))
-        email = fb_acc["email"]
-        local_part = email.split("@")[0]
-        name = fb_acc.get("name") or persona.full_name()
-        print(f"\n[0/6] Facebook identity: {email} (c_user={fb_acc.get('c_user')})")
-    else:
-        email = ""
-        name = persona.full_name()
-
-    parts = name.split()
-    first_name = parts[0]
-    last_name = parts[-1] if len(parts) > 1 else "Kanca"
-
-    password = password or os.environ.get("MUSE_PASSWORD") or (persona.password() if hasattr(persona, "password") else "MuseTmp!2026xQ")
-
-    if fb_acc:
-        box = M.open_mailbox("tempik", domain="kancalabs.my.id", local_part=local_part)
-        print(f"      [✓] Reusing FB mailbox: {box.address} (User: {first_name} {last_name})")
-    else:
-        print(f"\n[1/6] Allocating Tempik domain mailbox on kancalabs.my.id...")
-        box = M.open_mailbox("tempik", domain="kancalabs.my.id", local_part=local_part or os.environ.get("MUSE_LOCAL_PART", ""))
-        email = box.address
-    print(f"      [✓] Mailbox: {email} (User: {first_name} {last_name})")
-
-    print("[2/6] Launching Camoufox anti-detect browser...")
-    proxy_cfg = None
-    if country:
-        print(f"[0/6] Fetching {country} residential proxy...")
-        # Try UrbanVPN first
+def _instagram_login(page, ig: dict, state: dict) -> None:
+    """Log in to the Instagram account that anchors the age check."""
+    if page.locator('input[name="email"], input[name="username"]').count():
+        login_id = ig.get("email") or ig["username"]
+        print(f"    IG login as {login_id}")
+        page.locator('input[name="email"], input[name="username"]').first.fill(login_id)
+        page.locator('input[name="pass"], input[name="password"]').first.fill(ig["password"])
+        page.locator('button[type="submit"], div[role="button"]:has-text("Log in")').first.click()
+        time.sleep(6)
+        shot(page, "age-02b-ig-login")
+        txt = body_text(page)
+        if "challenge" in page.url or "Confirm" in txt and "identity" in txt:
+            raise RuntimeError(f"Instagram checkpoint for {ig['username']} — needs a human")
+    for label in ("Continue", "Allow", "Authorize", "Log in", "Next", "Confirm"):
+        btn = page.locator(f'div[role="button"]:has-text("{label}"), button:has-text("{label}")').first
         try:
-            p = uv.get_proxy(country=country)
-            # Quick connectivity test
-            import subprocess
-            test = subprocess.run(
-                ["curl", "-s", "-m", "8", "-x", f"http://{p['username']}:{p['password']}@{p['host']}:{p['port']}",
-                 "https://api.ipify.org?format=json"],
-                capture_output=True, text=True, timeout=12)
-            if test.returncode == 0 and test.stdout.strip():
-                proxy_cfg = {
-                    "server": f"http://{p['host']}:{p['port']}",
-                    "username": p["username"],
-                    "password": p["password"],
-                }
-                print(f"      [✓] UrbanVPN {country}: {p['host']}:{p['port']} (exit: {test.stdout.strip()})")
-            else:
-                raise RuntimeError("UrbanVPN proxy not responding")
-        except Exception as e:
-            print(f"      [!] UrbanVPN {country} failed: {e}")
-            # Fallback to Windscribe for US
-            if country.upper() == "US":
-                print("      [+] Falling back to Windscribe US...")
-                try:
-                    import scripts.windscribe_free_proxy as ws
-                    creds = ws.get_credentials()
-                    hosts = ws.serverlist()
-                    us_hosts = [h for k, v in hosts.items() if "us" in k.lower() or "united states" in k.lower() for h in v[:1]]
-                    if not us_hosts:
-                        us_hosts = [list(hosts.values())[0][0]]
-                    host = us_hosts[0]
-                    # Try US East instead of Central (Central is slow)
-                    us_east = [h for k, v in hosts.items() if "us east" in k.lower() for h in v[:1]]
-                    if us_east:
-                        host = us_east[0]
-                    proxy_cfg = {
-                        "server": f"https://{host}:443",
-                        "username": creds["username"],
-                        "password": creds["password"],
-                    }
-                    print(f"      [✓] Windscribe US: {host}")
-                except Exception as e2:
-                    print(f"      [!] Windscribe fallback also failed: {e2}")
-            else:
-                print(f"      [!] No fallback for {country}")
+            if btn.count() and btn.is_visible():
+                print(f"    clicking {label}")
+                btn.click()
+                time.sleep(4)
+        except Exception:
+            pass
+    state.setdefault("anchors", {})["instagram"] = ig["email"]
 
-    camoufox_kwargs = {"headless": headless, "humanize": True}
-    if proxy_cfg:
-        camoufox_kwargs["proxy"] = proxy_cfg  # type: ignore[assignment]
-        camoufox_kwargs["geoip"] = True
 
-    with Camoufox(**camoufox_kwargs) as browser:
-        context = browser.new_context(viewport={"width": 1280, "height": 800})
-        if fb_acc:
-            context.add_cookies(_fb_cookies_for_context(fb_acc))
-            print(f"      [✓] Injected {len(fb_acc.get('cookies', {}))} Facebook cookies into context")
-        page = context.new_page()
-
-        if proxy_cfg:
+def _facebook_confirm(page, state: dict) -> None:
+    time.sleep(3)
+    for _ in range(4):
+        for label in ("Continue as", "Continue", "Allow", "Confirm", "OK", "Yes"):
+            btn = page.locator(f'div[role="button"]:has-text("{label}"), button:has-text("{label}")').first
             try:
-                page.goto("https://api.ipify.org?format=json", timeout=20000)
-                time.sleep(2)
-                ip_text = page.locator("body").inner_text()
-                print(f"      [IP check] Exit IP: {ip_text}")
-                page.goto("https://muse.ai/?aymh_complete=1", timeout=40000)
-            except Exception as e:
-                print(f"      [IP check failed: {e}]")
-                page.goto("https://muse.ai/?aymh_complete=1", timeout=40000)
-        else:
-            print("[3/6] Navigating to https://muse.ai/?aymh_complete=1...")
-            page.goto("https://muse.ai/?aymh_complete=1", timeout=40000)
+                if btn.count() and btn.is_visible():
+                    print(f"    clicking {label}")
+                    btn.click()
+                    time.sleep(4)
+                    return
+            except Exception:
+                pass
+        time.sleep(2)
 
-        # Enter email
-        inp = page.wait_for_selector('input[placeholder*="Mobile number or email"]', timeout=60000, state="attached")
-        inp.fill(email)
-        time.sleep(0.5)
 
-        btn = page.wait_for_selector('button:has-text("Continue")', timeout=5000)
-        btn.click()
+def stage_onboard(page, ctx, state) -> None:
+    """TOS, agent name, VM provisioning — all in the real UI."""
+    page.goto("https://muse.ai/app", wait_until="domcontentloaded", timeout=45000)
+    time.sleep(3)
+    print(f"    landed: {page.url}")
+    shot(page, "onboard-01")
 
-        page.wait_for_selector("text=Enter your code to sign up", timeout=20000)
-        print("      [✓] Reached OTP verification screen!")
-
-        print("[4/6] Polling Tempik for Meta 6-digit verification code...")
-        otp = None
-        end_time = time.time() + 65.0
-        while time.time() < end_time and not otp:
-            for m in box.read():
-                plain = re.sub(r"<[^>]+>", " ", m.get("body") or m.get("text") or "")
-                # Prefer a 6-digit code near a keyword; fall back to any 6-digit token
-                match = re.search(r"(?:code|verify|verification|otp)[^\d]{0,30}(\d{6})\b", plain, re.IGNORECASE)
-                if not match:
-                    match = re.search(r"\b(\d{6})\b", plain)
-                if match:
-                    otp = match.group(1)
+    for _ in range(6):
+        txt = body_text(page)
+        clicked = False
+        for label in ("Get started", "Continue", "I agree", "Agree", "Accept", "Next", "Start"):
+            btn = page.locator(f'[role="button"]:has-text("{label}"), button:has-text("{label}")').first
+            try:
+                if btn.count() and btn.is_visible():
+                    btn.click()
+                    clicked = True
+                    time.sleep(3)
                     break
-            if not otp:
-                time.sleep(2.0)
+            except Exception:
+                pass
+        if re.search(r"name your|agent'?s name|name your muse", txt, re.IGNORECASE):
+            break
+        if not clicked:
+            time.sleep(3)
+    shot(page, "onboard-02")
 
-        if not otp:
-            raise RuntimeError("Timed out waiting for Meta OTP from Tempik inbox")
-
-        print(f"      [✓] Received Meta OTP: {otp}")
-
-        print("[5/6] Submitting OTP...")
-        time.sleep(1.0)
-        pins = page.locator('[data-slot="pin-digit"]').all()
-        if pins:
-            for i, d in enumerate(otp):
-                pins[i].click()
-                time.sleep(0.2)
-                page.keyboard.press(d)
-                time.sleep(0.1)
-        else:
-            # Single-input variant: <input autocomplete="one-time-code"> + Confirm
-            otp_inp = page.wait_for_selector('input[autocomplete="one-time-code"], input[name*="code" i]', timeout=10000, state="attached")
-            otp_inp.fill(otp)
-            time.sleep(0.5)
-            remember = page.query_selector('input[type="checkbox"]')
-            if remember and not remember.is_checked():
-                remember.check()
-                print("      [✓] 'Remember this device' checked")
-            page.click('button:has-text("Confirm")', timeout=8000)
-            time.sleep(5)
-
-        # Profile screen only appears for a brand-new Meta identity
+    name = state.get("agent_name") or "muse"
+    for sel in ('input[placeholder*="name" i]', 'textarea[placeholder*="name" i]', "input[type=text]"):
+        el = page.locator(sel).first
         try:
-            page.wait_for_selector("text=Finish creating your account", timeout=20000)
-            print("      [✓] Reached Profile Details screen!")
-
-            print(f"[6/6] Completing profile details ({first_name} {last_name}, Year 1998)...")
-            page.evaluate(
-            """(data) => {
-            const fn = document.querySelector('input[placeholder="First name"]');
-            const ln = document.querySelector('input[placeholder="Last name"]');
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-            setter.call(fn, data.first);
-            fn.dispatchEvent(new Event('input', { bubbles: true }));
-            setter.call(ln, data.last);
-            ln.dispatchEvent(new Event('input', { bubbles: true }));
-
-            const yearSelect = Array.from(document.querySelectorAll('select')).find(s => {
-                const hint = (s.name || s.id || s.getAttribute('aria-label') || s.getAttribute('placeholder') || '').toLowerCase();
-                return hint.includes('year') || Array.from(s.options).some(o => o.value === '1998');
-            });
-            if (yearSelect) {
-                yearSelect.value = '1998';
-                yearSelect.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            }""",
-                {"first": first_name, "last": last_name},
-            )
-            time.sleep(1.0)
-
-            confirm_btn = page.wait_for_selector('button[data-slot="button"]:has-text("Confirm")', timeout=5000)
-            confirm_btn.click()
-            time.sleep(5)
-        except Exception as e:
-            print(f"      [!] No profile screen ({e.__class__.__name__}) — identity already exists, continuing")
-
-        print("      Waiting for session cookies from Meta / Muse...")
-        end_wait = time.time() + 120.0
-        last_print = 0
-        while time.time() < end_wait:
-            cookies_now = page.context.cookies()
-            if any(c["name"] == "hatch_sess" for c in cookies_now):
+            if el.count() and el.is_visible():
+                el.fill(name)
+                time.sleep(0.5)
+                for label in ("Continue", "Create", "Start", "Done", "Next"):
+                    btn = page.locator(f'[role="button"]:has-text("{label}"), button:has-text("{label}")').first
+                    if btn.count() and btn.is_visible():
+                        btn.click()
+                        break
+                time.sleep(5)
                 break
-            if "dashboard" in page.url or "home" in page.url:
+        except Exception:
+            continue
+    state["agent_name"] = name
+    shot(page, "onboard-03")
+    print(f"    url after naming: {page.url}")
+    state["stage"] = "chat"
+
+
+def stage_chat(page, state) -> str | None:
+    """Send one message and return the agent's reply — the real end-to-end proof."""
+    page.goto("https://muse.ai/app", wait_until="domcontentloaded", timeout=45000)
+    time.sleep(5)
+    shot(page, "chat-01")
+    print(f"    url: {page.url}")
+
+    box = None
+    for sel in ('textarea', 'div[contenteditable="true"]', 'input[placeholder*="essage" i]',
+                'textarea[placeholder*="sk" i]'):
+        el = page.locator(sel).last
+        try:
+            if el.count() and el.is_visible():
+                box = el
                 break
-            now = time.time()
-            if now - last_print >= 10:
-                print(f"      ...waiting ({int(now - (end_wait - 120))}s) url={page.url} cookies={[c['name'] for c in cookies_now]}")
-                last_print = now
-            time.sleep(2.0)
+        except Exception:
+            continue
+    if box is None:
+        print("    no composer found")
+        return None
 
-        # Extract cookies
-        all_cookies = page.context.cookies()
-        hatch_cookies = {}
-        for c in all_cookies:
-            hatch_cookies[c["name"]] = c["value"]
+    prompt = "Reply with exactly: MUSE_E2E_OK"
+    box.click()
+    box.fill(prompt) if box.evaluate("e => e.tagName") != "DIV" else page.keyboard.type(prompt)
+    page.keyboard.press("Enter")
+    print("    sent; waiting for reply…")
+    end = time.time() + 120
+    while time.time() < end:
+        time.sleep(4)
+        txt = body_text(page)
+        if "MUSE_E2E_OK" in txt.split(prompt)[-1]:
+            shot(page, "chat-02-reply")
+            print("    reply captured")
+            return txt[-800:]
+    shot(page, "chat-02-timeout")
+    return None
 
-        hatch_sess = hatch_cookies.get("hatch_sess")
-        if not hatch_sess:
-            raise RuntimeError(f"Registration finished but hatch_sess cookie was not captured: {list(hatch_cookies.keys())}")
 
-        cookie_str = "; ".join([f"{k}={v}" for k, v in hatch_cookies.items()])
-        account_entry = {
+# ---------------------------------------------------------------- cookies
+
+def _add_cookies(ctx, cookies: list[dict], url: str) -> None:
+    """Playwright wants a URL per cookie for CDP contexts; domain+path is rejected."""
+    payload = [{"name": c["name"], "value": c["value"], "url": url} for c in cookies if c.get("name")]
+    for i in range(0, len(payload), 50):
+        ctx.add_cookies(payload[i:i + 50])
+
+
+def _inject(page, ctx, cookies: dict, domain: str) -> None:
+    if not cookies:
+        return
+    url = f"https://{domain.lstrip('.')}/"
+    try:
+        _add_cookies(ctx, [{"name": k, "value": v} for k, v in cookies.items()], url)
+    except Exception as e:
+        print(f"    [!] cookie inject {domain}: {e}")
+
+
+_JAR_FIELDS = ("name", "value", "domain", "path", "expires", "httpOnly", "secure", "sameSite")
+
+
+def harvest(ctx, state: dict) -> dict:
+    """Persist every cookie the run produced — verbatim, attributes included.
+
+    Storing only name/value loses `__Host-` scope and expiry, and a jar rebuilt
+    from names alone logs in as nobody.
+    """
+    jar = [{k: c[k] for k in _JAR_FIELDS if k in c} for c in ctx.cookies()]
+    state["cookie_jar"] = jar
+    buckets: dict[str, dict] = {}
+    for c in jar:
+        dom = c.get("domain") or ""
+        key = ("facebook.com" if "facebook.com" in dom else
+               "instagram.com" if "instagram.com" in dom else
+               "muse.ai" if "muse.ai" in dom else None)
+        if key:
+            buckets.setdefault(key, {})[c["name"]] = c["value"]
+    state["cookies_by_domain"] = buckets
+    state["hatch_sess"] = buckets.get("muse.ai", {}).get("hatch_sess")
+    state["cookie_header"] = "; ".join(f"{k}={v}" for k, v in buckets.get("muse.ai", {}).items())
+    return buckets
+
+
+def persist_ledger(state: dict, egress: dict) -> None:
+    entry = {
+        "email": state["email"],
+        "name": state["name"],
+        "hatch_sess": state.get("hatch_sess"),
+        "cookie_header": state.get("cookie_header"),
+        "cookies": state.get("cookies_by_domain", {}).get("muse.ai", {}),
+        "fb_cookies": state.get("cookies_by_domain", {}).get("facebook.com", {}),
+        "cookie_jar": state.get("cookie_jar") or [],
+        "created_at": state.get("created_at") or _now(),
+        "stage": state["stage"],
+        "invite_code": state.get("invite"),
+        "auth_via": state.get("via"),
+        "agent_name": state.get("agent_name"),
+        "chat_proof": state.get("chat_proof"),
+        **{k: v for k, v in egress.items() if k in
+           ("provider", "country", "egress_ip", "isp", "asn", "city", "region", "hostname")},
+    }
+    import fcntl
+    LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock = LEDGER_PATH.with_suffix(".lock")
+    with open(lock, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        ledger = _ledger(LEDGER_PATH)
+        ledger = [a for a in ledger if a.get("email") != entry["email"]]
+        ledger.append(entry)
+        tmp = LEDGER_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(ledger, indent=2))
+        tmp.replace(LEDGER_PATH)
+        fcntl.flock(lf, fcntl.LOCK_UN)
+
+
+# ---------------------------------------------------------------- driver
+
+def run(args) -> int:
+    if args.resume:
+        state = load_state(args.resume)
+        if not state.get("email"):
+            sys.exit(f"state {args.resume} has no email")
+        print(f"[resume] {state['email']} at stage {state['stage']}")
+    else:
+        fb = pick_facebook(args.fb_email) if args.via == "facebook" else None
+        email = fb["email"] if fb else (
+            M.open_mailbox("tempik", domain="kancalabs.my.id", local_part=args.local_part or "").address)
+        state = {
+            "key": email.split("@")[0],
             "email": email,
-            "name": f"{first_name} {last_name}",
-            "hatch_sess": hatch_sess,
-            "cookie_header": cookie_str,
-            "cookies": hatch_cookies,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "auth_via": "facebook" if fb_acc else "email_otp",
+            "name": (fb.get("name") if fb else persona.full_name()) or persona.full_name(),
+            "dob": ("June", "15", "1998"),
+            "via": args.via,
+            "invite": args.invite,
+            "stage": "signup",
+            "created_at": _now(),
         }
-        if fb_acc:
-            account_entry["fb_email"] = fb_acc["email"]
-            account_entry["fb_c_user"] = fb_acc.get("c_user")
-            _persist_fb_cookies(fb_acc, context)
+        save_state(state)
+        print(f"[new] {email} ({state['name']})")
 
-        # Save to ledger
-        import fcntl
-        LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = LEDGER_PATH.with_suffix(".lock")
-        with open(lock_path, "w") as lf:
-            fcntl.flock(lf, fcntl.LOCK_EX)
-            ledger = []
-            if LEDGER_PATH.exists():
-                try:
-                    ledger = json.loads(LEDGER_PATH.read_text())
-                except Exception:
-                    ledger = []
-            ledger.append(account_entry)
-            tmp = LEDGER_PATH.with_suffix(".tmp")
-            tmp.write_text(json.dumps(ledger, indent=2))
-            tmp.replace(LEDGER_PATH)
-            fcntl.flock(lf, fcntl.LOCK_UN)
+    # Both anchors are resolved up front: an identity created by email OTP is
+    # still age-attested by the Facebook cookies we hold, and vice versa.
+    fb = _try(pick_facebook, state["email"] if state.get("via") == "facebook" else "")
+    ig = _try(pick_instagram, args.ig_email)
 
-        print(f"\n[✓] MUSE.AI ACCOUNT SUCCESSFULLY CREATED & LOGGED IN!")
-        print(f" - Email       : {email}")
-        print(f" - User Name   : {first_name} {last_name}")
-        print(f" - hatch_sess  : {hatch_sess}")
-        print(f" - Saved Ledger: {LEDGER_PATH}")
-        _register_9router(account_entry)
-        return account_entry
+    pw, browser, ctx, page, egress = open_browser(not args.headed, args.sticky, args.country)
+    try:
+        if state.get("cookies_by_domain"):
+            for dom, jar in state["cookies_by_domain"].items():
+                _inject(page, ctx, jar, dom)
+            print(f"[cookies] restored {sum(len(v) for v in state['cookies_by_domain'].values())} "
+                  f"across {list(state['cookies_by_domain'])}")
+        if args.sticky or args.country:
+            egress = record_egress(page, egress)
+            print(f"[egress] {egress.get('provider')} {egress.get('egress_ip')} "
+                  f"{egress.get('asn')} {egress.get('city')},{egress.get('region')}")
+            state["egress"] = egress
+            save_state(state)
 
+        order = list(STAGES)
+        start, end = order.index(state["stage"]), order.index(args.until)
+        for name in order[start:end + 1]:
+            print(f"[stage] {name}")
+            if name == "signup":
+                stage_signup(page, ctx, state, invite=state.get("invite") or "",
+                             via=state.get("via", ""), fb=fb)
+            elif name == "agegate":
+                stage_agegate(page, ctx, state, via=args.via, ig=ig, fb=fb)
+            elif name == "onboard":
+                stage_onboard(page, ctx, state)
+            elif name == "chat":
+                proof = stage_chat(page, state)
+                state["chat_proof"] = proof
+                harvest(ctx, state)
+                save_state(state)
+                persist_ledger(state, egress)
+                if not proof:
+                    print("[!] chat proof NOT captured")
+                    return 1
+                print("[✓] MUSE_E2E_OK")
+            harvest(ctx, state)
+            save_state(state)
 
-def main():
-    parser = argparse.ArgumentParser(description="Muse.ai Automated Signup with Domain Email")
-    parser.add_argument("--count", "-n", type=int, default=1, help="Number of accounts to create (default: 1)")
-    parser.add_argument("--headed", action="store_true", help="Run with visible browser window")
-    parser.add_argument("--password", default="", help="Override password (default: persona/env MUSE_PASSWORD)")
-    parser.add_argument("--local-part", default="", help="Mailbox local part (default: random/env MUSE_LOCAL_PART)")
-    parser.add_argument("--country", default="", help="US/CA residential proxy country (default: direct)")
-    parser.add_argument("--fb-email", default="", help="Sign in to Muse with an existing Facebook account (from facebook_accounts.json); use 'auto' for the first unused one")
-    args = parser.parse_args()
-
-    fb_email = args.fb_email
-    if fb_email == "auto":
-        muse_emails = {a["email"] for a in json.loads(LEDGER_PATH.read_text())} if LEDGER_PATH.exists() else set()
-        free = [a["email"] for a in json.loads(FB_LEDGER_PATH.read_text()) if a["email"] not in muse_emails]
-        if not free:
-            sys.exit("No unused Facebook account left in the ledger")
-        fb_email = free[0]
-        print(f"[auto] Facebook account selected: {fb_email}")
-
-    for i in range(args.count):
-        print(f"\n=== Creating Muse.ai Account {i+1} of {args.count} ===")
+        harvest(ctx, state)
+        save_state(state)
+        persist_ledger(state, egress)
+        print(f"[done] stage={state['stage']} hatch_sess={'yes' if state.get('hatch_sess') else 'no'}")
+        return 0
+    finally:
         try:
-            run_muse_signup(headless=not args.headed, password=args.password, local_part=args.local_part,
-                            country=args.country, fb_email=fb_email)
-            if i + 1 < args.count:
-                time.sleep(3)
-        except Exception as e:
-            print(f"[!] Error creating account {i+1}: {e}")
+            if args.sticky:
+                browser.close()
+            else:
+                browser.__exit__(None, None, None)
+        except Exception:
+            pass
+        if pw:
+            try:
+                pw.stop()
+            except Exception:
+                pass
+
+
+def _try(fn, *a):
+    try:
+        return fn(*a)
+    except Exception as e:
+        print(f"    [skip] {fn.__name__}: {e}")
+        return None
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Meta Muse onboarding (resumable)")
+    ap.add_argument("--resume", default="", help="state key (email local part) to continue")
+    ap.add_argument("--until", default="chat", choices=STAGES, help="stop after this stage")
+    ap.add_argument("--via", default="facebook", choices=("facebook", "instagram", "email", "auto"),
+                    help="identity for Muse signup and the age anchor")
+    ap.add_argument("--fb-email", default="", help="specific Facebook account")
+    ap.add_argument("--ig-email", default="", help="specific Instagram account")
+    ap.add_argument("--invite", default="H9BZ8A", help="Muse invite code")
+    ap.add_argument("--local-part", default="", help="mailbox local part for --via email")
+    ap.add_argument("--country", default="US", help="residential proxy country (default US)")
+    ap.add_argument("--sticky", action="store_true", help="TinyFish sticky residential session")
+    ap.add_argument("--headed", action="store_true", help="visible browser (Camoufox only)")
+    ap.add_argument("-n", "--count", type=int, default=1)
+    args = ap.parse_args()
+    sys.exit(run(args))
 
 
 if __name__ == "__main__":

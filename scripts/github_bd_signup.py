@@ -42,12 +42,21 @@ def _env(key: str, default: str = "") -> str:
     v = os.environ.get(key, "")
     if v:
         return v
-    try:
-        for line in (Path.home() / ".config" / "auto-freecf" / ".env").read_text().splitlines():
-            if line.startswith(key + "="):
-                return line.split("=", 1)[1].strip().strip('"')
-    except Exception:
-        pass
+    # .env holds most keys, but some live in a per-provider file and use the
+    # `export K=V` shell form (tinyfish.env). Match both shapes.
+    for name in (".env", "tinyfish.env"):
+        try:
+            text = (Path.home() / ".config" / "auto-freecf" / name).read_text()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            s = line.strip()
+            if s.startswith("export "):
+                s = s[7:].lstrip()
+            if s.startswith(key + "="):
+                val = s.split("=", 1)[1].strip().strip('"').strip("'")
+                if val:
+                    return val
     return default
 
 
