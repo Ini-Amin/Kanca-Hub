@@ -29,39 +29,44 @@ DELETE_PATHS=(
   "tests/test_single.txt"
 )
 
-# Literal secrets to replace everywhere they survive.
-# Keep this list in sync with what you actually rotated.
-SECRETS=(
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-  "REDACTED"
-)
+# Literal secrets are NOT stored here — a purge script that lists the secrets
+# is itself a leak. Put them one per line in a local, git-ignored file:
+#
+#   mkdir -p ~/.config/auto-freecf
+#   printf '%s\n' 'the-api-key' 'the-password' > ~/.config/auto-freecf/purge-secrets.txt
+#   chmod 600 ~/.config/auto-freecf/purge-secrets.txt
+SECRETS_FILE="${SECRETS_FILE:-$HOME/.config/auto-freecf/purge-secrets.txt}"
+
+SECRETS=()
+if [ -f "$SECRETS_FILE" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && SECRETS+=("$line")
+  done < "$SECRETS_FILE"
+fi
 
 if [ "${1:-}" = "--dry-run" ]; then
   echo "Repository     : $REPO"
   echo "Delete paths   : ${#DELETE_PATHS[@]}"
   printf '  - %s\n' "${DELETE_PATHS[@]}"
-  echo "Replace secrets: ${#SECRETS[@]} literal strings"
+  echo "Secret list    : ${#SECRETS[@]} strings from $SECRETS_FILE"
+  [ "${#SECRETS[@]}" -eq 0 ] && echo "                 (missing — pass 2 will be skipped)"
   echo
   echo "Commits touching deleted paths:"
   git log --oneline --all -- "${DELETE_PATHS[@]}" | head -20
   echo
-  echo "Commits containing the leaked key:"
-  git log --oneline --all -S"${SECRETS[0]}" | head -10
-  echo
+  if [ "${#SECRETS[@]}" -gt 0 ]; then
+    echo "Commits containing the first listed secret:"
+    git log --oneline --all -S"${SECRETS[0]}" | head -10
+    echo
+  fi
   echo "Re-run without --dry-run to rewrite (needs git-filter-repo)."
   exit 0
+fi
+
+if [ "${#SECRETS[@]}" -eq 0 ]; then
+  echo "✗ Secret list not found or empty: $SECRETS_FILE" >&2
+  echo "  Create it with one secret per line (see the header of this script)." >&2
+  exit 1
 fi
 
 if ! command -v git-filter-repo >/dev/null 2>&1; then
