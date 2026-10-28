@@ -37,17 +37,6 @@ class TestNoBrandIdentity(unittest.TestCase):
             self.assertGreaterEqual(len(p), 8)
             self.assertTrue(any(c.isdigit() for c in p))
 
-    def test_zmine_uses_shared_pool(self):
-        import inspect
-        import zmine
-        src = inspect.getsource(zmine._rand_name)
-        self.assertIn("persona", src)
-        self.assertNotIn('"kanca"', src)
-        for _ in range(100):
-            n = zmine._rand_name()
-            self.assertTrue(SAFE.match(n))
-            self.assertNotIn("kanca", n.lower())
-
     def test_no_kanca_prefix_in_farms(self):
         import inspect
         import github_bd_signup

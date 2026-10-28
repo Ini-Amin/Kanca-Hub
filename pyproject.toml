@@ -1,7 +1,7 @@
 [project]
 name = "auto-freecf"
-version = "3.3.14"
-description = "Cloudflare Workers AI Account ID and token manager with explicit automation modes"
+version = "4.3.1"
+description = "Cloudflare Workers AI account manager: login, signup and token export"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -10,10 +10,29 @@ dependencies = [
   "httpx>=0.27.0",
   "curl_cffi>=0.7.0",
   "beautifulsoup4>=4.12.0",
+  "patchright>=1.40.1",
+  "flask>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-timeout>=2.3",
 ]
 
 [project.scripts]
+auto-freecf = "auto_freecf.cli:main"
 moycf = "auto_freecf.cli:main"
 
-[tool.setuptools]
-packages = ["auto_freecf"]
+[tool.setuptools.packages.find]
+include = ["auto_freecf*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tests that need a browser, network or a live local service opt in via marker.
+markers = [
+  "network: hits the network (skipped by default)",
+  "browser: needs a real browser (skipped by default)",
+]
+addopts = "-m 'not network and not browser'"
+timeout = 120

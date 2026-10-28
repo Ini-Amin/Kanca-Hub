@@ -24,7 +24,17 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 
 API_BASE = os.environ.get("API_BASE", "https://ijrccpgiulrmfpavazsl.supabase.co/functions/v1/temp-mail-api")
-API_KEY  = os.environ.get("TMK_KEY", "REDACTED")
+
+# No baked-in fallback: a key committed to the repo is a key that must be rotated.
+# Set TMK_KEY in the environment (or in a local, git-ignored .env) before starting.
+API_KEY = os.environ.get("TMK_KEY", "").strip()
+if not API_KEY:
+    raise SystemExit(
+        "TMK_KEY is not set.\n"
+        "  export TMK_KEY=tmk_...   (get it from the temp-mail provider dashboard)\n"
+        "Never commit the key — mail-adapter/config.json and .env are git-ignored."
+    )
+
 HEADERS  = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 
 # Mapping: jwt (owner_token) → {"owner_token": ..., "address": ...}

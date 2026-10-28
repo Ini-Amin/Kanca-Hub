@@ -3,14 +3,14 @@
 
 Why this exists: farms used to invent their own names, and several hardcoded a
 `kanca`/`Kanca` prefix. That prefix is a fingerprint — every account from every
-farm obviously shares one owner, and some sites (zmine.si) DISABLE accounts that
+farm obviously shares one owner, and some sites DISABLE accounts that
 look bulk-registered. So names are drawn from region-tagged pools instead, and
 the prefix never appears.
 
 Rules baked in here:
   * a given name is only ever paired with a surname from the SAME region, so the
     name stays plausible instead of mixing continents;
-  * `display_name()` returns `[A-Za-z0-9_]`-safe text (zmine.si rejects spaces);
+  * `display_name()` returns `[A-Za-z0-9_]`-safe text (sites reject spaces in a handle);
   * `full_name()` returns "First Last" (for web forms that want a space);
   * `username()` returns a lowercase handle, optionally constrained to a length.
 
@@ -67,12 +67,14 @@ _NAMES: tuple[dict[str, tuple[str, ...]], ...] = (
 )
 
 
-def _region() -> dict:
+def _region(region: str = "") -> dict:
+    if region.upper() in ("US", "EN", "ANGLO"):
+        return _NAMES[3]
     return random.choice(_NAMES)
 
 
-def _parts(second: bool = True) -> list[str]:
-    r = _region()
+def _parts(second: bool = True, region: str = "") -> list[str]:
+    r = _region(region)
     out = [random.choice(r["first"])]
     if second and random.random() < 0.30:
         out.append(random.choice(r["first"]))
@@ -80,16 +82,16 @@ def _parts(second: bool = True) -> list[str]:
     return out
 
 
-def full_name(*, number: bool = True) -> str:
+def full_name(*, number: bool = True, region: str = "") -> str:
     """"First Last" (space-separated) for web forms that expect a person name."""
-    name = " ".join(p.capitalize() for p in _parts())
+    name = " ".join(p.capitalize() for p in _parts(region=region))
     if number and random.random() < 0.25:
         name += str(random.randint(10, 99))
     return name
 
 
 def display_name(*, number: bool = True) -> str:
-    """`[A-Za-z0-9_]`-only name (zmine.si and friends reject spaces in a handle)."""
+    """`[A-Za-z0-9_]`-only name (most sites reject spaces in a handle)."""
     name = "_".join(_parts())
     if number and random.random() < 0.25:
         name += str(random.randint(10, 99))

@@ -6,9 +6,15 @@ on:
     branches: [main]
     paths:
       - "auto_freecf/**"
+      - "scripts/**"
+      - "tests/**"
+      - "signup_from_scratch/**"
+      - "mail-adapter/**"
       - "*.py"
+      - "*.js"
       - "pyproject.toml"
       - "requirements.txt"
+      - "package.json"
       - ".github/workflows/ci.yml"
   pull_request:
 
@@ -20,7 +26,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip
-      - run: pip install -e .
-      - run: python -m compileall auto_freecf cf_workerai_manager.py
-      - run: auto-freecf --help
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Compile all Python sources
+        run: python -m compileall -q auto_freecf scripts signup_from_scratch tests *.py
+
+      - name: CLI smoke test
+        run: |
+          auto-freecf --version
+          auto-freecf --help
+          moycf --version
+
+      - name: Test suite
+        run: python -m pytest -q
+
+  npm-contents:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Refuse to publish credentials
+        run: npm pack --dry-run --json > /dev/null

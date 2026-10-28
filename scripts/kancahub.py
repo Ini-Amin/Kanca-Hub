@@ -138,9 +138,7 @@ _REEXPORTS = {
                     "_thk_fresh_ip thk_chunks cmd_thk _thk_sync cmd_mail cmd_gmail",
     "commands_farm": "cmd_warp cmd_yowes",
     "commands_vpn": "cmd_vpn",
-    "commands_zmine": "cmd_zmine",
     "commands_freeai": "cmd_freeai",
-    "commands_farm": "cmd_warp cmd_yowes",
     "menu": "MENU_BACKGROUND MENU_BACKGROUND_CMD UNIFIED_MENU MENU_STAGE_HEADERS MENU_FARM_KEYS "
             "render_menu run_end_to_end_flow _farm_kind _menu_ask_farm_options _jobs_menu "
             "interactive_mode beginner_entry menu_entry",
@@ -330,15 +328,6 @@ def build_parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("report", help="show the farm run ledger (what worked/failed across runs)")
     rep.add_argument("-n", "--tail", type=int, default=0, help="also show the last N entries")
     rep.add_argument("--clear", action="store_true", help="clear the ledger")
-    # ---- zmine (referee-focused farm status, agents only — see docs/AGENT_ZMINE.md) ----
-    zm = sub.add_parser("zmine", help="zmine.si referee status: usable vs disabled, sessions (agents only)")
-    zms = zm.add_subparsers(dest="zmine_cmd")
-    zms.add_parser("status", help="usable vs disabled, session + timer state (default)")
-    zms.add_parser("refs", help="per-referee mining table: who mines (commission source)")
-    zmk = zms.add_parser("keepalive", help="tick usable accounts now (activate + tasks)")
-    zmk.add_argument("--model", default=None, help="solver model (default: ZMINE_TASK_MODEL)")
-    zmk.add_argument("--want", type=int, default=12, help="tasks per account (default: 12)")
-    zmk.add_argument("--pace", type=float, default=20.0, help="seconds between accounts (default: 20)")
     mem = sub.add_parser("memory", help="shared agent memory (pgvector RAG over AGENTS.md/docs/scripts)")
     mes = mem.add_subparsers(dest="memory_cmd")
     mei = mes.add_parser("index", help="embed + upsert changed sources (default)")
@@ -981,8 +970,6 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_doctor(args)
     if g == "report":
         return cmd_report(args)
-    if g == "zmine":
-        return cmd_zmine(args)
     if g == "memory":
         import memory as _mem  # noqa: PLC0415
         cmd = getattr(args, "memory_cmd", None) or "index"

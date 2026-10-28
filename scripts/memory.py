@@ -26,7 +26,6 @@ import argparse
 import json
 import os
 import re
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -247,12 +246,7 @@ def stats() -> dict:
 
 # ─────────────────────────────────────────────────────────────── ask (LLM)
 def _llm(prompt: str, model: str = "Zcode/GLM-5.3-Flash") -> str:
-    try:
-        sys.path.insert(0, str(SCRIPTS))
-        import zmine  # noqa: PLC0415
-        key = zmine._r9_key()
-    except Exception:  # noqa: BLE001
-        key = os.environ.get("NINE_ROUTER_KEY", "")
+    key = os.environ.get("NINE_ROUTER_KEY", "").strip()
     if not key:
         return ""
     base = os.environ.get("NINE_ROUTER_BASE", "http://localhost:20128")

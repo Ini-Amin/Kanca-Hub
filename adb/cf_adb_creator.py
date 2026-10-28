@@ -27,21 +27,27 @@ from websocket import create_connection
 # CONFIG
 # ═══════════════════════════════════════════
 
-# Daftar akun Google untuk login CF
-ACCOUNTS = [
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-    "REDACTED",
-]
+# Daftar akun Google untuk login CF.
+# JANGAN hardcode kredensial di sini — isi dari env atau file lokal yang di-gitignore.
+#   export CF_ADB_ACCOUNTS="a@x.com,b@x.com"
+#   atau taruh satu email per baris di ~/.config/auto-freecf/adb_accounts.txt
+def _load_accounts() -> list[str]:
+    env = os.environ.get("CF_ADB_ACCOUNTS", "").strip()
+    if env:
+        return [e.strip() for e in env.split(",") if e.strip()]
+
+    path = os.environ.get(
+        "CF_ADB_ACCOUNTS_FILE",
+        os.path.join(os.path.expanduser("~"), ".config", "auto-freecf", "adb_accounts.txt"),
+    )
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
+    except FileNotFoundError:
+        return []
+
+
+ACCOUNTS = _load_accounts()
 
 CDP_PORT = 9222
 DEVTOOLS_SOCKET = "chrome_devtools_remote"
@@ -502,6 +508,11 @@ def main():
 """)
     
     # Setup CDP
+    if not ACCOUNTS:
+        print("[!] Tidak ada akun. Set CF_ADB_ACCOUNTS atau isi "
+              "~/.config/auto-freecf/adb_accounts.txt (satu email per baris).")
+        return
+
     if not setup_cdp():
         return
     

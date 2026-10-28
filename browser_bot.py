@@ -10,8 +10,8 @@ if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
 # Import everything from src package for backward compatibility
-from src.browser_bot import CFAutoGrabber, process_accounts
-from src.utils import load_accounts, load_proxy_config, save_results
+from auto_freecf.browser_bot import CFAutoGrabber, process_accounts
+from auto_freecf.utils import load_accounts, load_proxy_config, save_results
 
 # Make available for direct imports
 __all__ = ['CFAutoGrabber', 'process_accounts', 'load_accounts', 'load_proxy_config', 'save_results']

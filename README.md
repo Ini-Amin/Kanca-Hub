@@ -18,11 +18,37 @@ kancahub yowes make --country us ...  # teacher documents
 
 ---
 
-This project builds on **Auto-FreeCF** (below) and integrates
+This project builds on **Auto-FreeCF** — the Python package in `auto_freecf/`
+(login, signup and token export for Cloudflare Workers AI) — and integrates
 [PetaniProxy](https://github.com/itzluthfi/petani-proxy),
 [grok-register](https://github.com/AaronL725/grok-register),
 [harbor](https://github.com/masanto/harbor),
 and [yowes](https://github.com/masanto/yowes) — see [KANCAHUB.md](KANCAHUB.md).
+
+## 📦 Install
+
+```bash
+git clone https://github.com/mocasus/Auto-FreeCF.git && cd Auto-FreeCF
+bash scripts/install.sh        # venv + deps + ~/.local/bin/kancahub + doctor
+```
+
+Or just the Python package:
+
+```bash
+pip install -e ".[dev]"        # gives you `auto-freecf` and `moycf`
+auto-freecf --help
+```
+
+Credentials are read from the environment — copy `.env.example` to
+`~/.config/auto-freecf/.env` and fill in only what you need. Never commit a
+filled-in copy; `.env`, `config.json` and `proxies.txt` are git-ignored.
+
+## ✅ Development
+
+```bash
+python -m pytest -q            # 690+ tests; network/browser tests are opt-in
+python scripts/gen_cli_surface.py   # after adding or renaming a kancahub command
+```
 
 ## 🔒 Security
 

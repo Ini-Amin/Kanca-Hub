@@ -242,6 +242,10 @@
 "proxy",
 "retries"
 ],
+"github signup": [
+"help",
+"proxy"
+],
 "gmail": [
 "gmail_cmd",
 "help"
@@ -414,6 +418,19 @@
 "extra",
 "help",
 "mode"
+],
+"omnirush": [
+"help",
+"omnirush_cmd"
+],
+"omnirush login": [
+"help"
+],
+"omnirush serve": [
+"help"
+],
+"omnirush status": [
+"help"
 ],
 "opencode": [
 "api_key",
@@ -854,21 +871,5 @@
 "extra",
 "help",
 "mode"
-],
-"zmine": [
-"help",
-"zmine_cmd"
-],
-"zmine keepalive": [
-"help",
-"model",
-"pace",
-"want"
-],
-"zmine refs": [
-"help"
-],
-"zmine status": [
-"help"
 ]
 }

@@ -48,7 +48,7 @@ echo.
 echo ========================================
 echo   PASTIKAN JUGA:
 echo   - Kiwi Browser terinstall di HP
-echo   - Akun Google daoseed sudah login di Kiwi
+echo   - Akun Google target sudah login di Kiwi
 echo     (Settings ^> Accounts ^> Add Google Account)
 echo ========================================
 echo.

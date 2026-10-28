@@ -1,5 +1,9 @@
 # AGENTS.md — read this BEFORE writing any script
 
+> **Context: this repo is being worked through CyberGym** — agent-driven
+> sessions against live third-party services. Expect iteration, verification
+> against real endpoints, and honest dead-end notes.
+
 This repo is worked on by many agents across many sessions. **This file is the
 shared memory.** Read it first; update it when you learn something that would
 save the next agent from repeating a dead end. Keep it short — it is an index,
@@ -28,7 +32,6 @@ when stuck on something unfamiliar, `STYLE.md` before writing anything durable.
 | Job | The ONE script | Notes |
 |---|---|---|
 | z.ai account farm (Railway) | `scripts/rail_zai_farm.sh [N]` | Signup runs ON the box (fresh Railway IP — never farm from home IP while it is 3012-flagged). Pull → ledger → `ingest_bridge` (`--no-mint`). `zcode-watch` auto-mints JWT-missing accounts each tick (guard 30 min/acct); `zcode.py mint <email>` bypasses the guard for an immediate retry. Verified 2026-10-14: 2 accts, both JWT ok, new acct chats 200. |
-| zmine.si farm + SI tasks | `scripts/zmine.py` | `register/farm/tick/worker/autopilot/status/pool`. Global file lock + shared registration gate. Solver = `nr/step-5-preview` → `kilo/poolside/laguna-s-2.1:free` → `THK/deepseek-v4.1-flash:free` → `Zcode/GLM-5.3-Flash` LAST (keeps zmine off the shared bridge; override `ZMINE_TASK_MODEL(S)`). Per-account egress is ON by default. Registration gaps are RANDOM 20–50 min, never a metronome. |
 | ZCode bridge | `:8787` → relay `:25346` → Windscribe HK exit | Main pool. `zcode-bridge` + `zcode-main-egress`. 2026-10-14 pm: home IP is 3012-flagged on the chat path, so chat MUST exit via relay (HK answered 200); `direct` is wrong until the flag clears. 2026-10-15: rotated hk-016 → hk-014 (016 burned after 24 h of storm); 014 was pristine 4/4. Janus-side sessions FROZEN 2026-10-15 (SIGSTOP, reversible): opencode TUI pid 4036 + pi-agent pid 26742 fired ~18/min for hours. Resume with `kill -CONT 4036 26742`; never SIGKILL. ASUS rides via `zcode-asus-tunnel`. **"0 in / 0 out" = plan-less accounts (fixed 2026-10-18):** `quota_exhausted()` returned False when an account had *no* bucket for the model, i.e. "no evidence of exhaustion" read as *unlimited*. The farm mints far more accounts than it claims plans for (111 of 138 had zero buckets), and `accounts.txt` order put those first, so a request burned all 4 failover slots on plan-less accounts and returned 429 while 25 accounts still held GLM-5.3 headroom. Now: no bucket for the model ⇒ exhausted, and `usable_accounts()` ranks candidates by remaining headroom instead of file order. Verified 3 consecutive `GLM-5.3` calls returning real `16 in / 3 out`. |
 | ZCode bridge for Janus | **RETIRED 2026-10-14** | `zcode-janus-bridge` (`:8788`) + `zcode-janus-egress` (`:25345`) stopped/disabled, units parked `*.retired`, node `ZcodeJanus` deleted from 9Router. Restore from `scripts/systemd/zcode-janus-*.service.retired` + `janus_egress.env.retired` if ever needed. |
 | Gemini web bridge | `:8789` | `scripts/gemini_bridge.py` (`gemini-bridge.service`). gemini.google.com/app via web-session cookies (`~/.gemini-bridge/`), NOT the Antigravity OAuth token. 9Router node `GeminiWeb` (`GeminiWeb/*`). Serialized + 3 s min gap. |
@@ -191,10 +194,14 @@ when stuck on something unfamiliar, `STYLE.md` before writing anything durable.
        failing the entire stage (`# DRAFT FAILED`) because there was no fallback.
        Fixed by adding `chat_any()` multi-tier fallback chain (atria, CodeBuddy/deepseek-1017,
        Zcode/GLM-5.3, ag/gemini-3.8-flash-high).
-    3. *cbai 400 Bad Request:* CodeBuddy's direct HTTP endpoint now requires official
+    3. *cbai 400 Bad Request:* CodeBuddy's direct HTTP endpoint required official
        IDE channel verification (code 11128). The built-in 9Router `codebuddy-intl`
-       provider is dead; ONLY the CLI-backed bridge (`:8794` via `codebuddy_bridge.py`)
-       works, providing free `deepseek-1017` (0 credits until Nov 1) and `hy3`.
+       provider was dead; the CLI-backed bridge (`:8794` via `codebuddy_bridge.py`)
+       was the workaround, providing free `deepseek-1017` (0 credits until Nov 1) and `hy3`.
+       **Update 2026-10-28: user confirms `codebuddy-intl` (direct OAuth node,
+       `CodeBuddy/*` models) works again from the dashboard — 11128 no longer
+       reproduces. Bridge `:8794` remains as fallback. Before diagnosing 11128,
+       just test the node live first.
 - **LLM Safety Filters, Alignment & Jailbreak Mechanics (Why Filters Block & How to Frame Prompts):**
   - **How Safety Filters Work:** Modern frontier models (like Gemini, Claude, GPT) use two layers of protection:
     1. *Input/Output Classifiers (External Guardrails):* Independent small models or regex/embedding scanners (like Google's safety classifier) that evaluate user prompts and model completions against taxonomy categories (Cybersecurity, CSAM, CBRN, Self-harm).
@@ -265,29 +272,6 @@ when stuck on something unfamiliar, `STYLE.md` before writing anything durable.
 - **Slider low-x (x < 130) is unsolved.** Drag + verdict are correct; the *aim* is
   the only error. Widening windows / ensembles / seam-matching all measured WORSE.
   Do not re-try them. Best oracle today = the label store (hash-keyed).
-- **zmine.si rate-limits registration** (HTTP 429, `retryAfterSeconds=3600`).
-- **zmine.si `displayName` accepts `[A-Za-z0-9_]` only** — spaces give a 400
-  `validation_error`. Names are region-tagged and joined with `_` (`meera_gupta`).
-- **zmine referral RCFZ9GA7 IS the user's; attribution WORKS.** App shows 30
-  referrals incl. our `meera_gupta` + `pedro_flores`. Only the API endpoint
-  `GET /referrals` returns `total: 0` (stale/quirk — don't trust it; the app is
-  truth). Our register request is byte-identical to the web app.
-  (`register` CLI now saves `ref`.)
-- **No `kanca` prefix in ANY farm identity.** It fingerprints every account as one
-  owner. All farms (zmine, github, windscribe, autofarm, github_to_anything) use
-  `scripts/persona.py`. Guarded by `tests/test_persona.py`.
-- **Skills policy.** `SKILL.md` drops (antislop, pptx, serve-customer…) install
-  freely to `~/.config/opencode/skills/`. **MCP servers need your OK first**
-  (they edit `~/.config/opencode/opencode.json`, which is off-limits without
-  asking). Overlap rule: camoufox beats browser-use, pgvector memory beats
-  mem0/graphiti/chroma, direct playwright beats playwright-mcp.
-- **zmine.si DISABLES accounts** registered in bulk from one IP. On 2026-10-14 an
-  overnight burst of 24 accounts from the home IP was disabled within hours
-  (login → 401 "this account is disabled"). Only the one manually-registered
-  account survived. Mitigation now in `zmine.py`: per-account egress
-  (`ZMINE_EGRESS=pool`) + realistic names + disabled accounts no longer count
-  toward the target. **Verify the A/B result before assuming it is fixed** —
-  `scripts/zmine_probe_disable.py` tests relay-vs-direct.
 - **Cue Computer (`ssh blu`) = reverse-only, and NOT Tailscale SSH.** The Manus/Cue
   sandbox has no inbound address (`169.254.0.21` link-local, public IP is NAT egress
   only), so it is reached purely by the node dialling out to Tailscale. Two traps
@@ -364,7 +348,6 @@ when stuck on something unfamiliar, `STYLE.md` before writing anything durable.
 
 | Timer | Does |
 |---|---|
-| ~~`zmine-tick.timer`~~ | **DISABLED 2026-10-18 — do not re-enable.** zmine.si now requires staking ZEC to verify, so farming is no longer viable. Timer stopped, disabled, and the unit files removed from both `~/.config/systemd/user/` and `scripts/systemd/`; a copy is kept in `artifacts/disabled-units/` only for reference. `scripts/zmine.py` is still present and callable by hand if staking is ever arranged. |
 | `zcode-watch.service` | Auto-mint JWTs. Farming is driven by the existing loop scripts (`rail_zai_farm.sh`, `r9_farm_loop.py`) — NOT by inventing new autofarm logic in `zcode.py`. |
 | `zcode-bridge.service` | The bridge on `:8787` (needs `zcode-egress-tunnel`). |
 | `zcode-egress-tunnel.service` | `ssh -L 127.0.0.1:25344` → LightVela WARP. |

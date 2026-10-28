@@ -1,0 +1,6 @@
+# Account fixture template — copy to a local, git-ignored file.
+# Format: one "email:password" per line.
+#   cp tests/test_accounts.txt.example ~/my-accounts.txt
+#   ACCOUNTS_FILE=~/my-accounts.txt ./tests/test_batch.sh
+user1@example.com:CHANGE_ME
+user2@example.com:CHANGE_ME

@@ -1,9 +1,7 @@
-## Todo
+# Todo
 
-- [ ] Menggulikan pra
+- [ ] (isi sendiri)
 
 ## Doing
-
-- [ ] Ongkang-ongkang kaki
 
 ## Done

@@ -111,6 +111,13 @@ debug_github/
 # Gmail farm outputs (accounts: email/password — never commit)
 gmail_accounts.json
 scripts/gmail_accounts.json
+
+# Account fixtures: only the .example templates are tracked. A real
+# email:password file dropped here must never reach git.
+tests/test_account*.txt
+!tests/test_accounts.txt.example
+tests/test_single.txt
+test_accounts.json
 # Nested standalone project (separate upstream repo) — never commit
 grok-farm/
 results/
@@ -159,3 +166,6 @@ artifacts/
 grokbot-shim/artifacts/
 grokbot-shim/logs/
 cmd/kancaproxy/kancaproxy
+
+# Agent/tool local state
+.codebuddy/

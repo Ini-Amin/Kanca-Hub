@@ -5,8 +5,8 @@ import sys
 import os
 from pathlib import Path
 
-from src.browser_bot import CFAutoGrabber, process_accounts
-from src.utils import load_accounts
+from auto_freecf.browser_bot import CFAutoGrabber, process_accounts
+from auto_freecf.utils import load_accounts
 
 
 class Colors:

@@ -1,9 +1,9 @@
 {
     "temp_mail": {
         "provider": "supabase",
-        "api_base": "https://ijrccpgiulrmfpavazsl.supabase.co/functions/v1/temp-mail-api",
-        "api_key": "REDACTED",
-        "domains": ["moymoy.me", "moyqris.me", "kintole.com", "gmilio.web.id"]
+        "api_base": "https://YOUR-PROJECT.supabase.co/functions/v1/temp-mail-api",
+        "api_key": "REPLACE_WITH_YOUR_TMK_KEY",
+        "domains": ["example.com"]
     },
     "server": {
         "port": 9877,

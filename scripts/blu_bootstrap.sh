@@ -280,7 +280,7 @@ fi
 # 3. one scoped router key + a small config. Deliberately not the laptop's
 #    25 KB block: 150 models is not needed to run a job, and /v1/models does not
 #    validate the key anyway — chat does, so a truncated key fails late.
-#    Model list = the same verified free chain zmine uses, minus Zcode (whose
+#    Model list = the verified free chain, minus Zcode (whose
 #    shared exit must not take farm/bounty traffic).
 KEY=$(python3 -c "import json;print(json.load(open('$CFG'))['provider']['9router']['options']['apiKey'])")
 # The MCP block is conditional on DROST: opencode fails to start a configured

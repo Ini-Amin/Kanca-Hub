@@ -34,8 +34,8 @@ kancahub memory reindex               # drop + rebuild everything
   chunking changes. Free-tier Edge Fn is sequential — batches of 8, 0.4 s gaps.
 - `memory-index.timer` refreshes nightly 03:40. If `stats` shows a stale
   `last_update`, the timer is down — check it before reindexing by hand.
-- `ask` needs a 9Router key (`zmine._r9_key()` → `~/.9router`, `~/.config/9router`,
-  or `NINE_ROUTER_KEY`). Empty key → empty answer, not an error.
+- `ask` needs a 9Router key (`NINE_ROUTER_KEY`, from `~/.config/auto-freecf/.env`).
+  Empty key → empty answer, not an error.
 - Env (from `~/.config/auto-freecf/.env`): `SUPABASE_URL`,
   `SUPABASE_PROJECT_REF`, `SUPABASE_SERVICE_ROLE_KEY`, `MEM_KEY` (or `TMK_KEY`).
 
@@ -43,4 +43,4 @@ kancahub memory reindex               # drop + rebuild everything
 
 - `stats`: 712 rows, 172 sources (doc 365 / report 202 / script 145).
 - `search "avoid duplicate scripts"`: 0.851 AGENTS.md — correct top hit.
-- `ask "where is the zmine farm script"`: correct (`scripts/zmine.py`), ~8 s.
+- `ask "where is the github farm script"`: correct (`scripts/github_farm.py`), ~8 s.

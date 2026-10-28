@@ -7,15 +7,34 @@
   },
   "files": [
     "cli.js",
+    "postinstall.js",
     "browser_bot.py",
     "web_ui.py",
     "terminal_ui.py",
     "requirements.txt",
-    "signup_from_scratch/",
-    "mail-adapter/",
     "deploy-browserfarm.sh",
-    "assets/"
+    "assets/",
+    "auto_freecf/",
+    "signup_from_scratch/main.py",
+    "signup_from_scratch/requirements.txt",
+    "signup_from_scratch/README.md",
+    "signup_from_scratch/config.example.json",
+    "signup_from_scratch/proxies.txt.example",
+    "signup_from_scratch/src/",
+    "mail-adapter/adapter.py",
+    "mail-adapter/requirements.txt",
+    "mail-adapter/config.example.json",
+    "!**/__pycache__/",
+    "!**/*.pyc",
+    "!**/config.json",
+    "!**/proxies.txt",
+    "!**/results*.json",
+    "!**/token_map.json",
+    "!**/.env"
   ],
+  "scripts": {
+    "prepack": "node scripts/check-npm-contents.js"
+  },
   "keywords": [
     "cloudflare",
     "workers-ai",

@@ -6,8 +6,8 @@ import threading
 import webbrowser
 from pathlib import Path
 from flask import Flask, request, render_template_string, jsonify
-from src.browser_bot import CFAutoGrabber
-from src.utils import load_accounts
+from auto_freecf.browser_bot import CFAutoGrabber
+from auto_freecf.utils import load_accounts
 
 app = Flask(__name__)
 
