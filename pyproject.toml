@@ -12,6 +12,12 @@ dependencies = [
   "beautifulsoup4>=4.12.0",
   "patchright>=1.40.1",
   "flask>=3.0.0",
+  # Used by tests/test_otp_litensi.py and harbor/tools/tokenharbor/client.py.
+  "requests>=2.31.0",
+  # Used by harbor/tools/tokenharbor/cli.py (imported during test collection).
+  "rich>=13.7.0",
+  # CDP over ADB (adb/cf_adb_creator.py, gmail farm).
+  "websocket-client>=1.7.0",
 ]
 
 [project.optional-dependencies]
