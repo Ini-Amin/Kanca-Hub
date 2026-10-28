@@ -13,9 +13,8 @@
 #   1. Files that exist ONLY to hold credentials  -> delete from all history
 #   2. Files we keep (config example, adb tool)   -> replace the secret text
 #
-# Afterwards, force-push only the remotes you own:
-#   git push --force --all fork && git push --force --all origin
-# Never force-push `upstream` — that repository is not yours.
+# A safety copy is written OUTSIDE the repo as a mirror clone, because a
+# backup branch inside the repo would be rewritten by filter-repo too.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,7 +29,10 @@ DELETE_PATHS=(
 )
 
 # Literal secrets are NOT stored here — a purge script that lists the secrets
-# is itself a leak. Put them one per line in a local, git-ignored file:
+# is itself a leak. Put them one per line in a local, git-ignored file.
+# Lines may be plain literals, or use filter-repo's own prefixes:
+#   tmk_abc123                       (matched literally)
+#   regex:@old-domain\.com==>@example.com
 #
 #   mkdir -p ~/.config/auto-freecf
 #   printf '%s\n' 'the-api-key' 'the-password' > ~/.config/auto-freecf/purge-secrets.txt
@@ -48,8 +50,8 @@ if [ "${1:-}" = "--dry-run" ]; then
   echo "Repository     : $REPO"
   echo "Delete paths   : ${#DELETE_PATHS[@]}"
   printf '  - %s\n' "${DELETE_PATHS[@]}"
-  echo "Secret list    : ${#SECRETS[@]} strings from $SECRETS_FILE"
-  [ "${#SECRETS[@]}" -eq 0 ] && echo "                 (missing — pass 2 will be skipped)"
+  echo "Secret list    : ${#SECRETS[@]} entries from $SECRETS_FILE"
+  [ "${#SECRETS[@]}" -eq 0 ] && echo "                 (missing — pass 2 would be skipped)"
   echo
   echo "Commits touching deleted paths:"
   git log --oneline --all -- "${DELETE_PATHS[@]}" | head -20
@@ -75,40 +77,52 @@ if ! command -v git-filter-repo >/dev/null 2>&1; then
   exit 1
 fi
 
-BACKUP="backup/pre-purge-$(date +%Y%m%d-%H%M%S)"
-echo "Safety branch: $BACKUP"
-git branch -f "$BACKUP" HEAD
+# ── Safety copy outside the repo ────────────────────────────────────────────
+BACKUP="${BACKUP:-$HOME/Auto-FreeCF-pre-purge-$(date +%Y%m%d-%H%M%S).git}"
+echo "Safety copy: $BACKUP"
+git clone --mirror --quiet "$REPO" "$BACKUP"
+echo "  ($(du -sh "$BACKUP" | cut -f1), all refs preserved)"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Build the replacement expression file OUTSIDE the repo: literal:->placeholder
+# Build the replacement expression file OUTSIDE the repo.
 : > "$WORK/replacements.txt"
 for s in "${SECRETS[@]}"; do
-  printf 'literal:%s==>REDACTED\n' "$s" >> "$WORK/replacements.txt"
+  case "$s" in
+    literal:*|regex:*|glob:*) printf '%s==>REDACTED\n' "$s" >> "$WORK/replacements.txt" ;;
+    *)                        printf 'literal:%s==>REDACTED\n' "$s" >> "$WORK/replacements.txt" ;;
+  esac
 done
+
+# ── Pass 1: delete credential-only files ────────────────────────────────────
+DELETE_ARGS=()
+for p in "${DELETE_PATHS[@]}"; do DELETE_ARGS+=(--path "$p"); done
 
 echo
 echo "Pass 1/2 — deleting credential-only files from all history…"
-git filter-repo --force --invert-paths \
-  $(printf -- '--path %q ' "${DELETE_PATHS[@]}")
+git filter-repo --force --invert-paths "${DELETE_ARGS[@]}"
 
+# ── Pass 2: replace secret text in the files that remain ────────────────────
 echo
 echo "Pass 2/2 — replacing secret text in the files that remain…"
 git filter-repo --force --replace-text "$WORK/replacements.txt"
 
 echo
-echo "✓ History rewritten. Verify with:"
-echo "    git log --all -S'${SECRETS[0]}' --oneline     # must print nothing"
-echo "    git log --all -- ${DELETE_PATHS[*]}           # must print nothing"
+echo "✓ History rewritten locally."
 echo
-echo "  Remotes may have been dropped by filter-repo; re-add yours:"
+echo "Verify:"
+echo "    git log --all --oneline -- ${DELETE_PATHS[*]}    # must print nothing"
+echo "    git log --all -S'<first secret>' --oneline       # must print nothing"
+echo
+echo "filter-repo drops remotes; re-add the ones you own:"
 echo "    git remote add origin git@github.com:Ini-Amin/Kanca-Hub.git"
 echo "    git remote add fork   https://github.com/Ini-Amin/Auto-FreeCF.git"
 echo
-echo "  Then force-push the branches YOU own (never upstream):"
+echo "Then force-push the branches YOU own (never upstream):"
 echo "    git push --force --all fork"
 echo "    git push --force --all origin"
 echo
-echo "  Backup kept at branch: $BACKUP"
-echo "  Rotate the keys anyway — copies already pushed still exist."
+echo "Safety copy: $BACKUP"
+echo "Delete it once you are satisfied — it still contains the secrets."
+echo "Rotate the keys anyway: copies already pushed still exist elsewhere."
