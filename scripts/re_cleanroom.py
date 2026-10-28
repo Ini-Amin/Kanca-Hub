@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_R9 = os.environ.get("NINE_ROUTER_URL", "http://127.0.0.1:20128/v1")
-DEFAULT_R9_KEY = os.environ.get("NINE_ROUTER_KEY", "REDACTED")
+DEFAULT_R9_KEY = os.environ.get("NINE_ROUTER_KEY", "")
 
 # Models for the 4-Agent Clean Room
 ANALYST_MODEL = os.environ.get("RE_ANALYST_MODEL", "xperimential/glm-5.3-uncensored")

@@ -312,7 +312,7 @@ when stuck on something unfamiliar, `STYLE.md` before writing anything durable.
   Trap: `/v1/models` does **not** validate the key, so a truncated key looks fine
   there and only fails at chat time (`AI_APICallError: Invalid API key`). Read the key
   from the config file, never from a truncated console dump (a 22-char display cut
-  `REDACTED` down from the real 35 chars).
+  a 35-char key down to its first 22).
   Box tooling: opencode's installer is bash-only (`set -euo pipefail`) while the
   box's `sh` is dash → `Illegal option -o pipefail`; and `~/.opencode/bin`,
   `~/.local/bin` are not on a non-login ssh PATH.

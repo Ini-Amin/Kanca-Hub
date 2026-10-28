@@ -169,3 +169,7 @@ cmd/kancaproxy/kancaproxy
 
 # Agent/tool local state
 .codebuddy/
+
+# Debug captures that may contain OAuth state / session tokens
+grokbot-shim/probes/last_auth_url.txt
+*_auth_url.txt

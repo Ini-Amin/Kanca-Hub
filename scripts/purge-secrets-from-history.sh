@@ -26,6 +26,10 @@ DELETE_PATHS=(
   "tests/test_account.txt"
   "tests/test_accounts.txt"
   "tests/test_single.txt"
+  "proxies.json"
+  "proxy.json"
+  "proxy_list.txt"
+  "grokbot-shim/probes/last_auth_url.txt"
 )
 
 # Literal secrets are NOT stored here — a purge script that lists the secrets

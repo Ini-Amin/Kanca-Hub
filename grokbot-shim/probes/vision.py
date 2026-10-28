@@ -1,5 +1,7 @@
-import base64, json, urllib.request
-KEY="REDACTED"
+import base64, json, os, urllib.request
+KEY=os.environ.get("NINE_ROUTER_KEY", "")
+if not KEY:
+    raise SystemExit("NINE_ROUTER_KEY is not set")
 def img(p): return base64.b64encode(open(p,'rb').read()).decode()
 prompt = open('/tmp/vprompt.txt').read()
 body={"model":"ag/gemini-3.8-flash-high","stream":True,"messages":[{"role":"user","content":[
