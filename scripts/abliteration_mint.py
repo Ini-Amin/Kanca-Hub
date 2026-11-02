@@ -84,7 +84,15 @@ async def mint(*, email: str | None = None, headless: bool = True,
         from camoufox.async_api import AsyncCamoufox
         kw: dict = dict(headless=headless, humanize=True, os="windows")
         if proxy:
-            kw["proxy"] = {"server": proxy}
+            # Firefox rejects inline credentials in `server` (CONNECT 407 →
+            # NS_ERROR_PROXY_CONNECTION_REFUSED); pass auth as separate fields.
+            if "@" in proxy:
+                creds, hostport = proxy.rsplit("@", 1)
+                user, pwd = creds.split("://", 1)[1].split(":", 1)
+                kw["proxy"] = {"server": f"http://{hostport}",
+                               "username": user, "password": pwd}
+            else:
+                kw["proxy"] = {"server": proxy}
             kw["geoip"] = True
         _cm = AsyncCamoufox(**kw)
         _br = await _cm.__aenter__()
@@ -96,12 +104,25 @@ async def mint(*, email: str | None = None, headless: bool = True,
     try:
         await page.goto(f"{ORIGIN}/sign-up", wait_until="domcontentloaded", timeout=90000)
         await page.wait_for_selector(SEL["email"], state="visible", timeout=30000)
-        await page.fill(SEL["email"], email)
-        await page.fill(SEL["password"], password)
+        # page.fill() leaves React state empty on this form ("Enter your email
+        # address" on Continue) — click + humanized typing is what registers.
+        em = page.locator(SEL["email"])
+        await em.click()
+        await em.type(email, delay=40)
+        # The form is TWO-STEP now: email + Continue reveals the password field.
+        # exact=True — the page also has "Continue with Google/GitHub/Microsoft"
+        # aria-labels that a substring match would grab instead.
+        await page.get_by_role("button", name="Continue", exact=True).click()
+        await page.wait_for_selector('input[name="password"]', state="visible", timeout=30000)
+        # typed, not fill(): the button stays disabled if the password landed via
+        # fill() (same React-state quirk as the email field).
+        pw = page.locator('input[name="password"]')
+        await pw.click()
+        await pw.type(password, delay=30)
 
         # The submit stays disabled until Turnstile resolves; Camoufox auto-passes
-        # it. Target the button NAMED "Create account" (the form also has a Google
-        # SSO submit button that .first would grab).
+        # it. Target the button NAMED "Create account" (the form also has Google/
+        # GitHub/Microsoft SSO submits that a loose match would grab).
         btn = page.get_by_role("button", name=re.compile(r"create account", re.I)).first
         for _ in range(90):
             if await btn.is_enabled():

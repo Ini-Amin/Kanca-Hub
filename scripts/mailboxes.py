@@ -404,6 +404,68 @@ def _mailtm(local_part: str = "", log=print, domain: str = "") -> Mailbox:
     return Mailbox(addr, read)
 
 
+# ── provider: guerrillamail (disposable temp mail) ─────────────
+GUERRILLA_BASE = "https://api.guerrillamail.com/ajax.php"
+
+
+def _guerrilla(local_part: str = "", log=print, domain: str = "") -> Mailbox:
+    import json as _json
+    import urllib.parse
+    import urllib.request
+
+    hdr = {"User-Agent": "curl/8.0"}
+    url = f"{GUERRILLA_BASE}?f=get_email_address"
+    req = urllib.request.Request(url, headers=hdr)
+    with urllib.request.urlopen(req, timeout=15) as r:
+        d = _json.loads(r.read().decode())
+    sid_token = d.get("sid_token", "")
+    addr = d.get("email_addr", "")
+
+    if local_part:
+        try:
+            set_url = f"{GUERRILLA_BASE}?f=set_user&email_user={urllib.parse.quote(local_part)}&sid_token={sid_token}"
+            req_set = urllib.request.Request(set_url, headers=hdr)
+            with urllib.request.urlopen(req_set, timeout=15) as r:
+                d_set = _json.loads(r.read().decode())
+                if d_set.get("email_addr"):
+                    addr = d_set["email_addr"]
+        except Exception:
+            pass
+
+    def read() -> list[dict]:
+        check_url = f"{GUERRILLA_BASE}?f=check_email&seq=0&sid_token={sid_token}"
+        req_check = urllib.request.Request(check_url, headers=hdr)
+        with urllib.request.urlopen(req_check, timeout=15) as r:
+            res = _json.loads(r.read().decode())
+        msg_list = res.get("list", [])
+        out = []
+        for m in msg_list:
+            mid = m.get("mail_id")
+            body_text = m.get("mail_excerpt", "")
+            body_html = ""
+            if mid:
+                try:
+                    f_url = f"{GUERRILLA_BASE}?f=fetch_email&email_id={mid}&sid_token={sid_token}"
+                    req_f = urllib.request.Request(f_url, headers=hdr)
+                    with urllib.request.urlopen(req_f, timeout=15) as r:
+                        f_res = _json.loads(r.read().decode())
+                        body_text = f_res.get("mail_body", body_text)
+                        body_html = f_res.get("mail_body", "")
+                except Exception:
+                    pass
+            out.append({
+                "id": mid,
+                "from": m.get("mail_from"),
+                "subject": m.get("mail_subject"),
+                "text": body_text,
+                "body": body_text,
+                "html": body_html,
+            })
+        return out
+
+    return Mailbox(addr, read)
+
+
 # ── provider: gmail chain (real @gmail via emailmux -> emailnator -> mail.tm) ──
 def _gmail_chain(local_part: str = "", log=print) -> Mailbox:
     for name, fn in (("emailmux", _emailmux), ("emailnator", _emailnator), ("mailtm", _mailtm)):
@@ -418,40 +480,52 @@ def _gmail_chain(local_part: str = "", log=print) -> Mailbox:
 
 _PROVIDERS = {"tempik": _tempik, "relay": _relay, "litensi": _litensi, "static": _static,
               "emailmux": _emailmux, "emailnator": _emailnator, "mailtm": _mailtm,
+              "tempmail": _mailtm, "guerrilla": _guerrilla,
               "gmail": _gmail_chain, "imap": _imap}
 
 
 def route_for(domain: str) -> str:
     """Which backend serves a domain. Tempik (the Worker) is my.id ONLY; the
-    relay serves my.id AND biz.id. So biz.id must go through the relay."""
+    relay serves my.id AND biz.id. Empty/generic domain routes to public tempmail."""
     d = (domain or "").lower()
     if d.endswith("kancalabs.biz.id"):
         return "relay"
     if d.endswith("kancalabs.my.id"):
         return "tempik"
-    return "relay"  # any other domain → the relay (supports arbitrary domains here)
+    if not d:
+        return "tempmail"
+    return "relay"
 
 
 def open_mailbox(provider: str = "auto", *, domain: str = "", local_part: str = "",
                  site: str = "", log=print) -> Mailbox:
     """Create/attach a mailbox. Falls back to a static address on failure.
 
-    provider="auto" routes by domain: my.id -> tempik, biz.id -> relay, so the
-    caller never has to know which backend owns which domain.
+    User / Public Mode (Zero-Setup):
+      When domain is omitted or empty, automatically allocates a public disposable
+      inbox (Temp Mail mail.tm or Guerrilla Mail). No personal domain needed.
+
+    Operator Mode:
+      When domain is explicitly passed (e.g. kancalabs.my.id), routes to operator's
+      private Tempik worker or relay.
     """
     provider = (provider or "auto").strip().lower()
-    domain = domain or "kancalabs.my.id"
     if provider == "auto":
-        provider = route_for(domain)
-        log(f"  [mail] domain {domain} -> {provider} backend")
+        if not domain:
+            provider = "tempmail"
+            log("  [mail] user mode: using public temp mail (zero personal domain needed)")
+        else:
+            provider = route_for(domain)
+            log(f"  [mail] domain {domain} -> {provider} backend")
     fn = _PROVIDERS.get(provider)
     if fn is None:
         log(f"  [mail] unknown provider {provider!r}; using a static address")
-        return _static(domain, local_part, log)
+        return _static(domain or "tempmail.org", local_part, log)
     try:
         if provider == "tempik":
+            domain = domain or "kancalabs.my.id"
             if not domain.lower().endswith("kancalabs.my.id"):
-                log(f"  [mail] Tempik only serves kancalabs.my.id — routing {domain} via the relay (BYOD: point your domain at your own relay, see docs/BYOD_MAIL.md)")
+                log(f"  [mail] Tempik only serves kancalabs.my.id — routing {domain} via the relay")
                 provider = "relay"
             else:
                 return _tempik(domain, local_part, log)
@@ -463,8 +537,18 @@ def open_mailbox(provider: str = "auto", *, domain: str = "", local_part: str = 
             return _emailmux(local_part, log)
         if provider == "emailnator":
             return _emailnator(local_part, log)
-        if provider == "mailtm":
-            return _mailtm(local_part, log, domain)
+        if provider in ("mailtm", "tempmail"):
+            try:
+                return _mailtm(local_part, log, domain)
+            except Exception as e_tm:
+                log(f"  [mail] tempmail unavailable ({e_tm}) — auto-falling back to guerrilla mail")
+                return _guerrilla(local_part, log, domain)
+        if provider == "guerrilla":
+            try:
+                return _guerrilla(local_part, log, domain)
+            except Exception as e_gm:
+                log(f"  [mail] guerrilla unavailable ({e_gm}) — auto-falling back to tempmail")
+                return _mailtm(local_part, log, domain)
         if provider == "gmail":
             return _gmail_chain(local_part, log)
         if provider == "imap":

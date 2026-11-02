@@ -32,10 +32,9 @@ sys.path.insert(0, str(SCRIPTS))
 
 AUTH = "https://chat.z.ai/auth"
 LEDGER = Path.home() / ".config" / "auto-freecf" / "zai_accounts.jsonl"
-# biz.id goes through the relay (needs a mail key); a throwaway box with no
-# secrets sets ZAI_MAIL_DOMAIN=kancalabs.my.id to use the keyless Tempik Worker.
-MAIL_DOMAIN = os.environ.get("ZAI_MAIL_DOMAIN", "kancalabs.biz.id")
-
+# Public Zero-Setup mode: defaults to public disposable mailbox (tempmail / mail.tm).
+# If operator sets ZAI_MAIL_DOMAIN explicitly, routes to that custom domain.
+MAIL_DOMAIN = os.environ.get("ZAI_MAIL_DOMAIN", "")
 _JS_CLICK = """(text) => {
     const els=[...document.querySelectorAll('button,a,span,div')]
       .filter(e => (e.innerText||'').trim() === text && e.children.length === 0);

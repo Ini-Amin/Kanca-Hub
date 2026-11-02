@@ -203,7 +203,7 @@ def cmd_9router(a) -> int:
                 # is the LAST line of defence, so it must not hold a dead model.
                 models = ("THK/deepseek-v4.1-flash:free,THK/mimo-v2.6-flash:free,"
                           "THK/mimo-v2.5:free,THK/deepseek-v4-flash:free")
-            body = {"name": getattr(a, "name", "thk-fallback"), "models": [m.strip() for m in models.split(",") if m.strip()], "kind": "chat"}
+            body = {"name": getattr(a, "name", "thk-fallback"), "models": [m.strip() for m in models.split(",") if m.strip()]}
             code, resp = kancahub._r9_api("POST", "/api/combos", body=body, base=base)
             ok = 200 <= code < 300
             print(kancahub.col("green" if ok else "red", f"  {'✓' if ok else '✗'} combo {body['name']} -> HTTP {code}"))

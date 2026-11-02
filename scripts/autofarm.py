@@ -336,14 +336,14 @@ async def run_autofarm(
     url: str,
     headless: bool = False,
     proxy: str | None = None,
-    mail_domain: str = "kancalabs.my.id",
+    mail_domain: str = "",
     inject_9r: bool = False,
     out_json: Path | str | None = None,
     inspect_only: bool = False,
     mail_provider: str = "auto",
     mail_site: str | None = None,
 ) -> dict:
-    domain = normalize_domain(mail_domain)
+    domain = normalize_domain(mail_domain) if mail_domain else ""
     # 1. Resolve egress (only harvest the pool when a pool proxy is actually wanted)
     chosen_proxy = get_fresh_proxy(proxy)
     if chosen_proxy is None and (proxy or "").lower() not in ("none", "direct", "off", "no"):
@@ -365,15 +365,14 @@ async def run_autofarm(
     mailbox = None
     try:
         from mailboxes import open_mailbox
-        site_host = urllib.parse.urlparse(mail_site or url).netloc or domain
+        site_host = urllib.parse.urlparse(mail_site or url).netloc or (domain or "public")
         mailbox = open_mailbox(mail_provider, domain=domain, local_part=local_part,
                                site=site_host, log=print)
         email = mailbox.address
     except Exception as exc:
         print(f"  [mail] provider init failed ({exc}); using static address")
     if mailbox is None:
-        email = f"{username}@{domain}"
-
+        email = f"{username}@{domain or 'guerrillamailblock.com'}"
     print(f"  • Mailbox  : {mail_provider}")
     print(f"  • Email    : {email}")
     print(f"  • Password : {password}")
@@ -1353,27 +1352,26 @@ def main() -> int:
             print("  ✗ No URL provided.")
             return 1
         print("\n  Choose disposable mailbox:")
-        print("    [1] Tempik kancalabs.my.id (readable inbox — default, most sites)")
-        print("    [2] KancaHub relay kancalabs.biz.id")
-        print("    [3] Litensi paid activation (needs API keys/balance)")
-        print("    [4] Static address (no inbox — nothing to read)")
-        print("    [5] My own domain (via your relay — see docs/BYOD_MAIL.md)")
-        c_dom = input("  Select [1/2/3/4/5] or type your domain (default 1): ").strip()
-        if c_dom == "5" or ("@" in c_dom or "." in c_dom and c_dom not in ("1", "2", "3", "4")):
-            custom = "" if c_dom == "5" else c_dom
-            if not custom:
-                custom = input("  Your domain (e.g. mail.example.com): ").strip().lower().lstrip("@")
-            else:
-                custom = custom.strip().lower().lstrip("@")
-            if custom and "." in custom:
-                mail_provider, domain = "relay", custom
-            else:
-                print("  No valid domain — falling back to kancalabs.my.id.")
-                mail_provider, domain = "tempik", "kancalabs.my.id"
+        print("    [1] Temp Mail (mail.tm — public, zero setup, readable — default)")
+        print("    [2] Guerrilla Mail (guerrillamail.com — public, zero setup)")
+        print("    [3] Real @gmail.com (emailmux -> emailnator -> mail.tm)")
+        print("    [4] [Operator] Tempik kancalabs.my.id (private worker)")
+        print("    [5] [Operator] Relay kancalabs.biz.id")
+        print("    [6] Custom domain (via custom relay)")
+        c_dom = input("  Select [1/2/3/4/5/6] (default 1): ").strip()
+        if c_dom == "2":
+            mail_provider, domain = "guerrilla", ""
+        elif c_dom == "3":
+            mail_provider, domain = "gmail", ""
+        elif c_dom == "4":
+            mail_provider, domain = "tempik", "kancalabs.my.id"
+        elif c_dom == "5":
+            mail_provider, domain = "relay", "kancalabs.biz.id"
+        elif c_dom == "6":
+            custom = input("  Your domain (e.g. mail.example.com): ").strip().lower().lstrip("@")
+            mail_provider, domain = "relay", custom
         else:
-            mail_provider = {"2": "relay", "3": "litensi", "4": "static"}.get(c_dom, "tempik")
-            domain = "kancalabs.biz.id" if mail_provider == "relay" else "kancalabs.my.id"
-
+            mail_provider, domain = "tempmail", ""
         c_inj = input("  Inject credentials into 9Router? [y/N]: ").strip().lower()
         inject = c_inj in ("y", "yes", "true", "1")
     else:

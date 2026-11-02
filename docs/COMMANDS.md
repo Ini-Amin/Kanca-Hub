@@ -177,6 +177,69 @@ Config: `~/.config/auto-freecf/.env` (`SCHOOL_EMAIL`, `SCHOOL_MAIL_PASSWORD`, `S
 | `kancahub autoclaw wallets` | Check token balances and grant instances | `kancahub autoclaw wallets` |
 | `kancahub autoclaw accounts` | List local saved accounts in `autoclaw_accounts.jsonl` | `kancahub autoclaw accounts` |
 
+## `freebuff` — Freebuff coding agent (sticky IP & fingerprint slots)
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub freebuff status` | Show all slots, active slot, fingerprint ID, proxy, and auth status | `kancahub freebuff status` |
+| `kancahub freebuff login` | Run browser login in active slot with its locked fingerprint and sticky proxy | `kancahub freebuff login` |
+| `kancahub freebuff run -- <args>` | Execute freebuff CLI in the isolated slot environment | `kancahub freebuff run -- -v` |
+| `kancahub freebuff rotate` | Retire active slot, create fresh slot with new fingerprint & optional proxy | `kancahub freebuff rotate --proxy http://127.0.0.1:25346` |
+| `kancahub freebuff switch <slot>` | Switch active slot | `kancahub freebuff switch slot_1` |
+| `kancahub freebuff set-proxy <url>` | Bind or update proxy for a slot | `kancahub freebuff set-proxy http://127.0.0.1:25344` |
+
+## `supplies` — Community AI supplies & harvester fleet
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub supplies list` | List all supplies with target models and features | `kancahub supplies list` |
+| `kancahub supplies info <name>` | Show detailed architecture, auth flow, and endpoints of a supply | `kancahub supplies info orvispool` |
+| `kancahub supplies clone <name>` | Clone a supply into `~/Auto-FreeCF-vendor-refs` | `kancahub supplies clone orvispool` |
+| `kancahub supplies farm [name]` | Run per-provider automated farm or interactive selection | `kancahub supplies farm orvispool` |
+
+## `orvis` — Orvis AI frontier models (100 free credits/acct)
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub orvis accounts` | List harvested Orvis accounts and credit balance | `kancahub orvis accounts` |
+| `kancahub orvis create` | Bulk-create new accounts headlessly (AWS Cognito OTP) | `kancahub orvis create --count 1` |
+| `kancahub orvis serve` | Start OpenAI-compatible bridge on port 8796 | `kancahub orvis serve --port 8796` |
+| `kancahub orvis connect` | Inject Orvis node straight into 9Router SQLite DB | `kancahub orvis connect` |
+| `kancahub orvis test` | Smoke-test model completions via local bridge | `kancahub orvis test --model anthropic/claude-sonnet-4-20250514` |
+
+## `komafree` — Koma-Free keyless instant vLLM inference
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub komafree create` | Mint N keyless accounts locally in microseconds | `kancahub komafree create -n 5` |
+| `kancahub komafree accounts` | Show stored accounts table | `kancahub komafree accounts` |
+| `kancahub komafree chat` | Send prompt upstream (`koma/apple`) | `kancahub komafree chat -p "ping"` |
+| `kancahub komafree doctor` | Connectivity and latency diagnosis | `kancahub komafree doctor` |
+
+## `stepfun` — StepFun Studio reasoning models (Step-5 Preview)
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub stepfun models` | List StepFun flagship reasoning models | `kancahub stepfun models` |
+| `kancahub stepfun doctor` | Check config, token quota and 9Router DB status | `kancahub stepfun doctor` |
+| `kancahub stepfun accounts` | List stored StepFun accounts | `kancahub stepfun accounts` |
+| `kancahub stepfun connect` | Wire StepFun Studio into 9Router SQLite DB | `kancahub stepfun connect` |
+
+## `opensatan` — OpenSatan anonymous uncensored pool
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub opensatan create` | Mint anonymous identities without browser in 4s | `kancahub opensatan create --count 1` |
+| `kancahub opensatan list` | List active anonymous identities | `kancahub opensatan list` |
+| `kancahub opensatan chat` | Chat with unaligned OpenSatan models | `kancahub opensatan chat --prompt "hello"` |
+
+## `oxalpha` — Ox Alpha GLM-5.3 Flash 1M token reasoning
+
+| Command | What it does | Example |
+|---|---|---|
+| `kancahub oxalpha test` | One-off chat test with GLM-5.3 Flash reasoning | `kancahub oxalpha test "explain gravity"` |
+| `kancahub oxalpha create` | Harvest sessions into pool | `kancahub oxalpha create --count 1` |
+| `kancahub oxalpha list` | Show active pool sessions | `kancahub oxalpha list` |
 ## Common one-liners
 
 ```bash

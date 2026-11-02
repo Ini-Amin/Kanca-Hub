@@ -362,30 +362,30 @@ def _thk_sync(a, py) -> int:
 
 
 def cmd_mail(a) -> int:
-    """School mailbox (BINUS M365) via browser — wraps scripts/school_mail_browser.py."""
+    """Disposable mailbox management (tempmail, guerrilla, emailmux) — wraps scripts/mailboxes.py."""
     import kancahub
-    # school_mail_browser uses nodriver; run it under camoufox-venv.
-    py = kancahub.pick_python(camoufox=True)
-    smb = kancahub.AUTO_FREECF / "scripts" / "school_mail_browser.py"
-    if not smb.exists():
-        print(kancahub.col("red", f"✗ school_mail_browser.py not found at {smb}"))
+    py = kancahub.pick_python()
+    mb_script = kancahub.AUTO_FREECF / "scripts" / "mailboxes.py"
+    if not mb_script.exists():
+        print(kancahub.col("red", f"✗ mailboxes.py not found at {mb_script}"))
         return 1
 
-    sub = getattr(a, "mail_cmd", None)
-    if not sub:
-        print(kancahub.col("yellow", "• no mail subcommand — showing help"))
-        return kancahub.run([py, str(smb), "--help"], cwd=kancahub.AUTO_FREECF)
+    sub = getattr(a, "mail_cmd", "tempmail") or "tempmail"
+    args = [py, str(mb_script)]
+    if sub == "test":
+        args.append("tempmail")
+    elif sub == "otp":
+        args.extend(["tempmail", "--watch", "--timeout", str(getattr(a, "timeout", 180) or 180)])
+    elif sub == "login":
+        args.append("tempmail")
+    else:
+        args.append(sub)
+        if getattr(a, "watch", False):
+            args.append("--watch")
+        if getattr(a, "timeout", None):
+            args.extend(["--timeout", str(a.timeout)])
 
-    if sub in ("test", "login", "otp"):
-        cmd = [py, str(smb), sub]
-        if sub == "otp":
-            cmd += ["--timeout", str(getattr(a, "timeout", 180) or 180)]
-        if sub == "login":
-            print(kancahub.col("dim", "  (login leaves the browser open — Ctrl-C when done inspecting)"))
-        return kancahub.run(cmd, cwd=kancahub.AUTO_FREECF)
-
-    print(kancahub.col("red", f"✗ unknown mail command: {sub}"))
-    return 1
+    return kancahub.run(args, cwd=kancahub.AUTO_FREECF)
 
 
 def cmd_gmail(a) -> int:

@@ -1,0 +1,14 @@
+[Unit]
+Description=Freebuff AI Bridge (:8798)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u %h/Auto-FreeCF/scripts/freebuff_bridge.py --port 8798
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

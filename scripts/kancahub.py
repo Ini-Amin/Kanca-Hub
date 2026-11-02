@@ -126,7 +126,7 @@ _REEXPORTS = {
     "doctor": "cmd_doctor",
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
-    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack cmd_opencode cmd_omnirush",
+    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack cmd_opencode cmd_omnirush cmd_dahlfarm cmd_proxyvault cmd_orvis cmd_komafree cmd_stepfun cmd_opensatan cmd_oxalpha",
     "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api _r9_models cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
                       "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
@@ -495,34 +495,31 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- github (account farm) ----
     build_github_parser(sub)
 
-    # ---- mail (school mailbox / BINUS M365) ----
+    # ---- mail (disposable inboxes: tempmail, guerrilla, emailmux) ----
     mp = sub.add_parser(
-        "mail", help="School mailbox (BINUS M365) via browser: read signup OTPs",
+        "mail", help="disposable mailboxes: tempmail (mail.tm), guerrilla, emailmux (@gmail)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Read the school Outlook inbox from a real browser session (nodriver).\n"
-            "M365 blocks IMAP basic auth, so the OTP is scraped from the web UI.\n"
-            "The session lives in ~/.config/auto-freecf/school-profile and survives runs.\n"
-            "\n"
-            "  test   log in and print recent inbox subjects (do this once by hand if\n"
-            "         the tenant enforces MFA — the profile then carries the session)\n"
-            "  otp    wait for an OpenAI/ChatGPT verification code\n"
-            "  login  log in and leave the browser open for inspection\n"
-            "\n"
-            "Config: ~/.config/auto-freecf/.env  (SCHOOL_EMAIL, SCHOOL_MAIL_PASSWORD,\n"
-            "SCHOOL_MAIL_URL)\n"
+            "Create and read disposable mailboxes without personal domains.\n"
+            "Providers:\n"
+            "  tempmail   (mail.tm) — fast, clean, readable\n"
+            "  guerrilla  (guerrillamail) — reliable disposable inbox\n"
+            "  emailmux   (@gmail.com) — real Gmail inbox for strict providers\n"
             "\n"
             "Examples:\n"
-            "  kancahub mail test\n"
-            "  kancahub mail otp --timeout 300"),
+            "  kancahub mail tempmail\n"
+            "  kancahub mail guerrilla --watch\n"
+            "  kancahub mail emailmux"),
     )
     ms = mp.add_subparsers(dest="mail_cmd")
-    ms.add_parser("test", help="log in and list recent inbox subjects (selftest)")
-    mo = ms.add_parser("otp", help="wait for an OpenAI OTP in the school inbox")
+    ms.add_parser("tempmail", help="create and check tempmail (mail.tm) inbox")
+    ms.add_parser("guerrilla", help="create and check guerrillamail inbox")
+    ms.add_parser("emailmux", help="create real @gmail.com disposable inbox")
+    ms.add_parser("mailtm", help="mail.tm alias")
+    ms.add_parser("test", help="test disposable mailbox connection (selftest)")
+    mo = ms.add_parser("otp", help="wait for incoming OTP in disposable inbox")
     mo.add_argument("--timeout", type=int, default=180, help="seconds to wait (default 180)")
-    ms.add_parser("login", help="log in and leave the browser open for inspection")
-
-    # ---- otp (Litensi email activation — cheap pay-per-code mailboxes) ----
+    ms.add_parser("login", help="inspect disposable inbox in browser session")
     op = sub.add_parser("otp", help="Litensi email activation (pay-per-code OTP mailboxes)")
     os_ = op.add_subparsers(dest="otp_cmd")
     os_.add_parser("profile", help="show Litensi balance / account")
@@ -825,8 +822,8 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- vendor passthroughs (tools vendored in ~/Auto-FreeCF-vendor-refs) ----
     zc = sub.add_parser("zcode",
                         help="zcode-claim: z.ai account -> ZCode JWT -> claim free Start Plan -> 9Router glm pool")
-    zc.add_argument("mode", nargs="?", choices=["claim", "console", "connect"], default="claim",
-                    help="claim (CLI orchestrator), console (web UI bridge), connect (register keys)")
+    zc.add_argument("mode", nargs="?", choices=["claim", "console", "connect", "auto-claim", "quota"], default="claim",
+                    help="claim (CLI orchestrator), auto-claim (claim coupons across accounts), console (web UI bridge), connect (register keys), quota (check balance)")
     zc.add_argument("extra", nargs=argparse.REMAINDER,
                     help="args passed straight to the vendored script (e.g. -- --headless)")
 
@@ -852,8 +849,8 @@ def build_parser() -> argparse.ArgumentParser:
     oc = sub.add_parser("opencode",
                         help="OpenCode CLI: free Zen models as workers (status|models|run|zen)")
     oc.add_argument("oc_cmd", nargs="?", default="status",
-                    choices=["status", "models", "run", "zen", "login", "signup", "key", "inject", "bridge", "farm", "captcha"],
-                    help="status (default) | models | run | zen | login | signup | key | inject | bridge | farm | captcha")
+                    choices=["status", "models", "run", "zen", "login", "free", "anon", "signup", "key", "inject", "bridge", "farm", "captcha", "menu"],
+                    help="status (default) | models | run | zen | login | free | anon | signup | key | inject | bridge | farm | captcha | menu")
     oc.add_argument("--api-key", default=None, metavar="KEY",
                     help="`inject`: OpenCode Zen API key to add to 9router")
     oc.add_argument("--from-file", default=None, metavar="PATH",
@@ -891,6 +888,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="force a direct connection")
     oc.add_argument("--country", default=None, metavar="CC",
                     help="restrict auto egress to one country code")
+    oc.add_argument("--remote", default=None, metavar="HOST",
+                    help="run free model remotely via SSH on VM (e.g. blu)")
+    oc.add_argument("--parallel", action="store_true",
+                    help="run free inference across worker VMs in parallel")
+    oc.add_argument("--personal", action="store_true",
+                    help="use personal operator Brave session instead of disposable user mode")
+    oc.add_argument("--mail", default="tempmail", choices=["tempmail", "guerrilla", "mailtm", "tempik"],
+                    help="disposable mail provider for user farm: tempmail (default) | guerrilla | mailtm")
     nt = sub.add_parser("notrack",
                         help="notrack-bulk-9router: cheap sessions (no email/captcha) pooled as one endpoint")
     nt.add_argument("mode", nargs="?", choices=["create", "verify", "list", "connect", "run", "adapter"],
@@ -959,6 +964,103 @@ def build_parser() -> argparse.ArgumentParser:
     af.add_argument("--mobile-rotate", action="store_true", help="rotate tethered phone carrier IP before run & retry on block")
     af.add_argument("--plus-address", default=None, metavar="EMAIL", help="use plus-addressing (you+farm1@gmail.com) instead of disposable domain")
     af.add_argument("--plus-prefix", default="farm", metavar="STR", help="tag prefix for plus-addressing (default: farm)")
+
+    # ---- freebuff ----
+    fb = sub.add_parser("freebuff", help="Freebuff coding agent: sticky IP, persistent fingerprint slots & auto-rotation")
+    fbs = fb.add_subparsers(dest="freebuff_cmd")
+    fbs.add_parser("status", help="list all slots, status, fingerprint & proxy")
+    fb_log = fbs.add_parser("login", help="run login within the active or specified slot")
+    fb_log.add_argument("--slot", default=None)
+    fb_log.add_argument("--proxy", default=None)
+    fb_run = fbs.add_parser("run", help="run freebuff CLI with arguments in active slot")
+    fb_run.add_argument("--slot", default=None)
+    fb_run.add_argument("extra_args", nargs=argparse.REMAINDER)
+    fb_rot = fbs.add_parser("rotate", help="retire current slot and create a fresh one")
+    fb_rot.add_argument("--proxy", default=None)
+    fb_sw = fbs.add_parser("switch", help="switch active slot")
+    fb_sw.add_argument("slot")
+    fb_sp = fbs.add_parser("set-proxy", help="set proxy for a slot")
+    fb_sp.add_argument("proxy")
+    fb_sp.add_argument("--slot", default=None)
+
+    # ---- supplies ----
+    sup = sub.add_parser("supplies", help="AI supplies & harvester fleet: list, inspect & clone")
+    sups = sup.add_subparsers(dest="supplies_cmd")
+    sups.add_parser("list", help="list all supplies with models and features")
+    sup_info = sups.add_parser("info", help="show detailed architecture of a supply")
+    sup_info.add_argument("name", help="supply name (e.g. virtuachat-9router)")
+    sup_cl = sups.add_parser("clone", help="clone supply into ~/Auto-FreeCF-vendor-refs")
+    sup_cl.add_argument("name", help="supply name")
+    sup_farm = sups.add_parser("farm", help="run automated per-provider farm fleet")
+    sup_farm.add_argument("name", nargs="?", default=None, help="supply name (optional)")
+
+    # ---- dahlfarm ----
+    df = sub.add_parser("dahlfarm", help="dahlfarm: bulk-mint Dahl Inference 100M-token keys with Turnstile solve")
+    dfs = df.add_subparsers(dest="dahl_cmd")
+    dfs.add_parser("mint", help="run Turnstile solve + mint keys into keys.txt (default)")
+    dfs.add_parser("start", help="run interactive terminal launcher")
+    dfs.add_parser("verify", help="test all minted keys against live model completions")
+    dfs.add_parser("connect", help="inject verified keys straight into 9Router SQLite DB")
+    dfs.add_parser("check", help="check proxy latency & connectivity")
+    dfs.add_parser("test", help="run model completion smoke test")
+
+    # ---- proxyvault ----
+    pv = sub.add_parser("proxyvault", help="ProxyVault: self-hosted proxy harvesting console with FastAPI & React UI")
+    pvs = pv.add_subparsers(dest="pv_cmd")
+    pvs_serve = pvs.add_parser("serve", help="run ProxyVault Web UI console on :8888 (default)")
+    pvs_serve.add_argument("--port", type=int, default=8888)
+    pvs.add_parser("demo", help="record and play terminal demo")
+    # ---- orvis ----
+    ov = sub.add_parser("orvis", help="Orvis AI: 16 frontier models (Claude 4, GPT-4o, o3-mini) with 100 free credits/acct")
+    ovs = ov.add_subparsers(dest="orvis_cmd")
+    ovs.add_parser("accounts", help="list harvested Orvis accounts and credit status")
+    ovs_cr = ovs.add_parser("create", help="create new Orvis account headlessly (pure HTTP + Cognito)")
+    ovs_cr.add_argument("--count", "-n", type=int, default=1, help="number of accounts to create")
+    ovs_sv = ovs.add_parser("serve", help="run Orvis OpenAI-compatible bridge on :8796")
+    ovs_sv.add_argument("--port", type=int, default=8796, help="port (default 8796)")
+    ovs_cn = ovs.add_parser("connect", help="inject Orvis node straight into 9Router SQLite DB")
+    ovs_cn.add_argument("--port", type=int, default=8796, help="bridge port (default 8796)")
+    ovs_t = ovs.add_parser("test", help="smoke test chat model through Orvis bridge")
+    ovs_t.add_argument("--model", default="anthropic/claude-sonnet-4-20250514", help="model id")
+    ovs_t.add_argument("--port", type=int, default=8796, help="bridge port (default 8796)")
+
+    # ---- komafree ----
+    kf = sub.add_parser("komafree", help="Koma-Free: keyless zero-auth onboarding & instant vLLM inference")
+    kfs = kf.add_subparsers(dest="koma_cmd")
+    kfs_cr = kfs.add_parser("create", help="mint N keyless koma accounts")
+    kfs_cr.add_argument("-n", type=int, default=5, help="number of accounts to mint")
+    kfs.add_parser("accounts", help="list local stored koma accounts")
+    kfs_ch = kfs.add_parser("chat", help="send prompt directly upstream")
+    kfs_ch.add_argument("-m", "--model", default="koma/apple", help="model name")
+    kfs_ch.add_argument("-p", "--prompt", default="hello", help="prompt text")
+    kfs.add_parser("doctor", help="connectivity and latency report")
+    kfs.add_parser("verify", help="verify stored accounts")
+
+    # ---- stepfun ----
+    st = sub.add_parser("stepfun", help="StepFun: bulk StepFun Studio reasoning models (Step-5 Preview, Step-3.7 Flash)")
+    sts = st.add_subparsers(dest="step_cmd")
+    sts.add_parser("models", help="list StepFun flagship models")
+    sts.add_parser("doctor", help="check config, tokens and 9Router DB status")
+    sts.add_parser("accounts", help="list stored accounts")
+    sts.add_parser("connect", help="wire StepFun Studio into 9Router SQLite database")
+
+    # ---- opensatan ----
+    osn = sub.add_parser("opensatan", help="OpenSatan: anonymous uncensored models pool")
+    osns = osn.add_subparsers(dest="satan_cmd")
+    osns_cr = osns.add_parser("create", help="provision anonymous identities headlessly")
+    osns_cr.add_argument("--count", type=int, default=1, help="count")
+    osns.add_parser("list", help="list anonymous identities in pool")
+    osns_ch = osns.add_parser("chat", help="chat with OpenSatan")
+    osns_ch.add_argument("--prompt", default="hello", help="prompt text")
+
+    # ---- oxalpha ----
+    ox = sub.add_parser("oxalpha", help="Ox Alpha: free GLM-5.3 Flash 1M token stealth reasoning")
+    oxs = ox.add_subparsers(dest="ox_cmd")
+    oxs_t = oxs.add_parser("test", help="one-off test prompt")
+    oxs_t.add_argument("prompt", nargs="?", default="hello", help="test message")
+    oxs_cr = oxs.add_parser("create", help="harvest sessions into pool")
+    oxs_cr.add_argument("--count", type=int, default=1, help="count")
+    oxs.add_parser("list", help="list pool sessions")
 
     return p
 
@@ -1085,7 +1187,38 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return run(cmd, cwd=AUTO_FREECF)
     if g == "omnirush":
         return cmd_omnirush(args)
-
+    if g == "freebuff":
+        import freebuff_manager  # noqa: PLC0415
+        old_argv = list(sys.argv)
+        try:
+            sys.argv = [sys.argv[0]] + (sys.argv[2:] if len(sys.argv) > 2 else ["status"])
+            freebuff_manager.main()
+            return 0
+        finally:
+            sys.argv = old_argv
+    if g == "supplies":
+        import supplies_registry  # noqa: PLC0415
+        old_argv = list(sys.argv)
+        try:
+            sys.argv = [sys.argv[0]] + (sys.argv[2:] if len(sys.argv) > 2 else ["list"])
+            supplies_registry.main()
+            return 0
+        finally:
+            sys.argv = old_argv
+    if g == "dahlfarm":
+        return cmd_dahlfarm(args)
+    if g == "proxyvault":
+        return cmd_proxyvault(args)
+    if g == "orvis":
+        return cmd_orvis(args)
+    if g == "komafree":
+        return cmd_komafree(args)
+    if g == "stepfun":
+        return cmd_stepfun(args)
+    if g == "opensatan":
+        return cmd_opensatan(args)
+    if g == "oxalpha":
+        return cmd_oxalpha(args)
     p.print_help()
     return 0
 
@@ -1093,9 +1226,11 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 def main() -> int:
     p = build_parser()
     if len(sys.argv) <= 1:
-        # Default to the friendly beginner guide; power users can pick 'p'
-        # (or use `kancahub menu`) for the classic command list.
-        return beginner_entry(p)
+        # ONE numbering scheme: bare `kancahub` opens the same full menu as
+        # `kancahub menu`, so a doc that says "pick 2" means the same thing
+        # everywhere. The plain-English wizard is reachable as `[b]` in the
+        # menu or `kancahub beginner`.
+        return interactive_mode(p)
     args = p.parse_args()
     return dispatch(p, args)
 

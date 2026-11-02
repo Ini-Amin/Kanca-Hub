@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenCode Zen OpenAI-compatible Bridge (:8791)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /home/amen/Auto-FreeCF/scripts/opencode_bridge.py serve --port 8791
+WorkingDirectory=/home/amen/Auto-FreeCF
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

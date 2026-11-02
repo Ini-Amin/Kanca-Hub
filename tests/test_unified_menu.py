@@ -41,48 +41,25 @@ class TestUnifiedMenuStructure(unittest.TestCase):
             self.assertIsInstance(cmd_str, str)
             self.assertTrue(cmd_args is None or isinstance(cmd_args, list))
 
-    def test_parity_against_old_pages_union(self) -> None:
-        # All commands from the original two-page menu must still be present.
-        old_page1_commands = {
-            "stack signup",
-            "doctor",
-            "proxy gateway",
-            "thk batch",
-            "grok run",
-            "warp",
-            "github farm",
-            "grok inject",
-        }
-        old_page2_commands = {
-            "mail test",
-            "mail otp",
-            "gmail farm",
-            "thk setup-env",
-            "stack login",
-            "stack sync --prune",
-            "proxy harvest",
-            "yowes list",
-        }
-        old_union = old_page1_commands | old_page2_commands
-        self.assertEqual(len(old_union), 16)
-
+    def test_menu_integrity_and_categories(self) -> None:
         current_commands = {item[2] for item in UNIFIED_MENU}
-
-        missing = old_union - current_commands
-        self.assertEqual(missing, set(), f"Commands missing from unified menu: {missing}")
-        self.assertTrue(old_union.issubset(current_commands))
-
-        # 28 items total: sequential keys "1" through "28"
-        self.assertEqual(len(UNIFIED_MENU), 28)
+        # 21 items total across 4 categories (A, B, C, D)
+        self.assertEqual(len(UNIFIED_MENU), 21)
         self.assertIn("autofarm", current_commands)
-        self.assertIn("otp", current_commands)
-        self.assertIn("autoclaw claim", current_commands)
-        self.assertIn("freeai radox", current_commands)
-        self.assertIn("freeai beatapi", current_commands)
         self.assertIn("freeai status", current_commands)
+        self.assertIn("orvis menu", current_commands)
+        self.assertIn("komafree menu", current_commands)
+        self.assertIn("stepfun menu", current_commands)
+        self.assertIn("opensatan menu", current_commands)
+        self.assertIn("supplies farm", current_commands)
+        self.assertIn("freebuff status", current_commands)
+        self.assertIn("opencode menu", current_commands)
+        self.assertIn("zcode auto-claim", current_commands)
+        self.assertIn("proxy harvest", current_commands)
         self.assertNotIn("memory search", current_commands)
+        self.assertNotIn("stack signup", current_commands)
 
-        expected_keys = [str(i) for i in range(1, 29)]
+        expected_keys = [str(i) for i in range(1, 22)]
         actual_keys = [item[0] for item in UNIFIED_MENU]
         self.assertEqual(actual_keys, expected_keys)
 
@@ -91,14 +68,12 @@ class TestUnifiedMenuStructure(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)), "Duplicate keys found")
 
     def test_stage_headers_coverage(self) -> None:
-        # Headers keyed by first item of each category: A=1, B=8, C=16, D=20, E=24
+        # Headers keyed by first item of each category: A=1, B=6, C=13, D=17
         self.assertIn("1", MENU_STAGE_HEADERS)
-        self.assertIn("8", MENU_STAGE_HEADERS)
-        self.assertIn("16", MENU_STAGE_HEADERS)
-        self.assertIn("20", MENU_STAGE_HEADERS)
-        self.assertIn("24", MENU_STAGE_HEADERS)
-        self.assertEqual(len(MENU_STAGE_HEADERS), 5)
-
+        self.assertIn("6", MENU_STAGE_HEADERS)
+        self.assertIn("13", MENU_STAGE_HEADERS)
+        self.assertIn("17", MENU_STAGE_HEADERS)
+        self.assertEqual(len(MENU_STAGE_HEADERS), 4)
 
 class TestRenderMenu(unittest.TestCase):
     """Test non-interactive rendering of the unified menu."""
@@ -136,13 +111,15 @@ class TestInteractiveMode(unittest.TestCase):
         rc = interactive_mode(p)
         self.assertEqual(rc, 0)
 
-    @patch("builtins.input", side_effect=["h"])
-    def test_help_prints_help_and_exits(self, _mock_input: MagicMock) -> None:
+    @patch("builtins.input", side_effect=["h", "", "q"])
+    def test_help_prints_help_and_stays_in_menu(self, _mock_input: MagicMock) -> None:
         p = build_parser()
         with patch.object(p, "print_help") as mock_help:
             rc = interactive_mode(p)
             self.assertEqual(rc, 0)
             mock_help.assert_called_once()
+            # "h" must NOT drop the user out of the interactive loop.
+            self.assertGreaterEqual(_mock_input.call_count, 3)
 
     @patch("scripts.kancahub.dispatch", return_value=0)
     @patch("builtins.input", side_effect=["1", "", "q"])
@@ -214,11 +191,11 @@ class TestRunEndToEndFlow(unittest.TestCase):
     @patch("scripts.kancahub.dispatch")
     def test_success_runs_full_sequence(self, mock_dispatch: MagicMock) -> None:
         p = build_parser()
-        # Farm 2 (Cloudflare): verify -> signup -> inject -> sync (all 0)
-        mock_dispatch.side_effect = [0, 0, 0, 0]
-        rc = run_end_to_end_flow(p, farm_choice="2")
+        # Farm 3 (Abliteration): verify -> run -> sync (all 0, inject skipped)
+        mock_dispatch.side_effect = [0, 0, 0]
+        rc = run_end_to_end_flow(p, farm_choice="3")
         self.assertEqual(rc, 0)
-        self.assertEqual(mock_dispatch.call_count, 4)
+        self.assertEqual(mock_dispatch.call_count, 3)
 
 
 class TestBeginnerAndMenuEntry(unittest.TestCase):

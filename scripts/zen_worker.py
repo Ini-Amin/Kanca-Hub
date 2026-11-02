@@ -154,7 +154,7 @@ def _run_one(binary: str, model: str, prompt: str, timeout: int) -> str | None:
         t0 = time.time()
         try:
             p = subprocess.run(
-                [binary, "run", "-m", model, prompt],
+                [binary, "run", "--standalone", "-m", model, prompt],
                 cwd=tmp, capture_output=True, text=True, timeout=timeout,
                 env={**os.environ, "NO_COLOR": "1"},
             )

@@ -192,7 +192,7 @@ def cmd_doctor(_a) -> int:
     print(kancahub.col("bold", "\n  Scripts:"))
     wanted = [
         "proxy_gateway.py", "grok_driver.py", "grok_9router.py", "github_farm.py",
-        "school_mail_browser.py", "gmail_creator.py",
+        "mailboxes.py", "gmail_creator.py",
         "harbor_config.py", "camoufox_helpers.py",
     ]
     for name in wanted:

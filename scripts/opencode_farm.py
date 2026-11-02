@@ -146,10 +146,20 @@ def gen_local_part() -> str:
     return random.choice(words) + "".join(random.choices(string.digits, k=random.randint(2, 4)))
 
 
-def new_mailbox():
+def new_mailbox(provider: str = "tempmail"):
     import mailboxes
-    return mailboxes.open_mailbox("tempik", domain=MAIL_DOMAIN)
-
+    pref = (provider or "tempmail").lower()
+    if pref in ("auto", "tempmail", "mailtm"):
+        try:
+            return mailboxes.open_mailbox("tempmail")
+        except Exception:
+            try:
+                return mailboxes.open_mailbox("guerrilla")
+            except Exception:
+                return mailboxes.open_mailbox("mailtm")
+    elif pref == "guerrilla":
+        return mailboxes.open_mailbox("guerrilla")
+    return mailboxes.open_mailbox(pref)
 
 # ── captcha ─────────────────────────────────────────────────────────────────
 
@@ -375,7 +385,7 @@ def read_ledger() -> list[dict]:
 
 async def _browser_signup(headless: bool, proxy: str | None = None,
                           keep_open: int = 300, email: str = "",
-                          password: str = "") -> dict:
+                          password: str = "", mail_provider: str = "tempmail") -> dict:
     """Register with email+password on /console/signup, then verify by mail.
 
     hCaptcha is the only gate (measured: invisible widget that escalates to
@@ -389,7 +399,7 @@ async def _browser_signup(headless: bool, proxy: str | None = None,
     """
     from camoufox.async_api import AsyncCamoufox
 
-    mb = new_mailbox()
+    mb = new_mailbox(mail_provider)
     email = email or mb.address
     password = password or gen_password()
 
@@ -397,7 +407,7 @@ async def _browser_signup(headless: bool, proxy: str | None = None,
     print(f"[farm] password : {password}")
 
     result: dict = {"email": email, "password": password, "mode": "email",
-                    "mailbox": "tempik"}
+                    "mailbox": mail_provider}
     calls: list = []
 
     async with AsyncCamoufox(headless=headless, humanize=True) as browser:
@@ -627,6 +637,7 @@ def cmd_run(a) -> int:
             keep_open=a.keep_open,
             email=a.email or "",
             password=a.password or "",
+            mail_provider=getattr(a, "mail", "tempmail"),
         ))
     else:
         res = asyncio.run(_browser_oauth(
@@ -768,6 +779,8 @@ def main() -> int:
     s.add_argument("--password", default=None, help="password (default: generated)")
     s.add_argument("--proxy", default=None)
     s.add_argument("--keep-open", type=int, default=300, help="seconds to wait for the human")
+    s.add_argument("--mail", default="tempmail", choices=["tempmail", "guerrilla", "mailtm", "tempik"],
+                   help="disposable mail provider: tempmail (default: mail.tm) | guerrilla | mailtm")
     s.set_defaults(fn=cmd_run)
 
     s = sub.add_parser("register", help="POST /auth/register with an existing challengeToken")

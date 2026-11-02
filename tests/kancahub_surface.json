@@ -167,6 +167,28 @@
 "beginner": [
 "help"
 ],
+"dahlfarm": [
+"dahl_cmd",
+"help"
+],
+"dahlfarm check": [
+"help"
+],
+"dahlfarm connect": [
+"help"
+],
+"dahlfarm mint": [
+"help"
+],
+"dahlfarm start": [
+"help"
+],
+"dahlfarm test": [
+"help"
+],
+"dahlfarm verify": [
+"help"
+],
 "diagnose": [
 "help",
 "live"
@@ -215,6 +237,36 @@
 ],
 "freeai status": [
 "help"
+],
+"freebuff": [
+"freebuff_cmd",
+"help"
+],
+"freebuff login": [
+"help",
+"proxy",
+"slot"
+],
+"freebuff rotate": [
+"help",
+"proxy"
+],
+"freebuff run": [
+"extra_args",
+"help",
+"slot"
+],
+"freebuff set-proxy": [
+"help",
+"proxy",
+"slot"
+],
+"freebuff status": [
+"help"
+],
+"freebuff switch": [
+"help",
+"slot"
 ],
 "github": [
 "github_cmd",
@@ -355,16 +407,50 @@
 "clear",
 "help"
 ],
+"komafree": [
+"help",
+"koma_cmd"
+],
+"komafree accounts": [
+"help"
+],
+"komafree chat": [
+"help",
+"model",
+"prompt"
+],
+"komafree create": [
+"help",
+"n"
+],
+"komafree doctor": [
+"help"
+],
+"komafree verify": [
+"help"
+],
 "mail": [
 "help",
 "mail_cmd"
 ],
+"mail emailmux": [
+"help"
+],
+"mail guerrilla": [
+"help"
+],
 "mail login": [
+"help"
+],
+"mail mailtm": [
 "help"
 ],
 "mail otp": [
 "help",
 "timeout"
+],
+"mail tempmail": [
+"help"
 ],
 "mail test": [
 "help"
@@ -447,12 +533,55 @@
 "help",
 "job",
 "keep_open",
+"mail",
 "model",
 "no_proxy",
 "no_store",
 "oc_cmd",
+"parallel",
+"personal",
 "prompt",
-"proxy"
+"proxy",
+"remote"
+],
+"opensatan": [
+"help",
+"satan_cmd"
+],
+"opensatan chat": [
+"help",
+"prompt"
+],
+"opensatan create": [
+"count",
+"help"
+],
+"opensatan list": [
+"help"
+],
+"orvis": [
+"help",
+"orvis_cmd"
+],
+"orvis accounts": [
+"help"
+],
+"orvis connect": [
+"help",
+"port"
+],
+"orvis create": [
+"count",
+"help"
+],
+"orvis serve": [
+"help",
+"port"
+],
+"orvis test": [
+"help",
+"model",
+"port"
 ],
 "otp": [
 "help",
@@ -483,6 +612,21 @@
 "action",
 "help",
 "latest"
+],
+"oxalpha": [
+"help",
+"ox_cmd"
+],
+"oxalpha create": [
+"count",
+"help"
+],
+"oxalpha list": [
+"help"
+],
+"oxalpha test": [
+"help",
+"prompt"
 ],
 "proxy": [
 "help",
@@ -616,6 +760,17 @@
 "proxy warp": [
 "help"
 ],
+"proxyvault": [
+"help",
+"pv_cmd"
+],
+"proxyvault demo": [
+"help"
+],
+"proxyvault serve": [
+"help",
+"port"
+],
 "region": [
 "help",
 "region_cmd"
@@ -730,6 +885,41 @@
 "help",
 "open",
 "port"
+],
+"stepfun": [
+"help",
+"step_cmd"
+],
+"stepfun accounts": [
+"help"
+],
+"stepfun connect": [
+"help"
+],
+"stepfun doctor": [
+"help"
+],
+"stepfun models": [
+"help"
+],
+"supplies": [
+"help",
+"supplies_cmd"
+],
+"supplies clone": [
+"help",
+"name"
+],
+"supplies farm": [
+"help",
+"name"
+],
+"supplies info": [
+"help",
+"name"
+],
+"supplies list": [
+"help"
 ],
 "thk": [
 "help",

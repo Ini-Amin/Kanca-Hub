@@ -75,7 +75,7 @@ def get_ascii_banner() -> str:
  ██║  ██╗██║  ██║██║ ╚████║╚██████╗██║  ██║██║  ██║╚██████╔╝██████╔╝
  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝{reset}"""
     box_top = f"{cyan} ╔{'═' * 70}╗{reset}"
-    tagline = "account farming · bounty hunting · bridge management"
+    tagline = "account farming · ai models fleet · bridge management"
     box_mid = f"{cyan} ║ {bold}{tagline.center(68)}{reset}{cyan} ║{reset}"
     box_bot = f"{cyan} ╚{'═' * 70}╝{reset}"
     return f"{art}\n{box_top}\n{box_mid}\n{box_bot}"

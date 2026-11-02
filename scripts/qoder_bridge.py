@@ -62,10 +62,9 @@ def execute_qoder(model: str, prompt: str, timeout: int = 180) -> str:
         QODER_RUNTIME,
         "-m",
         q_model,
-        "--bare",
-        "--output-format",
-        "json",
         "-p",
+        "--no-session-persistence",
+        "--dangerously-skip-permissions",
         prompt,
     ]
 

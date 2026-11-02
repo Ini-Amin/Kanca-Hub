@@ -201,9 +201,10 @@ def cmd_account_rm(a):
 
 
 def cmd_mint(a):
-    targets = accounts() if a.all else [x for x in accounts() if x[0] == a.email]
-    if not targets and a.email:
-        targets = [(a.email, a.password or "")]
+    email = getattr(a, "email", None) or getattr(a, "email_opt", None)
+    targets = accounts() if a.all else [x for x in accounts() if x[0] == email]
+    if not targets and email:
+        targets = [(email, a.password or "")]
     if not targets:
         sys.exit("no accounts in accounts.txt; add one first")
     if not _ensure_cdp_chrome():
@@ -420,13 +421,10 @@ def _promo_try_claim(email, pw, plan_id):
     r = _claim_direct(email, plan_id)
     event("promo_direct", "%s %s -> %s" % (email, plan_id, str(r)[:120]))
     if (r or {}).get("code") != 0:
-        # the claim scene (11xygtvd) F001s in headless chromium; only the
-        # headed CDP Chrome passes Aliyun's risk check -> ensure it is up.
-        if not _ensure_cdp_chrome():
-            event("promo_err", "%s %s: no CDP Chrome, skipping browser claim" % (email, plan_id))
-            return
-        rc = subprocess.call([PY_BROWSER, CLAIM_HELPER, email, pw, plan_id])
-        event("promo_browser", "%s %s helper rc=%s" % (email, plan_id, rc))
+        # Aliyun claim captcha requires interactive solve; never pop up browser tabs
+        # in automated watcher ticks.
+        event("promo_direct", "%s requires interactive captcha, skipping browser popup" % email)
+        return
 
 
 def _promo_tick(email, pw):
@@ -502,6 +500,9 @@ def _plan_claim_tick(email, pw, plan_id):
     if not claimable:
         # no coupon/voucher right now -> nothing the claim endpoint can grant
         return
+    pids = [p.get("plan_id") for p in claimable if p.get("plan_id")]
+    if pids:
+        plan_id = pids[0]
     st[plan_id] = time.time()      # record BEFORE claiming: dedupes watcher retries
     write(p("promos.json"), json.dumps({**load_json(p("promos.json"), {}), email: st}))
     event("plan_inactive", "%s: coupon present -> claiming %s" % (email, plan_id))
@@ -509,16 +510,18 @@ def _plan_claim_tick(email, pw, plan_id):
     event("claim_direct", "%s -> %s" % (email, str(r)[:120]))
     if (r or {}).get("code") in (0, None):
         return
-    # direct claim needs a signed interactive param; only the headed CDP Chrome
-    # can even attempt it (headless SDK init F001s). One attempt per cooldown.
-    if not _ensure_cdp_chrome():
-        event("claim_err", "%s: no CDP Chrome, skipping browser claim" % email)
-        return
-    rc = subprocess.call([PY_BROWSER, CLAIM_HELPER, email, pw, plan_id])
-    event("claim_browser", "%s helper rc=%s" % (email, rc))
+    # Aliyun claim captcha requires interactive solve; never pop up browser tabs
+    # in automated watcher ticks.
+    event("claim_direct", "%s requires interactive captcha, skipping browser popup" % email)
+    return
 
 
 def _watch_tick():
+    try:
+        import patch_catalog_1m
+        patch_catalog_1m.patch_catalog()
+    except Exception:
+        pass
     cache = load_json(p("balance.json"), {})
 
     # 0) Process queued accounts that encountered 3012 or dead JWT
@@ -568,7 +571,12 @@ def _watch_tick():
             if prev_plans.get(x["plan_id"]) != x["status"]:
                 event("plan", "%s %s -> %s" % (email, x["plan_id"], x["status"]))
         if not plans:
-            pid = (prev.get("plans") or [{}])[0].get("plan_id") or "zcode-v3-start-plan"
+            try:
+                available = promo_preview(email)
+                active_pids = [p.get("plan_id") for p in available if p.get("plan_id")]
+            except Exception:
+                active_pids = []
+            pid = active_pids[0] if active_pids else ((prev.get("plans") or [{}])[0].get("plan_id") or "zcode-v3-start-plan-1029")
             _plan_claim_tick(email, pw, pid)
 
         for b in d.get("balances", []):
@@ -792,7 +800,7 @@ def main():
     sa.add_parser("list")
     x = sa.add_parser("rm"); x.add_argument("email")
 
-    s = sub.add_parser("mint"); s.add_argument("email", nargs="?"); s.add_argument("--all", action="store_true"); s.add_argument("--password")
+    s = sub.add_parser("mint"); s.add_argument("email", nargs="?"); s.add_argument("--email", dest="email_opt"); s.add_argument("--all", action="store_true"); s.add_argument("--password")
     s = sub.add_parser("remint")
     s.add_argument("email", nargs="?", help="Specific email to re-mint (optional)")
     s.add_argument("--limit", type=int, default=5, help="Max accounts to re-mint (default: 5)")

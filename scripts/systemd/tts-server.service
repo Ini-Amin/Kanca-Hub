@@ -1,0 +1,18 @@
+[Unit]
+Description=ENI TTS gateway (Inworld + Fish Audio) on :8778
+# Local-only HTTP endpoint so any agent on this box can synthesize speech:
+#   curl -X POST 127.0.0.1:8778/tts -d '{"text": "..."}'  -> audio/mpeg
+# Read-only config from ~/.config/auto-freecf/tts_config.json; keys stay off
+# the wire because the server binds loopback only.
+After=network.target
+
+[Service]
+ExecStart=%h/.local/share/auto-freecf/camoufox-venv/bin/python %h/Auto-FreeCF-personal/tts/tts_server.py --port 8778
+Restart=on-failure
+RestartSec=5
+# Rate-limit pairing per STYLE.md: Restart=on-failure + bounded retries
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

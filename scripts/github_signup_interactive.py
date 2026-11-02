@@ -26,11 +26,18 @@ import sys
 import time
 from pathlib import Path
 
+# Auto-reexec into camoufox-venv if camoufox is missing in current Python
+try:
+    import camoufox
+except ImportError:
+    camoufox_py = Path.home() / ".local/share/auto-freecf/camoufox-venv/bin/python"
+    if camoufox_py.is_file() and sys.executable != str(camoufox_py):
+        os.execv(str(camoufox_py), [str(camoufox_py)] + sys.argv)
+
 # Add repo scripts to sys.path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS_DIR.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
-
 # Ensure XAUTHORITY is set for desktop display
 if not os.environ.get("XAUTHORITY"):
     xauths = sorted(glob.glob("/run/user/1000/xauth_*"), key=os.path.getmtime, reverse=True)
@@ -113,15 +120,28 @@ async def click_continue(page, button_selector: str = "button[data-continue-to],
         pass
 
 
-async def run_interactive(proxy: str | None = None):
+async def run_interactive(proxy: str | None = None, mailbox: str = "emailmux"):
     print("=" * 60)
     print("  GitHub Semi-Automated Registration (Camoufox Interactive)")
     print("=" * 60)
 
-    # 1. Allocate Tempik mailbox
-    local_part = "gh" + "".join(random.choices(string.ascii_lowercase + string.digits, k=7))
-    print(f"[1/4] Mengalokasikan mailbox Tempik: {local_part}@kancalabs.my.id...")
-    box = M.open_mailbox("tempik", domain="kancalabs.my.id", local_part=local_part)
+    # Resolve proxy (Direct IP is strictly forbidden)
+    if not proxy:
+        sys.path.insert(0, "/home/amen/Auto-FreeCF-personal")
+        try:
+            from forge.transport.proxy import urban_vpn_single
+            px = urban_vpn_single("US")
+            if px and px.get("proxy"):
+                proxy = px["proxy"]
+        except Exception:
+            pass
+
+    if not proxy:
+        sys.exit("\n[CRITICAL ERROR] Direct IP egress is forbidden! Clean residential proxy required.")
+
+    # 1. Allocate disposable mailbox (default: emailmux @gmail.com for GitHub acceptance)
+    print(f"[1/4] Mengalokasikan mailbox disposable ({mailbox})...")
+    box = M.open_mailbox(mailbox)
     email = box.address
     password = generate_password()
     username = generate_username()
@@ -131,9 +151,9 @@ async def run_interactive(proxy: str | None = None):
     print(f"      • Password : {password}")
 
     # 2. Launch Camoufox on desktop
-    proxy_cfg = camoufox_helpers.to_camoufox_proxy(proxy) if proxy else None
-    print(f"[2/4] Membuka browser Camoufox di desktop (Proxy: {proxy or 'Direct'})...")
-
+    proxy_cfg = camoufox_helpers.to_camoufox_proxy(proxy)
+    masked_host = proxy.split("@")[-1] if "@" in proxy else proxy
+    print(f"[2/4] Membuka browser Camoufox di desktop (Egress Proxy: {masked_host})...")
     kwargs = {
         "headless": False,
         "humanize": True,
@@ -240,10 +260,11 @@ async def run_interactive(proxy: str | None = None):
 def main():
     parser = argparse.ArgumentParser(description="GitHub Semi-Automated Registration")
     parser.add_argument("--proxy", default=None, help="Proxy URL (e.g. http://host:port)")
+    parser.add_argument("--mailbox", choices=["emailmux", "tempmail", "guerrilla"], default="emailmux",
+                        help="Disposable mailbox provider (default: emailmux @gmail.com)")
     args = parser.parse_args()
 
-    asyncio.run(run_interactive(proxy=args.proxy))
-
+    asyncio.run(run_interactive(proxy=args.proxy, mailbox=args.mailbox))
 
 if __name__ == "__main__":
     main()

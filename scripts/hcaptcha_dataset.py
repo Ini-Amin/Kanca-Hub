@@ -47,9 +47,16 @@ import sys
 import time
 from pathlib import Path
 
+# Auto-reexec into camoufox-venv if camoufox is missing in current Python
+try:
+    import camoufox
+except ImportError:
+    camoufox_py = Path.home() / ".local/share/auto-freecf/camoufox-venv/bin/python"
+    if camoufox_py.is_file() and sys.executable != str(camoufox_py):
+        os.execv(str(camoufox_py), [str(camoufox_py)] + sys.argv)
+
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
-
 DIR = Path(os.environ.get("HCAPTCHA_DIR", REPO / "reports" / "hcaptcha_review"))
 IMG = DIR / "img"
 DATASET = DIR / "dataset.jsonl"
@@ -331,8 +338,14 @@ async def _capture(keep_open: int, email: str, password: str, auto: bool = False
                     v = verdicts[handled_verdict]
                     handled_verdict += 1
                     _resolve_newest(seen, order, v["pass"], stats)
-                continue
 
+                # If registration succeeded and we are on /check-email or /workspace,
+                # immediately exit the puzzle loop to proceed to email verification and key minting!
+                curr_url = page.url or ""
+                if "/check-email" in curr_url or "/workspace" in curr_url:
+                    print(f"[capture] registered! Current URL: {curr_url[:65]} -> proceeding to verify & mint!", flush=True)
+                    break
+                continue
 
             question = info.get("question") or ""
             canvas = info.get("canvas")
@@ -657,6 +670,19 @@ async def _capture(keep_open: int, email: str, password: str, auto: bool = False
                 try:
                     await page.goto(link, wait_until="networkidle", timeout=90000)
                     await page.wait_for_timeout(4000)
+                    # If OpenCode requests password confirmation on the verification page:
+                    try:
+                        pw_input = page.locator('input[type="password"]')
+                        if await pw_input.count() > 0:
+                            print(f"[capture] password confirmation requested on verify page; filling password...", flush=True)
+                            await pw_input.first.fill(password)
+                            await page.wait_for_timeout(500)
+                            submit_btn = page.locator('button[type="submit"]')
+                            if await submit_btn.count() > 0:
+                                await submit_btn.first.click()
+                            await page.wait_for_timeout(4000)
+                    except Exception as _pwe:
+                        print(f"[capture] verify password fill notice: {_pwe}", flush=True)
                 except Exception as exc:
                     print(f"[capture] verify nav: {str(exc)[:100]}", flush=True)
                 print(f"[capture] verify -> {page.url[:80]}", flush=True)

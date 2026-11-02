@@ -11,46 +11,36 @@ import sys
 MenuEntry = tuple[str, str, str, list[str] | None, str | None]
 
 CATEGORIES: list[tuple[str, str, list[MenuEntry]]] = [
-    ("A", "Health & Egress", [
+    ("A", "Egress & Network Guard", [
         ("1", "Check everything is healthy", "doctor", ["doctor"], None),
-        ("2", "Start the proxy gateway (background)", "proxy gateway", ["proxy", "gateway"], None),
-        ("3", "Manage WARP tunnel", "warp", ["warp"], None),
+        ("2", "Start rotating proxy gateway (background)", "proxy gateway", ["proxy", "gateway"], None),
+        ("3", "Manage WARP tunnel (up/down/status)", "warp", ["warp"], None),
         ("4", "Harvest proxies (background)", "proxy harvest", ["proxy", "harvest"], None),
-        ("5", "VPN pool: status + flag cooldowns", "vpn status", ["vpn", "status"], None),
-        ("6", "VPN pool: list entries", "vpn list", ["vpn", "list"], None),
-        ("7", "VPN pool: farm Windscribe accounts", "vpn farm", ["vpn", "farm"], None),
+        ("5", "VPN pool: status & residential fleet", "vpn status", ["vpn", "status"], None),
     ]),
-    ("B", "Account Farms", [
-        ("8",  "GitHub Education account farm", "github farm", ["github", "farm"], None),
-        ("9",  "Create Cloudflare accounts + tokens", "stack signup", ["stack", "signup"], None),
-        ("10", "Login to existing Cloudflare accounts", "stack login", ["stack", "login"], None),
-        ("11", "Create TokenHarbor keys", "thk batch", ["thk", "batch"], None),
-        ("12", "Grok farm", "grok run", ["grok", "run"], None),
-        ("13", "Gmail account farm (needs Litensi SMS)", "gmail farm", ["gmail", "farm"], "note"),
-        ("14", "ZCode: z.ai Start Plan → glm pool", "zcode claim --connect", ["zcode", "claim", "--", "--connect"], None),
-        ("15", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"], None),
+    ("B", "AI Farms & Harvesters (Live Providers)", [
+        ("6",  "ZCode: auto-claim daily plans & pool", "zcode auto-claim", ["zcode", "auto-claim"], None),
+        ("7",  "OpenCode Hub: free models, fleet & bridge", "opencode menu", ["opencode", "menu"], None),
+        ("8",  "Freebuff: sticky-IP agent slots", "freebuff status", ["freebuff", "status"], None),
+        ("9",  "Dahl Inference: 100M-token keys", "dahlfarm mint", ["dahlfarm", "mint"], None),
+        ("10", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"], None),
+        ("11", "GitHub Education account farm", "github farm", ["github", "farm"], None),
+        ("12", "TokenHarbor AI keys", "thk batch", ["thk", "batch"], None),
     ]),
-    ("C", "9Router & Bridges", [
-        ("16", "Inject Grok tokens into 9Router", "grok inject", ["grok", "inject"], None),
-        ("17", "Prune dead 9Router connections", "stack sync --prune", ["stack", "sync", "--prune"], None),
-        ("18", "Wire TokenHarbor env (harbor)", "thk setup-env", ["thk", "setup-env"], None),
-        ("19", "9Router MITM proxy status", "9router mitm status", ["9router", "mitm", "status"], None),
+    ("C", "System, Bridges & Tools", [
+        ("13", "Autofarm any website (paste URL → pipeline)", "autofarm", ["autofarm"], None),
+        ("14", "9Router MITM proxy status & model routing", "9router mitm status", ["9router", "mitm", "status"], None),
+        ("15", "Prune dead 9Router connections", "stack sync --prune", ["stack", "sync", "--prune"], None),
+        ("16", "Free-AI farm status", "freeai status", ["freeai", "status"], None),
     ]),
-    ("D", "Mail & Verification", [
-        ("20", "School mailbox: test login", "mail test", ["mail", "test"], None),
-        ("21", "School mailbox: wait for OTP", "mail otp", ["mail", "otp"], None),
-        ("22", "List teacher-doc countries", "yowes list", ["yowes", "list"], None),
-        ("23", "Cheap OTP mailboxes (Litensi)", "otp", ["otp", "profile"], None),
-    ]),
-    ("E", "Tools", [
-        ("24", "Autofarm any website (paste URL → pipeline)", "autofarm", ["autofarm"], None),
-        ("25", "AutoClaw: z.ai OAuth claim", "autoclaw claim", ["autoclaw", "claim"], "blocked"),
-        ("26", "RadoxAI signup (1 domain/acct)", "freeai radox", ["freeai", "radox"], "note"),
-        ("27", "BeatAPI signup (free credits)", "freeai beatapi", ["freeai", "beatapi"], None),
-        ("28", "Free-AI farm status", "freeai status", ["freeai", "status"], None),
+    ("D", "Frontier & Keyless AI Fleet", [
+        ("17", "Orvis AI: 16 models (Claude 4, GPT-4o, o3-mini)", "orvis menu", ["orvis"], None),
+        ("18", "Koma-Free: keyless instant vLLM inference", "komafree menu", ["komafree"], None),
+        ("19", "StepFun Studio: Step-5 Preview reasoning", "stepfun menu", ["stepfun"], None),
+        ("20", "OpenSatan: anonymous uncensored chat", "opensatan menu", ["opensatan"], None),
+        ("21", "AI Supplies: 22+ provider farm fleet", "supplies farm", ["supplies", "farm"], None),
     ]),
 ]
-
 # Flat view for backward compat (render, dispatch, tests)
 UNIFIED_MENU: list[tuple[str, str, str, list[str] | None]] = []
 for _cat_key, _cat_name, _items in CATEGORIES:
@@ -82,14 +72,17 @@ MENU_BACKGROUND_CMD: dict[str, list[str]] = {
 }
 
 # Menu keys that are account farms -> the menu asks for count/pace/egress.
-MENU_FARM_KEYS = {"8", "10", "11", "12", "13"}
+MENU_FARM_KEYS = {"11", "12"}
 
 # Items needing custom interactive prompts before dispatch.
 _INTERACTIVE_HANDLERS: dict[str, str] = {
-    "24": "_handle_autofarm",
-    "25": "_handle_autoclaw",
+    "13": "_handle_autofarm",
+    "17": "_handle_orvis",
+    "18": "_handle_komafree",
+    "19": "_handle_stepfun",
+    "20": "_handle_opensatan",
+    "21": "_handle_supplies",
 }
-
 _STATUS_LABELS: dict[str, str] = {
     "blocked": " \x1b[31m[blocked]\x1b[0m",
     "note":    " \x1b[33m[!]\x1b[0m",
@@ -110,6 +103,8 @@ def render_menu() -> str:
             lines.append(f"  [{kancahub.col('bold', key):>4}] {desc:<44}{cmd_part}{tag}")
         lines.append("")
     lines.append(f"  [{kancahub.col('bold', '0')}]  Run end-to-end setup (guided pipeline)")
+    lines.append(f"  [{kancahub.col('bold', 'b')}]  Beginner guide (plain English)")
+    lines.append(f"  [{kancahub.col('bold', 'j')}]  Manage background jobs")
     lines.append(f"  [{kancahub.col('bold', 'h')}]  Help & command reference")
     lines.append(f"  [{kancahub.col('bold', 'q')}]  Exit")
     lines.append("")
@@ -138,12 +133,10 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
 
     farms = [
         ("1", "GitHub Education", ["github", "farm"], None, ["stack", "sync"]),
-        ("2", "Cloudflare Workers AI", ["stack", "signup"], ["stack", "inject"], ["stack", "sync"]),
-        ("3", "TokenHarbor AI", ["thk", "batch"], ["thk", "inject"], ["thk", "sync"]),
-        ("4", "Grok / xAI", ["grok", "run"], ["grok", "inject"], ["stack", "sync"]),
-        ("5", "Gmail Farm", ["gmail", "farm"], None, ["stack", "sync"]),
-        ("6", "Abliteration.ai accounts + API keys", ["abliteration", "run"], None, ["stack", "sync"]),
-        ("7", "ZCode: z.ai Start Plan -> glm pool", ["zcode", "claim", "--", "--connect"], None, ["stack", "sync"]),
+        ("2", "TokenHarbor AI", ["thk", "batch"], ["thk", "inject"], ["thk", "sync"]),
+        ("3", "Abliteration.ai accounts + API keys", ["abliteration", "run"], None, ["stack", "sync"]),
+        ("4", "ZCode: z.ai Start Plan -> glm pool", ["zcode", "claim", "--", "--connect"], None, ["stack", "sync"]),
+        ("5", "Dahl Inference 100M keys", ["dahlfarm", "mint"], None, ["stack", "sync"]),
     ]
 
     if farm_choice is None:
@@ -347,40 +340,118 @@ def _handle_autofarm(p: argparse.ArgumentParser) -> None:
         kancahub.dispatch(p, p.parse_args(cmd_args))
     except Exception as e:  # noqa: BLE001
         print(kancahub.col("red", f"Error: {e}"))
-
-
-def _handle_autoclaw(p: argparse.ArgumentParser) -> None:
-    """AutoClaw interactive prompt — currently blocked."""
+def _handle_orvis(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for Orvis AI (Claude 4, GPT-4o, o3-mini)."""
     import kancahub
-    print(kancahub.col("red", "\n  AutoClaw is currently blocked (631001 on all pooled accounts)."))
-    print(kancahub.col("dim", "  See AGENTS.md for details.\n"))
+    print(kancahub.col("bold", "\n── [17] Orvis AI: Frontier Models (100 free credits/acct) ──"))
+    print("  [1] List harvested accounts & credit balance")
+    print("  [2] Quick smoke test — Claude 4 Sonnet ('pong')")
+    print("  [3] Quick smoke test — OpenAI o3-mini ('pong')")
+    print("  [4] Bulk-create new accounts headlessly (AWS Cognito OTP)")
+    print("  [5] Connect / inject into 9Router SQLite database")
+    print("  [q] Cancel / Back to menu\n")
     try:
-        go = input(f" {kancahub.C['bold']}Try anyway? (y/N): {kancahub.C['reset']}").strip().lower()
+        c = input(f" {kancahub.C['bold']}Select [1-5, q]: {kancahub.C['reset']}").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
-    if go not in ("y", "yes"):
-        return
-    print(kancahub.col("cyan", "\n── AutoClaw 2.0.3 (z.ai 1-Click OAuth Claim) ──"))
-    import autoclaw_client as ac
-    default_inv = ac.get_default_invite_code()
-    if default_inv:
-        prompt_txt = f" {kancahub.C['bold']}Invite code to claim [Enter for {default_inv}, q to cancel]: {kancahub.C['reset']}"
-    else:
-        prompt_txt = f" {kancahub.C['bold']}Invite code to claim (+800 tokens, Enter to skip, q to cancel): {kancahub.C['reset']}"
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["orvis", "accounts"]))
+    elif c == "2":
+        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "anthropic/claude-sonnet-4-20250514"]))
+    elif c == "3":
+        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "openai/o3-mini"]))
+    elif c == "4":
+        try:
+            n = input(f" {kancahub.C['bold']}How many accounts [1]: {kancahub.C['reset']}").strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            return
+        kancahub.dispatch(p, p.parse_args(["orvis", "create", "--count", n]))
+    elif c == "5":
+        kancahub.dispatch(p, p.parse_args(["orvis", "connect"]))
+
+
+def _handle_komafree(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for Koma-Free (vLLM inference)."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [18] Koma-Free: Keyless vLLM Inference (Zero Auth) ──"))
+    print("  [1] Check doctor / latency / connectivity")
+    print("  [2] Quick chat test ('pong')")
+    print("  [3] Custom chat prompt")
+    print("  [4] Mint 5 keyless accounts locally")
+    print("  [q] Cancel / Back to menu\n")
     try:
-        raw = input(prompt_txt).strip()
+        c = input(f" {kancahub.C['bold']}Select [1-4, q]: {kancahub.C['reset']}").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
-    if raw.lower() in ("q", "quit", "exit", "cancel"):
-        return
-    bind_code = raw or default_inv
-    cmd_args = ["autoclaw", "claim"]
-    if bind_code:
-        cmd_args.extend(["--bind", bind_code])
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["komafree", "doctor"]))
+    elif c == "2":
+        kancahub.dispatch(p, p.parse_args(["komafree", "chat", "-m", "koma/apple", "-p", "pong"]))
+    elif c == "3":
+        try:
+            txt = input(f" {kancahub.C['bold']}Prompt: {kancahub.C['reset']}").strip() or "hello"
+        except (EOFError, KeyboardInterrupt):
+            return
+        kancahub.dispatch(p, p.parse_args(["komafree", "chat", "-m", "koma/apple", "-p", txt]))
+    elif c == "4":
+        kancahub.dispatch(p, p.parse_args(["komafree", "create", "-n", "5"]))
+
+
+def _handle_stepfun(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for StepFun Studio."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [19] StepFun Studio: Flagship Reasoning (Step-5 Preview) ──"))
+    print("  [1] List StepFun flagship models")
+    print("  [2] Doctor: check config, token quota & 9Router DB")
+    print("  [3] Connect / inject StepFun Studio into 9Router SQLite DB")
+    print("  [q] Cancel / Back to menu\n")
     try:
-        kancahub.dispatch(p, p.parse_args(cmd_args))
-    except Exception as e:  # noqa: BLE001
-        print(kancahub.col("red", f"Error: {e}"))
+        c = input(f" {kancahub.C['bold']}Select [1-3, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["stepfun", "models"]))
+    elif c == "2":
+        kancahub.dispatch(p, p.parse_args(["stepfun", "doctor"]))
+    elif c == "3":
+        kancahub.dispatch(p, p.parse_args(["stepfun", "connect"]))
+
+
+def _handle_opensatan(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for OpenSatan & Ox Alpha."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [20] OpenSatan & Ox Alpha Stealth AI ──"))
+    print("  [1] OpenSatan uncensored chat ('pong')")
+    print("  [2] OpenSatan custom prompt")
+    print("  [3] Mint anonymous OpenSatan identity (4s)")
+    print("  [4] Ox Alpha GLM-5.3 Flash 1M reasoning test")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-4, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["opensatan", "chat", "--prompt", "respond with single word: pong"]))
+    elif c == "2":
+        try:
+            txt = input(f" {kancahub.C['bold']}Prompt: {kancahub.C['reset']}").strip() or "hello"
+        except (EOFError, KeyboardInterrupt):
+            return
+        kancahub.dispatch(p, p.parse_args(["opensatan", "chat", "--prompt", txt]))
+    elif c == "3":
+        kancahub.dispatch(p, p.parse_args(["opensatan", "create", "--count", "1"]))
+    elif c == "4":
+        try:
+            txt = input(f" {kancahub.C['bold']}Message: {kancahub.C['reset']}").strip() or "hello"
+        except (EOFError, KeyboardInterrupt):
+            return
+        kancahub.dispatch(p, p.parse_args(["oxalpha", "test", txt]))
+
+
+def _handle_supplies(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for AI Supplies fleet."""
+    import supplies_registry
+    supplies_registry.farm_supply()
 
 
 # ── Background job management ─────────────────────────────────────────
@@ -441,7 +512,7 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
         print()
 
         try:
-            choice = input(f" {kancahub.C['bold']}Select [1-{UNIFIED_MENU[-1][0]}, 0, j, h, q]: {kancahub.C['reset']}").strip().lower()
+            choice = input(f" {kancahub.C['bold']}Select [1-{UNIFIED_MENU[-1][0]}, 0, b, j, h, q]: {kancahub.C['reset']}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             jobs.stop_all()
             print("\nExiting.")
@@ -452,7 +523,16 @@ def interactive_mode(p: argparse.ArgumentParser) -> int:
             return 0
         if choice == "h":
             p.print_help()
-            return 0
+            try:
+                input(f" {kancahub.C['bold']}Press Enter to return to menu...{kancahub.C['reset']}")
+            except (EOFError, KeyboardInterrupt):
+                jobs.stop_all()
+                return 0
+            print()
+            continue
+        if choice == "b":
+            kancahub.beginner_entry(p)
+            continue
         if choice == "j":
             kancahub._jobs_menu(jobs)
             continue
@@ -537,7 +617,7 @@ def beginner_entry(p: argparse.ArgumentParser) -> int:
 
     print(kancahub.get_ascii_banner())
     print(kancahub.col("bold", "  New here? Just answer the questions.\n"))
-    print(kancahub.col("dim", "  (advanced users: run `kancahub menu` for the full command list)\n"))
+    print(kancahub.col("dim", "  (advanced users: run `kancahub menu` — or just `kancahub` — for the full list)\n"))
     try:
         return beginner_menu()
     except KeyboardInterrupt:

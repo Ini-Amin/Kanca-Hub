@@ -25,15 +25,21 @@ def _extra(a) -> list[str]:
 def cmd_zcode(a) -> int:
     """zcode-claim-9router: z.ai token -> ZCode JWT -> claim -> 9Router glm pool."""
     import kancahub
-    root = VENDOR / "zcode-claim-9router"
     mode = getattr(a, "mode", "claim") or "claim"
+    py = kancahub.pick_python(camoufox=True)
+    if mode == "auto-claim":
+        zscript = kancahub.AUTO_FREECF / "scripts" / "zcode.py"
+        return kancahub.run([py, str(zscript), "promo", "claim"] + _extra(a), cwd=kancahub.AUTO_FREECF)
+    if mode == "quota":
+        zscript = kancahub.AUTO_FREECF / "scripts" / "zcode.py"
+        return kancahub.run([py, str(zscript), "quota"] + _extra(a), cwd=kancahub.AUTO_FREECF)
+
+    root = VENDOR / "zcode-claim-9router"
     script = root / _ZCODE_SCRIPTS.get(mode, "")
     if not script or not script.exists():
         print(kancahub.col("red", f"✗ zcode {mode}: {script} not found"))
         print(kancahub.col("dim", f"  vendor: {root}"))
         return 1
-    # playwright + websockets live only in the camoufox venv.
-    py = kancahub.pick_python(camoufox=True)
     return kancahub.run([py, str(script)] + _extra(a), cwd=root)
 
 
@@ -529,8 +535,66 @@ def cmd_opencode(a) -> int:
     """
     import kancahub
 
-    sub = getattr(a, "oc_cmd", None) or "status"
+    sub = getattr(a, "oc_cmd", None)
+    if not sub and sys.stdin.isatty():
+        sub = "menu"
+    sub = sub or "status"
 
+    if sub == "menu":
+        print("\n" + "═" * 70)
+        print(" " * 20 + "OpenCode AI Controller Hub")
+        print("═" * 70)
+        print("  [1] ⚡ Instant Free AI        (Direct inference — no login required)")
+        print("  [2] 🚀 Fleet Parallel Run     (Dispatch prompt across local + blu VMs)")
+        print("  [3] 👤 User Device Login      (Interactive disposable user authorization)")
+        print("  [4] 🔐 Personal Operator Link (Connect operator's personal Brave session)")
+        print("  [5] 🌾 Bulk Account Farm      (Temp Mail / Guerrilla Mail signup)")
+        print("  [6] 📋 View Free Models       (46 free Zen models)")
+        print("  [7] 🔍 CLI Status & Config    (Version, providers, 9Router keys)")
+        print("  [ q] Cancel / Back")
+        try:
+            choice = input("\nPick an option [1-7]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if choice == "1":
+            try:
+                prompt = input("Enter prompt (default: 'Explain CSRF vulnerability in 2 sentences'): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return 0
+            prompt = prompt or "Explain CSRF vulnerability in 2 sentences"
+            setattr(a, "prompt", prompt)
+            a.oc_cmd = "free"
+            return cmd_opencode(a)
+        elif choice == "2":
+            try:
+                prompt = input("Enter prompt for fleet parallel run: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return 0
+            prompt = prompt or "Ping from orchestrator"
+            setattr(a, "prompt", prompt)
+            setattr(a, "parallel", True)
+            a.oc_cmd = "free"
+            return cmd_opencode(a)
+        elif choice == "3":
+            setattr(a, "personal", False)
+            a.oc_cmd = "login"
+            return cmd_opencode(a)
+        elif choice == "4":
+            setattr(a, "personal", True)
+            a.oc_cmd = "login"
+            return cmd_opencode(a)
+        elif choice == "5":
+            a.oc_cmd = "farm"
+            return cmd_opencode(a)
+        elif choice == "6":
+            a.oc_cmd = "models"
+            setattr(a, "free_only", True)
+            return cmd_opencode(a)
+        elif choice == "7":
+            a.oc_cmd = "status"
+            return cmd_opencode(a)
+        return 0
     if sub == "status":
         binary = shutil.which("opencode") or os.environ.get("OPENCODE_BIN", "")
         if not binary or not Path(binary).is_file():
@@ -618,6 +682,55 @@ def cmd_opencode(a) -> int:
             print(kancahub.col("dim", f"  model: {model}  cwd: {tmp}"))
             return kancahub.run([binary, "run", "-m", model, prompt], cwd=tmp, env=env)
 
+    if sub in ("free", "anon"):
+        model = getattr(a, "model", None) or "opencode/glm-5.3-flash-free"
+        prompt = getattr(a, "prompt", None) or "Hello! What model are you?"
+        remote = getattr(a, "remote", None)
+        parallel = getattr(a, "parallel", False)
+
+        if parallel:
+            print(kancahub.col("cyan", f"  running parallel inference across fleet: local + blu [{model}]"))
+            import concurrent.futures
+
+            def _run_local():
+                binary = shutil.which("opencode") or os.environ.get("OPENCODE_BIN", "") or str(Path.home() / ".opencode/bin/opencode")
+                import tempfile
+                with tempfile.TemporaryDirectory(prefix="oc-anon-") as tmp:
+                    p = subprocess.run([binary, "run", "--standalone", "-m", model, prompt],
+                                       cwd=tmp, capture_output=True, text=True, timeout=60)
+                    return ("local", p.returncode, p.stdout.strip(), p.stderr.strip())
+
+            def _run_remote(host):
+                cmd = f"mkdir -p /tmp/oc_test && cd /tmp/oc_test && /root/.opencode/bin/opencode run --standalone -m {model} {subprocess.list2cmdline([prompt])}"
+                p = subprocess.run(["ssh", host, cmd], capture_output=True, text=True, timeout=60)
+                return (host, p.returncode, p.stdout.strip(), p.stderr.strip())
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+                fut_loc = ex.submit(_run_local)
+                fut_rem = ex.submit(_run_remote, "blu")
+                for fut in [fut_loc, fut_rem]:
+                    host, rc, out, err = fut.result()
+                    if rc == 0:
+                        print(kancahub.col("green", f"\n[{host}] ✓ (rc=0):"))
+                        print(out)
+                    else:
+                        print(kancahub.col("yellow", f"\n[{host}] ✗ (rc={rc}): {err or out}"))
+            return 0
+
+        if remote:
+            print(kancahub.col("cyan", f"  running remote inference on {remote} [{model}]"))
+            rem_cmd = f"mkdir -p /tmp/oc_test && cd /tmp/oc_test && /root/.opencode/bin/opencode run --standalone -m {model} {subprocess.list2cmdline([prompt])}"
+            return kancahub.run(["ssh", remote, rem_cmd])
+
+        binary = shutil.which("opencode") or os.environ.get("OPENCODE_BIN", "") or str(Path.home() / ".opencode/bin/opencode")
+        if not binary or not Path(binary).is_file():
+            print(kancahub.col("red", "✗ opencode CLI not found"))
+            return 1
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="oc-free-") as tmp:
+            print(kancahub.col("dim", f"  standalone free run (no login required): model={model}"))
+            return kancahub.run([binary, "run", "--standalone", "-m", model, prompt], cwd=tmp)
+
     if sub == "zen":
         # Delegate to the shared worker used by the bounty pipeline, so there is
         # one implementation of "one prompt in, one answer out" instead of two.
@@ -653,6 +766,8 @@ def cmd_opencode(a) -> int:
             argv.append("--headed")
         if getattr(a, "count", None):
             argv += ["--count", str(a.count)]
+        if getattr(a, "mail", None):
+            argv += ["--mail", a.mail]
         return kancahub.run(argv)
 
     if sub == "login":
@@ -661,8 +776,10 @@ def cmd_opencode(a) -> int:
             print(kancahub.col("red", f"✗ opencode_auth.py not found at {tool}"))
             return 1
         py = kancahub.pick_python()
-        return kancahub.run([py, str(tool), "device"])
-
+        cmd = [py, str(tool), "device"]
+        if getattr(a, "personal", False):
+            cmd.append("--personal")
+        return kancahub.run(cmd)
     if sub == "bridge":
         tool = kancahub.AUTO_FREECF / "scripts" / "opencode_bridge.py"
         if not tool.exists():
@@ -778,3 +895,213 @@ def cmd_omnirush(a: Any) -> int:
     if sub:
         cmd.append(sub)
     return subprocess.call(cmd)
+
+def cmd_dahlfarm(a: Any) -> int:
+    """dahlfarm: bulk-mint Dahl Inference API keys with Turnstile solve."""
+    import kancahub
+    root = VENDOR / "dahlfarm"
+    if not root.exists():
+        print(kancahub.col("red", f"✗ dahlfarm not found at {root}"))
+        return 1
+    mode = getattr(a, "dahl_cmd", "mint") or "mint"
+    script_map = {
+        "mint": "src/cli.js",
+        "start": "src/launcher.js",
+        "verify": "src/verify.js",
+        "connect": "src/connect-9router.js",
+        "check": "check-proxies.js",
+        "test": "test-models.js",
+    }
+    entry = root / script_map.get(mode, "src/cli.js")
+    node = shutil.which("node") or "/usr/bin/node"
+    return kancahub.run([str(node), str(entry)] + _extra(a), cwd=root)
+
+
+def cmd_proxyvault(a: Any) -> int:
+    """proxyvault: self-hosted proxy harvesting console with FastAPI & React UI."""
+    import kancahub
+    root = VENDOR / "proxyvault"
+    if not root.exists():
+        print(kancahub.col("red", f"✗ proxyvault not found at {root}"))
+        return 1
+    mode = getattr(a, "pv_cmd", "serve") or "serve"
+    py = kancahub.pick_python()
+    if mode == "serve":
+        port = str(getattr(a, "port", 8888))
+        print(kancahub.col("green", f"[*] Starting ProxyVault on http://127.0.0.1:{port}"))
+        return kancahub.run([py, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", port], cwd=root)
+    elif mode == "demo":
+        return kancahub.run([py, "scripts/record_demo.py"], cwd=root)
+    return 0
+def inject_orvis_9router(base_url: str = "http://127.0.0.1:8796/v1") -> bool:
+    """Inject Orvis OpenAI-compatible bridge into 9Router SQLite DB without passwords."""
+    import sqlite3
+    import uuid
+    db_path = Path.home() / ".9router/db/data.sqlite"
+    if not db_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        node_id = "openai-compatible-chat-orvis-bridge"
+        node_name = "Orvis"
+        now = int(time.time() * 1000)
+
+        cur.execute("SELECT id FROM providerNodes WHERE id=?", (node_id,))
+        if not cur.fetchone():
+            cur.execute(
+                "INSERT INTO providerNodes (id, name, prefix, apiType, baseUrl, createdAt, updatedAt) "
+                "VALUES (?, ?, 'orvis', 'openai-compatible', ?, ?, ?)",
+                (node_id, node_name, base_url, now, now),
+            )
+
+        cdata = json.dumps({
+            "name": "Orvis-Bridge-Local",
+            "apiKey": "sk-orvis-local-bridge",
+            "providerSpecificData": {"baseUrl": base_url},
+        })
+        cur.execute("SELECT id FROM providerConnections WHERE provider=?", (node_id,))
+        existing = cur.fetchone()
+        if existing:
+            cur.execute("UPDATE providerConnections SET data=?, isActive=1 WHERE provider=?", (cdata, node_id))
+        else:
+            cid = str(uuid.uuid4())
+            cur.execute(
+                "INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) "
+                "VALUES (?, ?, 'apikey', 'Orvis-Bridge-Local', 1, 1, ?, ?, ?)",
+                (cid, node_id, cdata, now, now),
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def cmd_orvis(a: Any) -> int:
+    """orvispool: bulk Orvis AI accounts (100 free credits each) -> 16 frontier models bridge."""
+    import kancahub
+    root = VENDOR / "orvispool"
+    if not root.exists():
+        print(kancahub.col("red", f"✗ orvispool not found at {root}"))
+        return 1
+    binary = root / "bin" / "orvispool"
+    if not binary.is_file():
+        print(kancahub.col("cyan", "[*] Compiling orvispool binary..."))
+        ret = subprocess.call(["go", "build", "-o", "bin/orvispool", "./cmd/orvispool"], cwd=root)
+        if ret != 0 or not binary.is_file():
+            print(kancahub.col("red", "✗ Failed to compile orvispool"))
+            return 1
+
+    mode = getattr(a, "orvis_cmd", "accounts") or "accounts"
+    extra = _extra(a)
+
+    if mode == "connect":
+        port = getattr(a, "port", 8796) or 8796
+        base_url = f"http://127.0.0.1:{port}/v1"
+        ok = inject_orvis_9router(base_url)
+        if ok:
+            print(kancahub.col("green", f"✓ Injected Orvis node ({base_url}) into 9Router SQLite DB!"))
+            print(kancahub.col("dim", "  Prefix: orvis/* (e.g. orvis/anthropic/claude-sonnet-4-20250514, orvis/openai/o3-mini)"))
+            return 0
+        else:
+            print(kancahub.col("red", "✗ Failed to inject Orvis into 9Router DB"))
+            return 1
+
+    if mode == "test":
+        port = getattr(a, "port", 8796) or 8796
+        import urllib.request
+        model = getattr(a, "model", "anthropic/claude-sonnet-4-20250514") or "anthropic/claude-sonnet-4-20250514"
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": "respond with pong"}],
+        }).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json", "Authorization": "Bearer sk-orvis-local-bridge"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                res = json.loads(r.read().decode())
+                ans = res["choices"][0]["message"]["content"]
+                print(kancahub.col("green", f"✓ Orvis Bridge ({model}): {ans}"))
+                return 0
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ Orvis test failed: {exc}"))
+            return 1
+
+    cmd = [str(binary), mode] + extra
+    return kancahub.run(cmd, cwd=root)
+
+
+def cmd_komafree(a: Any) -> int:
+    """komafree: keyless instant vLLM onboarding & chat."""
+    import kancahub
+    root = VENDOR / "komafree"
+    if not root.exists():
+        print(kancahub.col("red", f"✗ komafree not found at {root}"))
+        return 1
+    binary = root / "bin" / "komafree"
+    if not binary.is_file():
+        print(kancahub.col("cyan", "[*] Compiling komafree binary..."))
+        ret = subprocess.call(["go", "build", "-o", "bin/komafree", "./cmd/komafree"], cwd=root)
+        if ret != 0 or not binary.is_file():
+            print(kancahub.col("red", "✗ Failed to compile komafree"))
+            return 1
+
+    mode = getattr(a, "koma_cmd", "accounts") or "accounts"
+    extra = _extra(a)
+    cmd = [str(binary), mode] + extra
+    return kancahub.run(cmd, cwd=root)
+
+
+def cmd_stepfun(a: Any) -> int:
+    """stepfunrouter: bulk StepFun accounts & Studio session capture (Step-5 reasoning)."""
+    import kancahub
+    root = VENDOR / "stepfunrouter"
+    if not root.exists():
+        print(kancahub.col("red", f"✗ stepfunrouter not found at {root}"))
+        return 1
+    binary = root / "bin" / "stepfunrouter"
+    if not binary.is_file():
+        print(kancahub.col("cyan", "[*] Compiling stepfunrouter binary..."))
+        ret = subprocess.call(["go", "build", "-o", "bin/stepfunrouter", "./cmd/stepfunrouter"], cwd=root)
+        if ret != 0 or not binary.is_file():
+            print(kancahub.col("red", "✗ Failed to compile stepfunrouter"))
+            return 1
+
+    mode = getattr(a, "step_cmd", "models") or "models"
+    extra = _extra(a)
+    cmd = [str(binary), mode] + extra
+    return kancahub.run(cmd, cwd=root)
+
+
+def cmd_opensatan(a: Any) -> int:
+    """opensatan-bulk-9router: anonymous uncensored models pool."""
+    import kancahub
+    root = VENDOR / "opensatan-bulk-9router"
+    if not root.exists():
+        print(kancahub.col("red", f"✗ opensatan not found at {root}"))
+        return 1
+    mode = getattr(a, "satan_cmd", "list") or "list"
+    script = root / "src" / "cli.js"
+    node = shutil.which("node") or "/usr/bin/node"
+    extra = _extra(a)
+    cmd = [str(node), str(script), mode] + extra
+    return kancahub.run(cmd, cwd=root, env={"POOL_PORT": "8784"})
+
+
+def cmd_oxalpha(a: Any) -> int:
+    """oxalpha-bulk-9router: GLM-5.3 Flash 1M token stealth reasoning pool."""
+    import kancahub
+    root = VENDOR / "oxalpha-bulk-9router"
+    if not root.exists():
+        print(kancahub.col("red", f"✗ oxalpha not found at {root}"))
+        return 1
+    mode = getattr(a, "ox_cmd", "list") or "list"
+    script = root / "src" / "cli.js"
+    node = shutil.which("node") or "/usr/bin/node"
+    extra = _extra(a)
+    cmd = [str(node), str(script), mode] + extra
+    return kancahub.run(cmd, cwd=root, env={"PORT": "8781"})

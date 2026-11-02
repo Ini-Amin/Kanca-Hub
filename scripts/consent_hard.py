@@ -15,6 +15,7 @@ left the consent screen.
 from __future__ import annotations
 
 import asyncio
+import re
 from urllib.parse import parse_qs, urlparse
 
 # affirmative labels seen on chat.z.ai / zcode consent screens (en + zh)
@@ -101,11 +102,25 @@ async def signin_zai_email(page, email: str, password: str, *, puzzles: int = 25
     import captcha_slider as CS
 
     try:
-        await page.get_by_text("Continue with Email", exact=False).first.click(timeout=8000)
-        await page.wait_for_timeout(2500)
-    except Exception as e:  # noqa: BLE001 — already on the consent screen
-        log(f"  no email form ({str(e)[:40]}) — assuming an existing z.ai session")
-        return True
+        if await page.locator('input[type="email"]').count() == 0:
+            btn = page.locator("button:has-text('Email')").first
+            if await btn.count() == 0:
+                # `text=/regex/` is no longer valid inside a comma-joined CSS
+                # selector (Playwright >=1.4x throws "Unexpected token '='").
+                # Fall back to a get_by_text regex probe instead.
+                btn = page.get_by_text(re.compile(r"Continue.*Email", re.I)).first
+            if await btn.count() > 0:
+                await btn.click(timeout=8000)
+                await page.wait_for_timeout(2500)
+            elif "code=" in page.url or "/oauth/authorize" in page.url:
+                log("  already on consent/auth page")
+                return True
+    except Exception as e:  # noqa: BLE001
+        if "code=" in page.url or "/oauth/authorize" in page.url:
+            log("  already on consent/auth page")
+            return True
+        log(f"  email button failed: {e}")
+        return False
 
     await page.fill('input[type="email"]', email, timeout=8000)
     await page.fill('input[type="password"]', password, timeout=8000)
@@ -122,4 +137,4 @@ async def signin_zai_email(page, email: str, password: str, *, puzzles: int = 25
     await page.wait_for_timeout(8000)
 
     body = await page.evaluate("() => document.body.innerText || ''")
-    return "access your Z.ai account" in body or "code=" in page.url
+    return "access your Z.ai account" in body or "code=" in page.url or "/oauth/authorize" in page.url
