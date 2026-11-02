@@ -241,9 +241,143 @@ def dispatch_chat(model: str, prompt: str) -> dict:
     # Default fallback to Koma
     return KomaFree.chat(prompt)
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+DEFAULT_NATIVE_PORT = 8790
+
+
+class NativeBridgeHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+    def do_GET(self) -> None:
+        if self.path in ("/v1/models", "/models"):
+            models_data = [
+                {"id": m, "object": "model", "created": int(time.time()), "owned_by": "kancahub-native"}
+                for m in SUPPORTED_MODELS
+            ]
+            self._send_json(200, {"object": "list", "data": models_data})
+        elif self.path in ("/health", "/api/health"):
+            self._send_json(200, {"status": "ok", "bridge": "kancahub-native", "port": DEFAULT_NATIVE_PORT})
+        else:
+            self._send_json(404, {"error": "Not found"})
+
+    def do_POST(self) -> None:
+        if self.path in ("/v1/chat/completions", "/chat/completions"):
+            length = int(self.headers.get("content-length", 0))
+            raw = self.rfile.read(length)
+            try:
+                body = json.loads(raw)
+            except Exception as e:
+                self._send_json(400, {"error": f"Invalid JSON: {e}"})
+                return
+
+            model = body.get("model", "koma/apple")
+            messages = body.get("messages", [])
+
+            user_parts = [m.get("content", "") for m in messages if m.get("role") in ("user", "human")]
+            prompt = "\n\n".join(user_parts) or "hello"
+
+            try:
+                res = dispatch_chat(model, prompt)
+                content = res.get("text", "")
+                usage = res.get("usage") or {"prompt_tokens": len(prompt.split()), "completion_tokens": len(content.split()), "total_tokens": len(prompt.split()) + len(content.split())}
+                resp = {
+                    "id": f"chatcmpl-native-{secrets.token_hex(8)}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": content},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": usage,
+                }
+                self._send_json(200, resp)
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+        else:
+            self._send_json(404, {"error": "Not found"})
+
+    def _send_json(self, status: int, data: dict) -> None:
+        payload = json.dumps(data).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def inject_9router(base_url: str = f"http://127.0.0.1:{DEFAULT_NATIVE_PORT}/v1") -> bool:
+    """Inject Koma and OpenSatan native nodes directly into 9Router SQLite DB."""
+    import sqlite3
+    db_path = Path.home() / ".9router/db/data.sqlite"
+    if not db_path.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        now = str(int(time.time() * 1000))
+
+        providers = [
+            ("openai-compatible-chat-koma-bridge", "Koma", "koma", "koma/apple"),
+            ("openai-compatible-chat-opensatan-bridge", "OpenSatan", "opensatan", "opensatan/satan"),
+        ]
+        for node_id, node_name, prefix, def_model in providers:
+            cur.execute("SELECT id FROM providerNodes WHERE id=?", (node_id,))
+            if not cur.fetchone():
+                ndata = json.dumps({"prefix": prefix, "baseUrl": base_url, "apiType": "chat"})
+                cur.execute(
+                    "INSERT INTO providerNodes (id, type, name, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
+                    (node_id, "openai-compatible", node_name, ndata, now, now),
+                )
+            cdata = json.dumps({
+                "name": f"{node_name}-Native-Bridge",
+                "apiKey": f"sk-{prefix}-local-bridge",
+                "defaultModel": def_model,
+                "providerSpecificData": {"baseUrl": base_url, "prefix": prefix, "apiType": "chat"},
+            })
+            cur.execute("SELECT id FROM providerConnections WHERE provider=?", (node_id,))
+            existing = cur.fetchone()
+            if existing:
+                cur.execute("UPDATE providerConnections SET data=?, isActive=1 WHERE provider=?", (cdata, node_id))
+            else:
+                cid = str(uuid.uuid4())
+                cur.execute(
+                    "INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (cid, node_id, "apikey", f"{node_name}-Native-Bridge", 1, 1, cdata, now, now),
+                )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def run_bridge_server(port: int = DEFAULT_NATIVE_PORT) -> None:
+    inject_9router(f"http://127.0.0.1:{port}/v1")
+    server = ThreadingHTTPServer(("127.0.0.1", port), NativeBridgeHandler)
+    print(f"[native-bridge] KancaHub Native AI Bridge listening on http://127.0.0.1:{port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[native-bridge] Stopped.")
+
 
 if __name__ == "__main__":
-    print("=== Testing Native Providers in Python ===")
-    print("1. KomaFree:", KomaFree.chat("reply: pong")["text"])
-    print("2. OpenSatan:", OpenSatan.chat("reply: pong")["text"][:50])
-    print("✓ All native providers operational.")
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        port = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_NATIVE_PORT
+        run_bridge_server(port)
+    elif len(sys.argv) > 1 and sys.argv[1] == "inject":
+        ok = inject_9router()
+        print("Injected into 9Router:", ok)
+    else:
+        print("=== Testing Native Providers in Python ===")
+        print("1. KomaFree:", KomaFree.chat("reply: pong")["text"])
+        print("2. OpenSatan:", OpenSatan.chat("reply: pong")["text"][:50])
+        print("✓ All native providers operational.")

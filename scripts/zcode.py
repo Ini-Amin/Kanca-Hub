@@ -619,7 +619,7 @@ def _watch_tick():
                 active_pids = [p.get("plan_id") for p in available if p.get("plan_id")]
             except Exception:
                 active_pids = []
-            pid = active_pids[0] if active_pids else ((prev.get("plans") or [{}])[0].get("plan_id") or "zcode-v3-start-plan-1029")
+            pid = active_pids[0] if active_pids else ((prev.get("plans") or [{}])[0].get("plan_id") or "zcode-v3-start-plan-0817")
             _plan_claim_tick(email, pw, pid)
 
         for b in d.get("balances", []):
@@ -640,9 +640,10 @@ def _watch_tick():
                         "plans": [{"plan_id": x["plan_id"], "status": x["status"]} for x in d.get("plans", [])]}
     write(p("balance.json"), json.dumps(cache))
     cfg = load_json(p("config.json"), {})
-    if (cfg.get("promo") or {}).get("auto_claim"):
+    if (cfg.get("promo") or {}).get("auto_claim", True):
         for email, pw in accounts():
             _promo_tick(email, pw)
+            time.sleep(0.5)
     _autofarm_tick(cache)
     total_flash = sum(
         (b.get("remaining_units") or (b.get("total_units", 0) - b.get("used_units", 0)))

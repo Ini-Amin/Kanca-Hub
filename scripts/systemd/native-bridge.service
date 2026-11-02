@@ -1,0 +1,16 @@
+[Unit]
+Description=KancaHub Native AI Bridge (:8790)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Auto-FreeCF
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 scripts/native_providers.py serve 8790
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
