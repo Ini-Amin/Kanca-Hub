@@ -199,6 +199,38 @@ SUPPLIES = {
         "auth": "Automated console signup -> Model API key minting",
         "best_feature": "Direct API keys injected into 9Router.",
     },
+    "opencode2api-go": {
+        "title": "OpenCode Zen/Go Gateway (Go)",
+        "lang": "Go (static binary)",
+        "url": "https://github.com/jasonxu114514/opencode2api.git",
+        "models": "OpenCode Zen / Go models (GLM-5.3, DeepSeek-V4.1, Flint, Nemotron)",
+        "auth": "Dual-tier pooling (Zen / Go keys) + anonymous lane (Bearer public) + userspace WARP",
+        "best_feature": "High-performance Go gateway with userspace WARP egress and client fingerprinting.",
+    },
+    "opencode2api-node": {
+        "title": "OpenCode Tool-Lock Gateway",
+        "lang": "JavaScript (Node.js)",
+        "url": "https://github.com/TiaraBasori/opencode2api.git",
+        "models": "OpenCode free-tier models with tool-lock",
+        "auth": "Local daemon basic auth with tool-lock plugin",
+        "best_feature": "Stops 16k tool token waste per request, preserving free quota 400x longer.",
+    },
+    "trae2api-cn": {
+        "title": "ByteDance Trae AI Relay",
+        "lang": "Python",
+        "url": "https://github.com/autumnsentiment/Trae2api-cn.git",
+        "models": "Trae CN models (GLM-5.3, DeepSeek-V4 Pro, 6.1sol) with 1M context",
+        "auth": "Trae IDE local storage decrypt / web OAuth login / multi-account rotation",
+        "best_feature": "1M max context reasoning with automatic checkin and reasoning effort levels.",
+    },
+    "cursor2api": {
+        "title": "Cursor Agent.v1 Protocol Gateway",
+        "lang": "TypeScript",
+        "url": "https://github.com/AstroQore/cursor2api.git",
+        "models": "Claude 3.5 Sonnet, GPT-4o, Cursor fast models",
+        "auth": "Direct agent.v1 protocol over WebSocket / gRPC",
+        "best_feature": "Real streaming tool_calls without cursor-agent CLI subprocess.",
+    },
 }
 
 
@@ -244,6 +276,7 @@ def clone_supply(name: str) -> None:
 CATEGORIZED_SUPPLIES = [
     ("Frontier & Multimodal", [
         ("orvispool", "Orvis AI Factory (:8796)", "16 models (Claude 4, GPT-4o, o3-mini, Gemini 2.5)"),
+        ("cursor2api", "Cursor Agent.v1 Gateway", "Claude 3.5 Sonnet, GPT-4o via agent.v1 protocol"),
         ("minitoolai-bulk-9router", "MiniToolAI 62-Model Pool", "62 working free models with round-robin"),
         ("virtuachat-9router", "VirtuaChat to 9Router", "8 models (Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro)"),
         ("iweaver-cli", "iWeaver.ai Bulk Harvester", "17 models with agentic search & mindmaps"),
@@ -252,9 +285,12 @@ CATEGORIZED_SUPPLIES = [
         ("arena-auto-chat", "LMSYS / Arena Auto-Chat", "Direct battle-tested frontier models"),
     ]),
     ("Coding & Deep Reasoning", [
+        ("opencode2api-go", "OpenCode Zen/Go Gateway", "Dual-tier pooling + userspace WARP + anonymous"),
+        ("trae2api-cn", "ByteDance Trae AI Relay", "GLM-5.3, DeepSeek-V4 Pro, 1M context reasoning"),
         ("komafree", "Koma-Free Keyless Onboarding", "Keyless UUID pair -> koma/apple vLLM"),
         ("stepfunrouter", "StepFun Studio Router", "Step-5 Preview & Step-3.7 Flash free models"),
         ("oxalpha-bulk-9router", "Ox Alpha Reasoning Pool", "GLM-5.3 Flash 1M token reasoning"),
+        ("opencode2api-node", "OpenCode Tool-Lock Gateway", "Token-saver proxy preventing 16k tool burn"),
         ("yukirouter", "Yuki AI Router", "Yuki Coding & Chat models"),
         ("nottutpool", "Nottut AI Session Pool", "Nottut AI reasoning models (keepalive pool)"),
         ("mmrouter", "MindMap AI Router", "MindMap structured reasoning models"),
