@@ -641,6 +641,7 @@ async def _is_captcha_present(page) -> bool:
         "[data-e2e='enforcement-frame']",
         ".cf-turnstile",
         "iframe[src*='challenges.cloudflare.com']",
+        "script[src*='challenges.cloudflare.com/turnstile']",
     ]
     for sel in captcha_selectors:
         try:
@@ -951,9 +952,17 @@ async def _route_email(page, url, email, password, username, host, result,
     # Step 1: fill initial fields (email, and password if present)
     try:
         await _fill_known_fields(page, email, password, username)
-        if await page.query_selector(".cf-turnstile, iframe[src*='challenges.cloudflare.com']"):
-            print("  • Cloudflare Turnstile detected! Waiting for challenge…")
-            await page.wait_for_timeout(5000)
+        try:
+            from turnstile_solver import solve_turnstile_human, sniff_idp_architecture
+            idp = await sniff_idp_architecture(page)
+            if idp.get("has_idp"):
+                print(f"  • Architecture detected: Client-side IdP ({idp.get('provider')})")
+            if await page.query_selector(".cf-turnstile, iframe[src*='challenges.cloudflare.com'], script[src*='challenges.cloudflare.com/turnstile']"):
+                await solve_turnstile_human(page, timeout_s=15.0, log_fn=print)
+        except Exception:
+            if await page.query_selector(".cf-turnstile, iframe[src*='challenges.cloudflare.com']"):
+                print("  • Cloudflare Turnstile detected! Waiting for challenge…")
+                await page.wait_for_timeout(5000)
     except Exception as exc:
         result["stopped_at"] = "fill_failed"
         result["error"] = f"form fill failed at step 1: {exc}"
