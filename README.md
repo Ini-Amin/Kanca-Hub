@@ -2,7 +2,7 @@
 
 # 🌾 KancaHub
 
-**One CLI for the whole account-farming toolkit** — Cloudflare Workers AI,
+**One CLI for supply** — Cloudflare Workers AI,
 proxy harvesting, WARP tunnelling, ChatGPT, Grok/xAI, TokenHarbor,
 and teacher document generation, unified behind `kancahub`.
 ASK your agent to setup this ✌️.
