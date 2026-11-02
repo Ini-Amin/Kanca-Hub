@@ -126,7 +126,7 @@ _REEXPORTS = {
     "doctor": "cmd_doctor",
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
-    "commands_vendor": "cmd_zcode cmd_abliteration cmd_autoclaw cmd_notrack cmd_opencode cmd_omnirush cmd_dahlfarm cmd_proxyvault cmd_orvis cmd_komafree cmd_stepfun cmd_opensatan cmd_oxalpha",
+    "commands_vendor": "cmd_zcode cmd_abliteration cmd_notrack cmd_opencode cmd_omnirush cmd_dahlfarm cmd_proxyvault cmd_orvis cmd_komafree cmd_stepfun cmd_opensatan cmd_oxalpha",
     "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api _r9_models cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
                       "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
@@ -902,48 +902,11 @@ def build_parser() -> argparse.ArgumentParser:
                     default="list", help="create (mint sessions), adapter/run (serve :8784), list, verify, connect")
     nt.add_argument("extra", nargs=argparse.REMAINDER, help="args passed straight to the vendor CLI")
 
-    ac = sub.add_parser("autoclaw",
-                        help="AutoClaw 2.0.3: fission referral bonuses & z.ai OAuth login")
-    acs = ac.add_subparsers(dest="autoclaw_cmd")
-    acs.add_parser("status", help="check fission campaign status & reward amounts (default)")
-    acs.add_parser("captcha", help="show Aliyun Captcha 2.0 configuration (scene_id, prefix)")
-    ac_cl = acs.add_parser("claim", help="one-click z.ai OAuth claim: listen, login & claim +800 referral tokens")
-    ac_cl.add_argument("--bind", default=None, metavar="CODE", help="inviter referral code (omit = guided menu; Enter skips, q cancels)")
-    ac_cl.add_argument("--verify-param", default=None, metavar="PROOF", help="Aliyun captcha proof (optional)")
-    ac_cl.add_argument("--port", type=int, default=18432, help="local loopback port (default: 18432)")
-
-
     om = sub.add_parser("omnirush", help="OmniRush free AI provider: OAuth device-flow login & bridge server (:8795)")
     oms = om.add_subparsers(dest="omnirush_cmd")
     oms.add_parser("login", help="authorize in browser via OAuth device-flow (default)")
     oms.add_parser("status", help="check current token and quota")
     oms.add_parser("serve", help="run OpenAI-compatible HTTP bridge on :8795")
-
-    ac_log = acs.add_parser("login", help="log in via z.ai OAuth and auto-bind referral code")
-    ac_log.add_argument("--listen", action="store_true", help="listen on local loopback to automatically catch OAuth callback from browser")
-    ac_log.add_argument("--verify-param", default=None, metavar="PROOF", help="Aliyun captcha verifyParam proof (opens browser and handles full flow)")
-    ac_log.add_argument("--code", default=None, help="OAuth authorization code (if manual)")
-    ac_log.add_argument("--state", default=None, help="OAuth state parameter (if manual)")
-    ac_log.add_argument("--provider", choices=["zai", "google"], default="zai", help="OAuth provider (default: zai)")
-    ac_log.add_argument("--bind", default=None, metavar="CODE", help="auto-bind inviter referral code on login (+800 tokens)")
-    ac_log.add_argument("--port", type=int, default=18432, help="local loopback port (default: 18432)")
-    ac_log.add_argument("--navigate-uri", default=None, help="custom OAuth callback URI")
-
-    ac_url = acs.add_parser("oauth-url", help="advanced: build z.ai OAuth URL from a captcha proof (most users want `autoclaw claim` instead)")
-    ac_url.add_argument("--verify-param", required=True, help="Aliyun captcha verifyParam proof (you get this automatically via `autoclaw claim`, not by hand)")
-    ac_url.add_argument("--provider", choices=["zai", "google"], default="zai", help="OAuth provider (default: zai)")
-    ac_url.add_argument("--port", type=int, default=18432, help="local loopback port (default: 18432)")
-    ac_url.add_argument("--navigate-uri", default=None, help="custom OAuth callback URI")
-
-    ac_bind = acs.add_parser("bind", help="bind inviter referral code (claim fission reward)")
-    ac_bind.add_argument("invite_code", nargs="?", default=None, help="inviter referral/invite code (interactive prompt if omitted)")
-    ac_bind.add_argument("--token", default=None, help="bearer access token (default: latest saved account)")
-
-    ac_wal = acs.add_parser("wallets", help="check wallet balances and credit grants")
-    ac_wal.add_argument("--token", default=None, help="bearer access token (default: latest saved account)")
-
-    acs.add_parser("accounts", help="list saved AutoClaw accounts")
-
     # ---- autofarm ----
     af = sub.add_parser("autofarm", help="paste any website URL to adapt and autofarm with clean proxies")
     af.add_argument("url", nargs="?", default=None, help="website signup/login URL")
@@ -1161,8 +1124,6 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_abliteration(args)
     if g == "opencode":
         return cmd_opencode(args)
-    if g == "autoclaw":
-        return cmd_autoclaw(args)
     if g == "notrack":
         return cmd_notrack(args)
     if g == "hunt":
