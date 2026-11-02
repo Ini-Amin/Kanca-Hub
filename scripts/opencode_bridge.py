@@ -32,7 +32,104 @@ from typing import Any
 SERVICE_JSON = Path.home() / ".local/state/opencode/service.json"
 AUTH_JSON = Path.home() / ".local/share/opencode/auth.json"
 ACCOUNTS_JSON = Path.home() / ".config/auto-freecf/opencode_accounts.json"
+POOL_FILE = Path.home() / ".config/auto-freecf/opencode_pool.json"
 DEFAULT_PORT = 8791
+
+
+class OpenCodeKeyPool:
+    """Manages pool of OpenCode personal API keys with automatic failover."""
+
+    def __init__(self):
+        self.keys: list[str] = []
+        self.index: int = 0
+        self.cooldowns: dict[str, float] = {}
+        self.reload()
+
+    def reload(self) -> None:
+        found: set[str] = set()
+
+        # 1. Stored pool file
+        if POOL_FILE.is_file():
+            try:
+                d = json.loads(POOL_FILE.read_text())
+                if isinstance(d, list):
+                    for item in d:
+                        k = item.get("key") if isinstance(item, dict) else item
+                        if k and isinstance(k, str) and k.startswith("oc_sk_"):
+                            found.add(k)
+            except Exception:
+                pass
+
+        # 2. 9Router SQLite database
+        db_path = Path.home() / ".9router/db/data.sqlite"
+        if db_path.is_file():
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(db_path))
+                c = conn.cursor()
+                c.execute("SELECT data FROM providerConnections WHERE provider LIKE '%opencode%'")
+                for r in c.fetchall():
+                    try:
+                        k = json.loads(r[0]).get("apiKey")
+                        if k and isinstance(k, str) and k.startswith("oc_sk_"):
+                            found.add(k)
+                    except Exception:
+                        pass
+                conn.close()
+            except Exception:
+                pass
+
+        # 3. Active auth.json
+        for af in (AUTH_JSON, Path.home() / ".config/opencode/auth.json"):
+            if af.is_file():
+                try:
+                    curr = json.loads(af.read_text()).get("opencode", {}).get("key")
+                    if curr and isinstance(curr, str) and curr.startswith("oc_sk_"):
+                        found.add(curr)
+                except Exception:
+                    pass
+
+        self.keys = sorted(found)
+        if self.keys:
+            try:
+                POOL_FILE.parent.mkdir(parents=True, exist_ok=True)
+                POOL_FILE.write_text(json.dumps([{"key": k} for k in self.keys], indent=2))
+            except Exception:
+                pass
+
+    def rotate_next(self) -> str | None:
+        if not self.keys:
+            return None
+        now = time.time()
+        for _ in range(len(self.keys)):
+            k = self.keys[self.index % len(self.keys)]
+            self.index += 1
+            if now > self.cooldowns.get(k, 0):
+                self._apply_key(k)
+                return k
+        # If all in cooldown, pick the one with earliest expiration
+        earliest_k = min(self.keys, key=lambda k: self.cooldowns.get(k, 0))
+        self._apply_key(earliest_k)
+        return earliest_k
+
+    def mark_cooldown(self, key: str, duration: float = 300.0) -> None:
+        self.cooldowns[key] = time.time() + duration
+
+    def _apply_key(self, key: str) -> None:
+        for af in (AUTH_JSON, Path.home() / ".config/opencode/auth.json"):
+            if not af.is_file():
+                continue
+            try:
+                d = json.loads(af.read_text())
+                if d.get("opencode", {}).get("key") != key:
+                    d.setdefault("opencode", {})["key"] = key
+                    d["opencode"]["type"] = "api"
+                    af.write_text(json.dumps(d, indent=2))
+            except Exception:
+                pass
+
+
+KEY_POOL = OpenCodeKeyPool()
 
 FREE_MODELS = [
     "glm-5.3-flash-free",
@@ -153,7 +250,7 @@ def _daemon_request(info: OpenCodeServiceInfo, path: str, method: str = "GET", d
             return e.code, err_body
 
 
-def chat_generate(model_name: str, prompt: str, *, system_prompt: str = "") -> dict:
+def _chat_generate_single(model_name: str, prompt: str, *, system_prompt: str = "") -> dict:
     info = get_service_info()
     model_id = model_name.split("/")[-1]
 
@@ -241,6 +338,25 @@ def chat_generate(model_name: str, prompt: str, *, system_prompt: str = "") -> d
         # Cleanup session
         _daemon_request(info, f"/api/session/{sid}", "DELETE")
 
+def chat_generate(model_name: str, prompt: str, *, system_prompt: str = "") -> dict:
+    """Execute chat completion with automatic key rotation on rate limits."""
+    last_err: Exception | None = None
+    max_attempts = max(1, min(len(KEY_POOL.keys), 5))
+
+    for attempt in range(max_attempts):
+        key = KEY_POOL.rotate_next()
+        try:
+            return _chat_generate_single(model_name, prompt, system_prompt=system_prompt)
+        except Exception as exc:
+            err_str = str(exc)
+            last_err = exc
+            if "Free usage limit reached" in err_str or "rate limit" in err_str.lower() or "429" in err_str:
+                if key:
+                    KEY_POOL.mark_cooldown(key, duration=300.0)
+                continue
+            raise
+
+    raise last_err or RuntimeError("All OpenCode keys in pool failed")
 
 class BridgeHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
@@ -258,9 +374,23 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 for m in FREE_MODELS
             ]
             self._send_json(200, {"object": "list", "data": models_list})
+        elif self.path in ("/pool", "/v1/pool", "/keys"):
+            now = time.time()
+            pool_info = {
+                "total_keys": len(KEY_POOL.keys),
+                "active_keys": sum(1 for k in KEY_POOL.keys if now > KEY_POOL.cooldowns.get(k, 0)),
+                "keys": [
+                    {
+                        "key": f"{k[:12]}...{k[-4:]}",
+                        "cooldown": max(0, int(KEY_POOL.cooldowns.get(k, 0) - now)),
+                    }
+                    for k in KEY_POOL.keys
+                ],
+            }
+            self._send_json(200, pool_info)
         elif self.path in ("/health", "/api/health"):
             info = get_service_info(auto_spawn=False)
-            self._send_json(200, {"ok": True, "daemon_pid": info.pid, "daemon_url": info.url})
+            self._send_json(200, {"ok": True, "daemon_pid": info.pid, "daemon_url": info.url, "pool_keys": len(KEY_POOL.keys)})
         else:
             self._send_json(404, {"error": "Not found"})
 

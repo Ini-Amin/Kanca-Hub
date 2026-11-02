@@ -223,3 +223,4 @@ RECOVERY-CODES*
 *.pptx
 .~lock.*
 .zbin_state.json
+*.appimage

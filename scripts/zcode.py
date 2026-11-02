@@ -157,7 +157,7 @@ def billing(email, ep="balance", extra=""):
         d = json.loads(r.read())
     if d.get("code") != 0:
         raise RuntimeError("billing/%s code=%s %s" % (ep, d.get("code"), d.get("msg")))
-    return d["data"]
+    return d.get("data") or {}
 
 
 # ---------------- account ----------------
@@ -406,11 +406,54 @@ def _claim_direct(email, plan_id):
 PROMO_COOLDOWN = 24 * 3600
 
 
-def promo_preview(email):
-    """Claimable plan coupons (the app's getManualClaimPlanPreviews)."""
-    d = billing(email, "preview", "&platform=linux-x64")
-    return d.get("plans") or []
+def get_marketing_plans(email):
+    """Banner-distributed promotional plans from marketing/touch."""
+    jwt = jwt_for(email)
+    if not jwt:
+        return []
+    mid = device_mid(email)
+    url = "https://zcode.z.ai/api/v1/marketing/touch?seq=0"
+    H = {
+        "Authorization": "Bearer " + jwt,
+        "X-Device-Mid": mid,
+        "X-Client-Language": "zh-CN",
+        "X-ZCode-App-Version": "3.16.3",
+        "User-Agent": "ZCode/3.16.3",
+    }
+    req = urllib.request.Request(url, headers=H)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read().decode())
+            deliveries = (d.get("data") or {}).get("deliveries") or []
+            plans = []
+            for item in deliveries:
+                if not isinstance(item, dict):
+                    continue
+                for sub in [item.get("banner"), item.get("popup")]:
+                    if not sub or not isinstance(sub, dict):
+                        continue
+                    for btn in sub.get("buttons") or []:
+                        act = btn.get("action") or {}
+                        if act.get("type") == "claim_zcode_plan":
+                            pid = (act.get("args") or {}).get("plan_id")
+                            if pid:
+                                plans.append({"plan_id": pid, "source": "marketing_banner", "name": f"Event Plan ({pid})"})
+            return plans
+    except Exception:
+        return []
 
+
+def promo_preview(email):
+    """Claimable plan coupons (both billing/preview and marketing/touch)."""
+    d = billing(email, "preview", "&platform=linux-x64")
+    plans = list(d.get("plans") or [])
+    seen = {p.get("plan_id") for p in plans if p.get("plan_id")}
+    for mp in get_marketing_plans(email):
+        pid = mp.get("plan_id")
+        if pid and pid not in seen:
+            seen.add(pid)
+            plans.append(mp)
+    return plans
 
 def _promo_try_claim(email, pw, plan_id):
     st = load_json(p("promos.json"), {})
