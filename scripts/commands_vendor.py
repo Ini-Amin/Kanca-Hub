@@ -1056,12 +1056,44 @@ def cmd_orvis(a: Any) -> int:
 
 
 def cmd_komafree(a: Any) -> int:
-    """komafree: keyless instant vLLM onboarding & chat."""
+    """komafree: keyless instant vLLM onboarding & chat (native Python + Go fallback)."""
     import kancahub
+    mode = getattr(a, "koma_cmd", "doctor") or "doctor"
+
+    # Native Python fast path
+    if mode == "chat":
+        from native_providers import KomaFree
+        prompt = getattr(a, "prompt", "hello") or "hello"
+        model = getattr(a, "model", "koma/apple") or "koma/apple"
+        try:
+            res = KomaFree.chat(prompt, model=model)
+            print(kancahub.col("green", f"✓ {res['model']} ({res['latency_s']}s):"))
+            print(f"  {res['text']}")
+            return 0
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ KomaFree chat failed: {exc}"))
+            return 1
+
+    if mode == "doctor":
+        from native_providers import KomaFree
+        try:
+            ok = KomaFree.ping()
+            if ok:
+                print(kancahub.col("green", "✓ KomaFree upstream (https://koma.run) is LIVE and responding!"))
+                print(kancahub.col("dim", "  Model: koma/apple (vLLM inference, keyless, zero-auth)"))
+                return 0
+            else:
+                print(kancahub.col("yellow", "⚠ KomaFree ping returned empty or unexpected response."))
+                return 1
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ KomaFree connectivity check failed: {exc}"))
+            return 1
+
+    # Fallback to compiled binary if requested
     root = VENDOR / "komafree"
     if not root.exists():
-        print(kancahub.col("red", f"✗ komafree not found at {root}"))
-        return 1
+        print(kancahub.col("yellow", "• Native Python handled komafree (no Go vendor needed)."))
+        return 0
     binary = _find_binary(root, "komafree")
     if not binary.is_file():
         print(kancahub.col("cyan", "[*] Compiling komafree binary..."))
@@ -1072,11 +1104,9 @@ def cmd_komafree(a: Any) -> int:
             print(kancahub.col("red", "✗ Failed to compile komafree"))
             return 1
 
-    mode = getattr(a, "koma_cmd", "accounts") or "accounts"
     extra = _extra(a)
     cmd = [str(binary), mode] + extra
     return kancahub.run(cmd, cwd=root)
-
 
 def cmd_stepfun(a: Any) -> int:
     """stepfunrouter: bulk StepFun accounts & Studio session capture (Step-5 reasoning)."""
@@ -1102,19 +1132,32 @@ def cmd_stepfun(a: Any) -> int:
 
 
 def cmd_opensatan(a: Any) -> int:
-    """opensatan-bulk-9router: anonymous uncensored models pool."""
+    """opensatan: anonymous uncensored models (native Python + Node.js fallback)."""
     import kancahub
+    mode = getattr(a, "satan_cmd", "chat") or "chat"
+
+    # Native Python fast path
+    if mode == "chat":
+        from native_providers import OpenSatan
+        prompt = getattr(a, "prompt", "hello") or "hello"
+        try:
+            res = OpenSatan.chat(prompt, persona="satan")
+            print(kancahub.col("magenta", f"[OpenSatan - {res['persona']}] ({res['latency_s']}s):"))
+            print(f"  {res['text']}")
+            return 0
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ OpenSatan chat failed: {exc}"))
+            return 1
+
     root = VENDOR / "opensatan-bulk-9router"
     if not root.exists():
-        print(kancahub.col("red", f"✗ opensatan not found at {root}"))
-        return 1
-    mode = getattr(a, "satan_cmd", "list") or "list"
+        print(kancahub.col("yellow", "• Native Python handled OpenSatan (no Node.js vendor needed)."))
+        return 0
     script = root / "src" / "cli.js"
     node = _find_node()
     extra = _extra(a)
     cmd = [str(node), str(script), mode] + extra
     return kancahub.run(cmd, cwd=root, env={"POOL_PORT": "8784"})
-
 
 def cmd_oxalpha(a: Any) -> int:
     """oxalpha-bulk-9router: GLM-5.3 Flash 1M token stealth reasoning pool."""
