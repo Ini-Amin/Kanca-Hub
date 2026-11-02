@@ -52,7 +52,7 @@ def get_credentials(force_refresh=False):
                     return d
         except Exception:
             pass
-    farm_file = Path("/home/amen/Auto-FreeCF-vendor-refs/artifacts/vpnre/ws_farm_accounts.jsonl")
+    farm_file = Path.home() / "Auto-FreeCF-vendor-refs/artifacts/vpnre/ws_farm_accounts.jsonl"
     if farm_file.exists():
         for line in reversed(farm_file.read_text().splitlines()):
             if not line.strip():

@@ -17,7 +17,7 @@ usage: zcode_claim.py <email> <password> [plan_id]
 """
 import asyncio, json, os, sys, urllib.request, urllib.error
 
-sys.path.insert(0, "/home/amen/Auto-FreeCF/scripts")
+sys.path.insert(0, str(os.path.dirname(os.path.abspath(__file__))))
 import captcha_slider as CS
 from playwright.async_api import async_playwright
 
@@ -63,8 +63,7 @@ async def main():
         print("[claim] CDP down (%s) -> headless chromium" % str(e)[:40], flush=True)
         p = await async_playwright().start()
         b = await p.chromium.launch(headless=True,
-                                    executable_path=os.environ.get("ZC_CHROMIUM") or
-                                    "/home/amen/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome")
+                                    executable_path=os.environ.get("ZC_CHROMIUM") or None)
     ctx = b.contexts[0] if b.contexts else await b.new_context()
     page = await ctx.new_page()
     try:

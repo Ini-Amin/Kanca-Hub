@@ -337,17 +337,21 @@ def farm_supply(name: str | None = None) -> int:
             runner = [sys.executable, str(target / cand)]
             break
     # Check precompiled binary in bin/ or dedicated CLI entry
-    bin_cand = target / "bin" / name
+    bin_name = f"{name}.exe" if sys.platform == "win32" else name
+    bin_cand = target / "bin" / bin_name
+    if not bin_cand.is_file() and sys.platform == "win32":
+        bin_cand = target / "bin" / name
+    node_bin = shutil.which("node") or "node"
     if bin_cand.is_file():
         runner = [str(bin_cand)]
     elif (target / "src" / "cli.js").is_file():
-        runner = ["node", str(target / "src" / "cli.js")]
+        runner = [node_bin, str(target / "src" / "cli.js")]
     elif (target / "cli.js").is_file():
-        runner = ["node", str(target / "cli.js")]
+        runner = [node_bin, str(target / "cli.js")]
     if not runner:
         for cand in ["index.js", "main.js", "app.js", "server.js"]:
             if (target / cand).is_file():
-                runner = ["node", str(target / cand)]
+                runner = [node_bin, str(target / cand)]
                 break
     if not runner and ((target / "main.go").is_file() or (target / "go.mod").is_file()):
         runner = ["go", "run", "."]

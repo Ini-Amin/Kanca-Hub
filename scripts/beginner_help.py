@@ -49,6 +49,6 @@ Proxy on :8888: kancahub proxy start     (one-click guided: WARP/Gateway/Res/Dae
 Verify proxy:   kancahub proxy verify    (live proof: direct vs masked IP)
 Stuck?          option 2 in the menu shows ❌ marks to fix
 
-Everything you make is saved under /home/amen/Auto-FreeCF  (results, keys, docs).
-Secrets live in /home/amen/.config/auto-freecf/.env  (never shared).
+Everything you make is saved under ~/Auto-FreeCF  (results, keys, docs).
+Secrets live in ~/.config/auto-freecf/.env  (never shared).
 """

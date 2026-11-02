@@ -41,8 +41,21 @@ def _kc():
 
 HOME = Path.home()
 PETANI = HOME / "petani-proxy"
-VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / "bin" / "python"
+IS_WIN = sys.platform == "win32"
+PY_SUBDIR = "Scripts" if IS_WIN else "bin"
+PY_BIN = "python.exe" if IS_WIN else "python"
+VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "venv" / PY_SUBDIR / PY_BIN
 GATEWAY_DEFAULT = "http://127.0.0.1:8888"
+
+# Windows console VT100 / ANSI escape sequence initialization
+if IS_WIN:
+    try:
+        import ctypes
+        _k32 = ctypes.windll.kernel32
+        _k32.SetConsoleMode(_k32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
+    os.system("")
 
 C = {
     "reset": "\x1b[0m", "bold": "\x1b[1m", "dim": "\x1b[2m",
@@ -91,7 +104,7 @@ class KancaHubParser(argparse.ArgumentParser):
         return text
 
 
-CAMOUFOX_VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "camoufox-venv" / "bin" / "python"
+CAMOUFOX_VENV_PY = HOME / ".local" / "share" / "auto-freecf" / "camoufox-venv" / PY_SUBDIR / PY_BIN
 
 
 def pick_python(camoufox: bool = False) -> str:
@@ -106,19 +119,25 @@ def pick_python(camoufox: bool = False) -> str:
     silently degrading to a browser-less /usr/bin/python3.
     """
     def _usable(p) -> bool:
-        return p is not None and os.path.exists(str(p)) and os.access(str(p), os.X_OK)
+        if p is None:
+            return False
+        sp = str(p)
+        if not os.path.exists(sp):
+            return False
+        return os.path.isfile(sp) and (IS_WIN or os.access(sp, os.X_OK))
 
+    win_extra = [HOME / "venv" / "Scripts" / "python.exe"] if IS_WIN else []
     if camoufox:
-        for cand in (os.environ.get("KANCAHUB_CAMOUFOX_PY"), CAMOUFOX_VENV_PY,
-                     HOME / "venv" / "bin" / "python"):
+        for cand in [os.environ.get("KANCAHUB_CAMOUFOX_PY"), CAMOUFOX_VENV_PY,
+                     HOME / "venv" / PY_SUBDIR / PY_BIN] + win_extra:
             if _usable(cand):
                 return str(cand)
         print(col("yellow", "⚠️ camoufox venv not found; falling back to the main venv "
                             "(camoufox/playwright may be missing)"))
-    for cand in (os.environ.get("KANCAHUB_PY"), VENV_PY, HOME / "venv" / "bin" / "python"):
+    for cand in [os.environ.get("KANCAHUB_PY"), VENV_PY, HOME / "venv" / PY_SUBDIR / PY_BIN] + win_extra:
         if _usable(cand):
             return str(cand)
-    return shutil.which("python3") or sys.executable
+    return shutil.which("python3") or shutil.which("python") or sys.executable
 
 
 def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> int:
@@ -728,11 +747,20 @@ class JobRegistry:
         self.logs[name] = log_path
         logf = open(log_path, "a")
         try:
-            proc = subprocess.Popen(
-                [str(c) for c in cmd], cwd=str(cwd) if cwd else None,
-                env={**os.environ, **(env or {})},
-                stdout=logf, stderr=subprocess.STDOUT, start_new_session=True,
-            )
+            popen_kwargs: dict = {
+                "cwd": str(cwd) if cwd else None,
+                "env": {**os.environ, **(env or {})},
+                "stdout": logf,
+                "stderr": subprocess.STDOUT,
+            }
+            if IS_WIN:
+                popen_kwargs["creationflags"] = (
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) |
+                    getattr(subprocess, "DETACHED_PROCESS", 0)
+                )
+            else:
+                popen_kwargs["start_new_session"] = True
+            proc = subprocess.Popen([str(c) for c in cmd], **popen_kwargs)
         except FileNotFoundError as ex:
             print(col("red", f"✗ {ex}"))
             return 127
@@ -761,20 +789,30 @@ class JobRegistry:
         if p.poll() is None:
             # Kill the whole process GROUP (the job may fork grandchildren like
             # PetaniProxy's server/worker) so nothing is left listening.
-            try:
-                os.killpg(os.getpgid(p.pid), 15)
-            except Exception:  # noqa: BLE001
+            if IS_WIN:
                 try:
                     p.terminate()
-                except Exception:  # noqa: BLE001
-                    pass
-            try:
-                p.wait(timeout=6)
-            except Exception:  # noqa: BLE001
+                    p.wait(timeout=3)
+                except Exception:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+            else:
                 try:
-                    os.killpg(os.getpgid(p.pid), 9)
-                except Exception:  # noqa: BLE001
-                    pass
+                    os.killpg(os.getpgid(p.pid), 15)
+                except Exception:
+                    try:
+                        p.terminate()
+                    except Exception:
+                        pass
+                try:
+                    p.wait(timeout=6)
+                except Exception:
+                    try:
+                        os.killpg(os.getpgid(p.pid), 9)
+                    except Exception:
+                        pass
             print(col("green", f"  ✓ stopped '{name}'"))
         self.jobs.pop(name, None)
         return 0

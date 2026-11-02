@@ -33,7 +33,8 @@ from pathlib import Path
 
 DEFAULT_PORT = 8794
 NINE_ROUTER_DB = Path.home() / ".9router/db/data.sqlite"
-CLI_BIN = shutil.which("codebuddy") or "/usr/local/bin/codebuddy" or "/home/amen/.npm-global/bin/codebuddy"
+_NPM_BIN = Path.home() / ".npm-global" / "bin" / ("codebuddy.cmd" if sys.platform == "win32" else "codebuddy")
+CLI_BIN = shutil.which("codebuddy") or (str(_NPM_BIN) if _NPM_BIN.is_file() else None) or ("codebuddy.cmd" if sys.platform == "win32" else "/usr/local/bin/codebuddy")
 CACHE_TOKEN_FILE = Path.home() / ".config/auto-freecf/codebuddy_token.txt"
 
 logging.basicConfig(
@@ -121,7 +122,8 @@ def execute_codebuddy(model: str, prompt: str, timeout: int = 300) -> str:
         token = tokens[idx]
         env = dict(os.environ)
         env["CODEBUDDY_AUTH_TOKEN"] = token
-        env["PATH"] = f"/home/amen/.npm-global/bin:{env.get('PATH', '')}"
+        npm_bin_dir = str(Path.home() / ".npm-global" / "bin")
+        env["PATH"] = f"{npm_bin_dir}{os.pathsep}{env.get('PATH', '')}"
 
         cmd = [
             CLI_BIN,

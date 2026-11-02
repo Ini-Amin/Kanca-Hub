@@ -42,7 +42,8 @@ def create_account():
 
 if __name__=="__main__":
     n=int(sys.argv[1]) if len(sys.argv)>1 else 1
-    out=sys.argv[2] if len(sys.argv)>2 else "/home/amen/Auto-FreeCF-vendor-refs/artifacts/vpnre/ws_farm_accounts.jsonl"
+    default_out = str(Path.home() / "Auto-FreeCF-vendor-refs/artifacts/vpnre/ws_farm_accounts.jsonl")
+    out = sys.argv[2] if len(sys.argv) > 2 else default_out
     for i in range(n):
         try:
             a=create_account()

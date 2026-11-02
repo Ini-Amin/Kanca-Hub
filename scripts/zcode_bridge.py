@@ -4,7 +4,7 @@
 Generate the OAuth URL (zcode_oauth_url pattern) -> sign in -> consent -> code ->
 POST /api/v1/oauth/token -> ZCode JWT. Verified live (code 0, token minted)."""
 import asyncio, os, sys, json, secrets, urllib.request, urllib.parse
-sys.path.insert(0,'/home/amen/Auto-FreeCF/scripts')
+sys.path.insert(0, str(os.path.dirname(os.path.abspath(__file__))))
 from consent_hard import accept_consent, signin_zai_email
 from playwright.async_api import async_playwright
 CDP="http://127.0.0.1:9222"

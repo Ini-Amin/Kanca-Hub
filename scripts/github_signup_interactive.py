@@ -127,7 +127,7 @@ async def run_interactive(proxy: str | None = None, mailbox: str = "emailmux"):
 
     # Resolve proxy (Direct IP is strictly forbidden)
     if not proxy:
-        sys.path.insert(0, "/home/amen/Auto-FreeCF-personal")
+        sys.path.insert(0, str(Path.home() / "Auto-FreeCF-personal"))
         try:
             from forge.transport.proxy import urban_vpn_single
             px = urban_vpn_single("US")

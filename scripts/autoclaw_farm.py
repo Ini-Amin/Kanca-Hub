@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from autoclaw_client import AutoClawClient, load_app_credentials  # noqa: E402
 from consent_hard import accept_consent, signin_zai_email  # noqa: E402
 
-APPRUN = Path("/home/amen/Auto-FreeCF-vendor-refs/artifacts/autoclaw/squashfs-root/AppRun")
+APPRUN = Path.home() / "Auto-FreeCF-vendor-refs" / "artifacts" / "autoclaw" / "squashfs-root" / "AppRun"
 DEFAULT_PORT = 9444
 DEFAULT_VIRTUAL_DISPLAY = ":99"
 

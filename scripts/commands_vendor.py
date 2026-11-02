@@ -913,7 +913,7 @@ def cmd_dahlfarm(a: Any) -> int:
         "test": "test-models.js",
     }
     entry = root / script_map.get(mode, "src/cli.js")
-    node = shutil.which("node") or "/usr/bin/node"
+    node = _find_node()
     return kancahub.run([str(node), str(entry)] + _extra(a), cwd=root)
 
 
@@ -933,6 +933,24 @@ def cmd_proxyvault(a: Any) -> int:
     elif mode == "demo":
         return kancahub.run([py, "scripts/record_demo.py"], cwd=root)
     return 0
+def _find_node() -> str:
+    found = shutil.which("node")
+    if found:
+        return found
+    if sys.platform != "win32" and Path("/usr/bin/node").is_file():
+        return "/usr/bin/node"
+    return "node"
+
+
+def _find_binary(root: Path, name: str) -> Path:
+    candidates = [name]
+    if sys.platform == "win32":
+        candidates = [f"{name}.exe", name]
+    for c in candidates:
+        bp = root / "bin" / c
+        if bp.is_file():
+            return bp
+    return root / "bin" / (f"{name}.exe" if sys.platform == "win32" else name)
 def inject_orvis_9router(base_url: str = "http://127.0.0.1:8796/v1") -> bool:
     """Inject Orvis OpenAI-compatible bridge into 9Router SQLite DB without passwords."""
     import sqlite3
@@ -985,10 +1003,12 @@ def cmd_orvis(a: Any) -> int:
     if not root.exists():
         print(kancahub.col("red", f"✗ orvispool not found at {root}"))
         return 1
-    binary = root / "bin" / "orvispool"
+    binary = _find_binary(root, "orvispool")
     if not binary.is_file():
         print(kancahub.col("cyan", "[*] Compiling orvispool binary..."))
-        ret = subprocess.call(["go", "build", "-o", "bin/orvispool", "./cmd/orvispool"], cwd=root)
+        out_bin = f"bin/orvispool.exe" if sys.platform == "win32" else "bin/orvispool"
+        ret = subprocess.call(["go", "build", "-o", out_bin, "./cmd/orvispool"], cwd=root)
+        binary = _find_binary(root, "orvispool")
         if ret != 0 or not binary.is_file():
             print(kancahub.col("red", "✗ Failed to compile orvispool"))
             return 1
@@ -1042,10 +1062,12 @@ def cmd_komafree(a: Any) -> int:
     if not root.exists():
         print(kancahub.col("red", f"✗ komafree not found at {root}"))
         return 1
-    binary = root / "bin" / "komafree"
+    binary = _find_binary(root, "komafree")
     if not binary.is_file():
         print(kancahub.col("cyan", "[*] Compiling komafree binary..."))
-        ret = subprocess.call(["go", "build", "-o", "bin/komafree", "./cmd/komafree"], cwd=root)
+        out_bin = f"bin/komafree.exe" if sys.platform == "win32" else "bin/komafree"
+        ret = subprocess.call(["go", "build", "-o", out_bin, "./cmd/komafree"], cwd=root)
+        binary = _find_binary(root, "komafree")
         if ret != 0 or not binary.is_file():
             print(kancahub.col("red", "✗ Failed to compile komafree"))
             return 1
@@ -1063,10 +1085,12 @@ def cmd_stepfun(a: Any) -> int:
     if not root.exists():
         print(kancahub.col("red", f"✗ stepfunrouter not found at {root}"))
         return 1
-    binary = root / "bin" / "stepfunrouter"
+    binary = _find_binary(root, "stepfunrouter")
     if not binary.is_file():
         print(kancahub.col("cyan", "[*] Compiling stepfunrouter binary..."))
-        ret = subprocess.call(["go", "build", "-o", "bin/stepfunrouter", "./cmd/stepfunrouter"], cwd=root)
+        out_bin = f"bin/stepfunrouter.exe" if sys.platform == "win32" else "bin/stepfunrouter"
+        ret = subprocess.call(["go", "build", "-o", out_bin, "./cmd/stepfunrouter"], cwd=root)
+        binary = _find_binary(root, "stepfunrouter")
         if ret != 0 or not binary.is_file():
             print(kancahub.col("red", "✗ Failed to compile stepfunrouter"))
             return 1
@@ -1086,7 +1110,7 @@ def cmd_opensatan(a: Any) -> int:
         return 1
     mode = getattr(a, "satan_cmd", "list") or "list"
     script = root / "src" / "cli.js"
-    node = shutil.which("node") or "/usr/bin/node"
+    node = _find_node()
     extra = _extra(a)
     cmd = [str(node), str(script), mode] + extra
     return kancahub.run(cmd, cwd=root, env={"POOL_PORT": "8784"})
@@ -1101,7 +1125,7 @@ def cmd_oxalpha(a: Any) -> int:
         return 1
     mode = getattr(a, "ox_cmd", "list") or "list"
     script = root / "src" / "cli.js"
-    node = shutil.which("node") or "/usr/bin/node"
+    node = _find_node()
     extra = _extra(a)
     cmd = [str(node), str(script), mode] + extra
     return kancahub.run(cmd, cwd=root, env={"PORT": "8781"})
