@@ -47,6 +47,25 @@ def cmd_abliteration(a) -> int:
     """abliteration-bulk-creator: bulk abliteration.ai accounts, each with an API key."""
     import kancahub
     mode = getattr(a, "mode", "run") or "run"
+    if mode == "connect":
+        from abliteration_mint import inject_9router, KEYS_FILE
+        key = getattr(a, "key", None)
+        if not key and KEYS_FILE.is_file():
+            lines = [l.strip() for l in KEYS_FILE.read_text().splitlines() if l.strip()]
+            if lines:
+                key = lines[-1].split(":")[-1]
+        if key:
+            ok = inject_9router(key)
+            if ok:
+                print(kancahub.col("green", "✓ Injected Abliteration node & key into 9Router SQLite DB!"))
+                print(kancahub.col("dim", "  Prefix: ablit/* (e.g. ablit/abliterated-model-large-flash)"))
+                return 0
+            else:
+                print(kancahub.col("red", "✗ Failed to inject Abliteration into 9Router DB"))
+                return 1
+        else:
+            print(kancahub.col("yellow", "• No saved Abliteration key found. Run 'kancahub abliteration mint' first."))
+            return 1
     if mode == "mint":
         # Native Camoufox mint (free Turnstile solve + our mailbox); vendor's
         # Chromium fails the Turnstile on every egress we have.

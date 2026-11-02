@@ -32,11 +32,61 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 ORIGIN = "https://abliteration.ai"
+KEYS_FILE = Path.home() / ".config/auto-freecf/abliteration_keys.txt"
 SEL = {
     "email": 'input[type="email"][name="email"], input[name="email"]',
     "password": 'input[type="password"][name="password"], input[name="password"]',
     "code": 'input[name="code"], input[inputmode="numeric"], input[autocomplete="one-time-code"]',
 }
+
+
+def inject_9router(api_key: str, email: str = "") -> bool:
+    """Inject minted Abliteration API key directly into 9Router SQLite DB."""
+    import sqlite3, uuid
+    db_path = Path.home() / ".9router/db/data.sqlite"
+    if not db_path.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        now = str(int(time.time() * 1000))
+        node_id = "openai-compatible-chat-abliteration"
+        node_name = "Abliteration"
+        prefix = "ablit"
+        base_url = "https://api.abliteration.ai/v1"
+
+        cur.execute("SELECT id FROM providerNodes WHERE id=?", (node_id,))
+        if not cur.fetchone():
+            ndata = json.dumps({"prefix": prefix, "baseUrl": base_url, "apiType": "chat"})
+            cur.execute(
+                "INSERT INTO providerNodes (id, type, name, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
+                (node_id, "openai-compatible", node_name, ndata, now, now),
+            )
+
+        cdata = json.dumps({
+            "name": f"Abliteration-{email or 'Key'}",
+            "apiKey": api_key,
+            "defaultModel": "abliterated-model-large-flash",
+            "providerSpecificData": {"baseUrl": base_url, "prefix": prefix, "apiType": "chat"},
+        })
+        cur.execute("SELECT id FROM providerConnections WHERE provider=?", (node_id,))
+        existing = cur.fetchone()
+        if existing:
+            cur.execute(
+                "UPDATE providerConnections SET data=?, isActive=1 WHERE provider=?",
+                (cdata, node_id),
+            )
+        else:
+            cid = str(uuid.uuid4())
+            cur.execute(
+                "INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (cid, node_id, "apikey", f"Abliteration-{email or 'Key'}", 1, 1, cdata, now, now),
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
 
 
 def gen_password(n: int = 16) -> str:
@@ -184,6 +234,18 @@ async def mint(*, email: str | None = None, headless: bool = True,
         if not secret:
             raise RuntimeError(f"no secret in response: {str(rdata)[:160]}")
         log(f"  KEY  : {secret}")
+
+        # Save to keys file and inject into 9Router
+        try:
+            KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(KEYS_FILE, "a", encoding="utf-8") as kf:
+                kf.write(f"{email}:{secret}\n")
+            injected = inject_9router(secret, email=email)
+            if injected:
+                log("  ✓ Injected Abliteration key directly into 9Router SQLite DB!")
+        except Exception as ex:
+            log(f"  ⚠️ Warning saving/injecting key: {ex}")
+
         return {"email": email, "password": password, "api_key": secret,
                 "key_name": key_name, "project_id": pid, "provider": "abliteration",
                 "base_url": ORIGIN, "status": "ok"}
