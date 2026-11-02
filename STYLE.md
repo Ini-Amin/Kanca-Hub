@@ -1,8 +1,7 @@
 # STYLE.md — how to write code and prose in this repo
 
 Companion to `AGENTS.md`. `AGENTS.md` says *what* the system does and *why* it is
-built that way; this file says *how to write* the things you add to it.
-
+built that way; this file says *how to write* code, bridges and tools you add to it.
 ## Language
 
 - **English only, in every file.** Code, comments, commit messages, docs, log

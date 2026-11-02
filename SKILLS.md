@@ -1,9 +1,9 @@
 # SKILLS.md — the reusable techniques
 
 Companion to `AGENTS.md`, `STYLE.md`, `WORKFLOWS.md`. Workflows are procedures
-for *this* repo; skills are the transferable techniques underneath them — the
+for KancaHub and AI models fleet; skills are the transferable techniques underneath them — the
 things worth knowing before you start the next reverse-engineering job, the next
-provider integration, or the next "why is this host broken" session.
+provider integration, or the next proxy routing session.
 
 Each skill lists what it is for, the technique, and the failure mode it prevents.
 
