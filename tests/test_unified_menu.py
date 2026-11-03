@@ -191,11 +191,11 @@ class TestRunEndToEndFlow(unittest.TestCase):
     @patch("scripts.kancahub.dispatch")
     def test_success_runs_full_sequence(self, mock_dispatch: MagicMock) -> None:
         p = build_parser()
-        # Farm 3 (Abliteration): verify -> run -> sync (all 0, inject skipped)
-        mock_dispatch.side_effect = [0, 0, 0]
+        # Farm 3 (Abliteration): verify -> run -> inject -> sync (all 0)
+        mock_dispatch.side_effect = [0, 0, 0, 0]
         rc = run_end_to_end_flow(p, farm_choice="3")
         self.assertEqual(rc, 0)
-        self.assertEqual(mock_dispatch.call_count, 3)
+        self.assertEqual(mock_dispatch.call_count, 4)
 
 
 class TestBeginnerAndMenuEntry(unittest.TestCase):

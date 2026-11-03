@@ -134,9 +134,9 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
     farms = [
         ("1", "GitHub Education", ["github", "farm"], None, ["stack", "sync"]),
         ("2", "TokenHarbor AI", ["thk", "batch"], ["thk", "inject"], ["thk", "sync"]),
-        ("3", "Abliteration.ai accounts + API keys", ["abliteration", "run"], None, ["stack", "sync"]),
+        ("3", "Abliteration.ai accounts + API keys", ["abliteration", "run"], ["abliteration", "connect"], ["stack", "sync"]),
         ("4", "ZCode: z.ai Start Plan -> glm pool", ["zcode", "claim", "--", "--connect"], None, ["stack", "sync"]),
-        ("5", "Dahl Inference 100M keys", ["dahlfarm", "mint"], None, ["stack", "sync"]),
+        ("5", "Dahl Inference 100M keys", ["dahlfarm", "mint"], ["dahlfarm", "connect"], ["stack", "sync"]),
     ]
 
     if farm_choice is None:

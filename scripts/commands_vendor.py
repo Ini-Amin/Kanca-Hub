@@ -74,8 +74,16 @@ def cmd_abliteration(a) -> int:
             print(kancahub.col("red", f"✗ abliteration_mint.py not found at {tool}"))
             return 1
         py = kancahub.pick_python(camoufox=True)
-        return kancahub.run([py, str(tool)] + _extra(a))
-    root = VENDOR / "abliteration-bulk-creator"
+        ret = kancahub.run([py, str(tool)] + _extra(a))
+        if ret == 0:
+            from abliteration_mint import inject_9router, KEYS_FILE
+            if KEYS_FILE.is_file():
+                lines = [l.strip() for l in KEYS_FILE.read_text().splitlines() if l.strip()]
+                if lines:
+                    key = lines[-1].split(":")[-1]
+                    inject_9router(key)
+                    print(kancahub.col("green", "✓ Automatically injected Abliteration key into 9Router SQLite DB!"))
+        return ret
     entry = root / _ABC_SCRIPTS.get(mode, "")
     if not entry or not entry.exists():
         print(kancahub.col("red", f"✗ abliteration {mode}: {entry} not found"))
@@ -137,9 +145,20 @@ def cmd_abliteration(a) -> int:
                 print(kancahub.col("dim", "  [proxy] %s" % (getattr(choice, "label", "acquired"))))
         except Exception as exc:  # noqa: BLE001 - egress is best-effort, never fatal
             print(kancahub.col("yellow", "  [proxy] auto-wire failed: %s" % str(exc)[:100]))
-
-    return kancahub.run([str(node), str(entry)] + _extra(a), cwd=root, env=env)
-
+    ret = kancahub.run([str(node), str(entry)] + _extra(a), cwd=root, env=env)
+    # Automatically inject any minted keys into 9Router right after run
+    if mode in ("run", "mint"):
+        from abliteration_mint import inject_9router, KEYS_FILE
+        vendor_keys = root / "accounts" / "keys.txt"
+        if vendor_keys.is_file():
+            lines = [l.strip() for l in vendor_keys.read_text().splitlines() if l.strip()]
+            if lines:
+                KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                for line in lines:
+                    email, key = line.split(":", 1) if ":" in line else ("", line)
+                    inject_9router(key, email=email)
+                print(kancahub.col("green", f"✓ Automatically injected {len(lines)} Abliteration key(s) into 9Router SQLite DB!"))
+    return ret
 
 # notrack.ai pooling adapter. 8784 is the vendor default; nothing else on blu
 # uses it (8787 zcode, 8789 gemini, 8790 grokbot-shim, 8791 grokbot-gateway).
