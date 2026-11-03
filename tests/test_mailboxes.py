@@ -22,10 +22,13 @@ class TestCodeFrom(unittest.TestCase):
     def test_html(self):
         self.assertEqual(M._code_from("<b>4321</b>"), "4321")
 
+    def test_html_style_and_script_stripped(self):
+        html = '<style>.card { background: #141419 !important; }</style><script>var x = 999999;</script><body>Code 336611</body>'
+        self.assertEqual(M._code_from(html), "336611")
+
     def test_none(self):
         self.assertIsNone(M._code_from("no digits"))
         self.assertIsNone(M._code_from(""))
-
 
 class TestStaticMailbox(unittest.TestCase):
     def test_address_and_empty_read(self):
@@ -52,6 +55,10 @@ class TestOpenMailboxFallback(unittest.TestCase):
     def test_unknown_provider_static(self):
         mb = M.open_mailbox("nope", domain="kancalabs.my.id", log=lambda *a: None)
         self.assertTrue(mb.address.endswith("@kancalabs.my.id"))
+
+    def test_public_providers_registered(self):
+        for expected in ["tempmaillol", "tempmailio", "inboxkitten", "guerrilla", "mailtm"]:
+            self.assertIn(expected, M._PROVIDERS)
 
 
 class TestNewProviders(unittest.TestCase):
