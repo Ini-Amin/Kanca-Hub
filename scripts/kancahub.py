@@ -1029,6 +1029,19 @@ def build_parser() -> argparse.ArgumentParser:
     oxs.add_parser("list", help="list pool sessions")
     oxs.add_parser("connect", help="inject OxAlpha node into 9Router SQLite DB")
 
+    # ---- omnisearch ----
+    oms = sub.add_parser("omnisearch", help="OmniSearch: 43-platform keyword sentinel & deals watcher")
+    omss = oms.add_subparsers(dest="omnisearch_cmd")
+    oms_once = omss.add_parser("once", help="run single search pass across platforms")
+    oms_once.add_argument("-k", "--keyword", default="claude", help="keyword to search")
+    oms_once.add_argument("-s", "--sources", default="linuxdo,v2ex,nodeseek,lowendtalk", help="platforms to search")
+    oms_once.add_argument("--json", action="store_true", help="output as json")
+    oms_watch = omss.add_parser("watch", help="watch platforms continuously for keywords")
+    oms_watch.add_argument("-k", "--keyword", required=True, help="keyword to watch")
+    oms_watch.add_argument("-s", "--sources", default="", help="platforms to watch")
+    oms_watch.add_argument("--interval", default="30s", help="poll interval")
+    oms_watch.add_argument("--telegram", default="", help="bot_token:chat_id")
+    omss.add_parser("sources", help="list all 43 supported platforms")
     return p
 
 
@@ -1039,9 +1052,29 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_doctor(args)
     if g == "report":
         return cmd_report(args)
+    if g == "omnisearch":
+        import subprocess
+        cmd_name = getattr(args, "omnisearch_cmd", "sources") or "sources"
+        omni_bin = HOME / ".local" / "bin" / "omnisearch"
+        if not omni_bin.is_file():
+            omni_bin = Path("/home/amen/Auto-FreeCF-vendor-refs/omnisearch/omnisearch")
+        if not omni_bin.is_file():
+            print(col("red", "✗ omnisearch binary not found."))
+            return 1
+        call_args = [str(omni_bin), cmd_name]
+        if getattr(args, "keyword", None):
+            call_args.extend(["-k", args.keyword])
+        if getattr(args, "sources", None):
+            call_args.extend(["-s", args.sources])
+        if getattr(args, "json", False):
+            call_args.append("--json")
+        if getattr(args, "interval", None):
+            call_args.extend(["--interval", args.interval])
+        if getattr(args, "telegram", None):
+            call_args.extend(["--telegram", args.telegram])
+        return subprocess.run(call_args).returncode
     if g == "memory":
         import memory as _mem  # noqa: PLC0415
-        cmd = getattr(args, "memory_cmd", None) or "index"
         if cmd in ("index", "reindex"):
             return _mem.main([cmd] + (["--full"] if getattr(args, "full", False) else []))
         if cmd == "stats":

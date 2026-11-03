@@ -472,6 +472,26 @@
 "omnirush status": [
 "help"
 ],
+"omnisearch": [
+"help",
+"omnisearch_cmd"
+],
+"omnisearch once": [
+"help",
+"json",
+"keyword",
+"sources"
+],
+"omnisearch sources": [
+"help"
+],
+"omnisearch watch": [
+"help",
+"interval",
+"keyword",
+"sources",
+"telegram"
+],
 "opencode": [
 "api_key",
 "continuous",
