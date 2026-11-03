@@ -1024,6 +1024,7 @@ def build_parser() -> argparse.ArgumentParser:
     oxs_cr = oxs.add_parser("create", help="harvest sessions into pool")
     oxs_cr.add_argument("--count", type=int, default=1, help="count")
     oxs.add_parser("list", help="list pool sessions")
+    oxs.add_parser("connect", help="inject OxAlpha node into 9Router SQLite DB")
 
     return p
 

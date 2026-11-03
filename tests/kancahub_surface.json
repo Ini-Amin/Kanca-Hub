@@ -571,6 +571,9 @@
 "help",
 "ox_cmd"
 ],
+"oxalpha connect": [
+"help"
+],
 "oxalpha create": [
 "count",
 "help"
