@@ -74,7 +74,25 @@ def cmd_abliteration(a) -> int:
             print(kancahub.col("red", f"✗ abliteration_mint.py not found at {tool}"))
             return 1
         py = kancahub.pick_python(camoufox=True)
-        ret = kancahub.run([py, str(tool)] + _extra(a))
+        extra = _extra(a)
+        if not any(arg.startswith("--proxy") for arg in extra):
+            try:
+                mode_p = getattr(a, "proxy", None) or kancahub.PROXY_AUTO
+                policy = kancahub.EGRESS_COUNTRY.get("abliteration", {})
+                country = getattr(a, "country", None)
+                allow = {country.strip().upper()} if country else (set(policy.get("allow") or []) or None)
+                exclude = None if country else (set(policy.get("exclude") or []) or None)
+                choice = kancahub._choose_egress(
+                    mode_p,
+                    kancahub.EGRESS_TARGETS.get("abliteration", "https://abliteration.ai"),
+                    country=allow,
+                    exclude_countries=exclude,
+                )
+                if choice and choice.proxy:
+                    extra = ["--proxy", choice.proxy] + extra
+            except Exception:
+                pass
+        ret = kancahub.run([py, str(tool)] + extra)
         if ret == 0:
             from abliteration_mint import inject_9router, KEYS_FILE
             if KEYS_FILE.is_file():

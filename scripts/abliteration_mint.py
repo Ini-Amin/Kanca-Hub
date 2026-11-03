@@ -256,13 +256,15 @@ async def mint(*, email: str | None = None, headless: bool = True,
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Mint one abliteration.ai API key (Camoufox)")
     ap.add_argument("--email", default=None, help="use this address (else a fresh emailmux @gmail.com)")
-    ap.add_argument("--headless", action="store_true")
+    ap.add_argument("--headful", action="store_true", help="show visible browser window")
+    ap.add_argument("--headless", action="store_true", default=True, help="run headless (default)")
     ap.add_argument("--proxy", default=None, help="http://user:pass@host:port")
     ap.add_argument("--cdp", default=None, help="attach to a cloud browser (TinyFish/BrightData) instead of Camoufox")
     ap.add_argument("-o", "--out", default=None, help="append the record as JSON to this file")
     a = ap.parse_args(argv)
     try:
-        rec = asyncio.run(mint(email=a.email, headless=a.headless, proxy=a.proxy, cdp=a.cdp))
+        is_headless = not a.headful if a.headful else a.headless
+        rec = asyncio.run(mint(email=a.email, headless=is_headless, proxy=a.proxy, cdp=a.cdp))
     except Exception as e:  # noqa: BLE001
         print(f"✗ mint failed: {type(e).__name__}: {e}")
         return 1

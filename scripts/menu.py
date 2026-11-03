@@ -23,7 +23,7 @@ CATEGORIES: list[tuple[str, str, list[MenuEntry]]] = [
         ("7",  "OpenCode Hub: free models, fleet & bridge", "opencode menu", ["opencode", "menu"], None),
         ("8",  "Freebuff: sticky-IP agent slots", "freebuff status", ["freebuff", "status"], None),
         ("9",  "Dahl Inference: 100M-token keys", "dahlfarm mint", ["dahlfarm", "mint"], None),
-        ("10", "Abliteration.ai accounts + API keys", "abliteration run", ["abliteration", "run"], None),
+        ("10", "Abliteration.ai accounts + API keys", "abliteration mint", ["abliteration", "mint"], None),
         ("11", "GitHub Education account farm", "github farm", ["github", "farm"], None),
         ("12", "TokenHarbor AI keys", "thk batch", ["thk", "batch"], None),
     ]),
@@ -134,7 +134,7 @@ def run_end_to_end_flow(p: argparse.ArgumentParser, farm_choice: str | None = No
     farms = [
         ("1", "GitHub Education", ["github", "farm"], None, ["stack", "sync"]),
         ("2", "TokenHarbor AI", ["thk", "batch"], ["thk", "inject"], ["thk", "sync"]),
-        ("3", "Abliteration.ai accounts + API keys", ["abliteration", "run"], ["abliteration", "connect"], ["stack", "sync"]),
+        ("3", "Abliteration.ai accounts + API keys", ["abliteration", "mint"], ["abliteration", "connect"], ["stack", "sync"]),
         ("4", "ZCode: z.ai Start Plan -> glm pool", ["zcode", "claim", "--", "--connect"], None, ["stack", "sync"]),
         ("5", "Dahl Inference 100M keys", ["dahlfarm", "mint"], ["dahlfarm", "connect"], ["stack", "sync"]),
     ]
