@@ -1,13 +1,12 @@
 [Unit]
-Description=Orvis AI OpenAI-compatible Bridge (:8796)
+Description=Orvis AI Local Bridge (:8796)
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/amen/Auto-FreeCF-vendor-refs/orvispool/bin/orvispool serve --port 8796 --db /home/amen/Auto-FreeCF-vendor-refs/orvispool/accounts.json
-WorkingDirectory=/home/amen/Auto-FreeCF-vendor-refs/orvispool
+ExecStart=/usr/bin/python3 -u %h/Auto-FreeCF/scripts/orvis_bridge.py
 Restart=always
-RestartSec=5
+RestartSec=3
 StandardOutput=journal
 StandardError=journal
 

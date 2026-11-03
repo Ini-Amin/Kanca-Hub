@@ -193,8 +193,8 @@ def cmd_doctor(_a) -> int:
                 test_models = [
                     ("koma/apple", "koma/apple"),
                     ("opensatan/satan", "opensatan/satan"),
-                    ("oc-anon/beam-free", "oc-anon/beam-free"),
-                    ("oc-anon/glm-5.3-flash-free", "oc-anon/glm-5.3-flash-free"),
+                    ("orvis/gemini-2.5-flash", "orvis/gemini-2.5-flash"),
+                    ("orvis/gpt-4o", "orvis/gpt-4o"),
                     ("oc-anon/deepseek-v4.1-flash-free", "oc-anon/deepseek-v4.1-flash-free"),
                 ]
                 for label, m in test_models:

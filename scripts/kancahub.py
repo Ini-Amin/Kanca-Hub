@@ -986,6 +986,9 @@ def build_parser() -> argparse.ArgumentParser:
     ovs_t = ovs.add_parser("test", help="smoke test chat model through Orvis bridge")
     ovs_t.add_argument("--model", default="anthropic/claude-sonnet-4-20250514", help="model id")
     ovs_t.add_argument("--port", type=int, default=8796, help="bridge port (default 8796)")
+    ovs_ch = ovs.add_parser("chat", help="chat with Orvis AI frontier model")
+    ovs_ch.add_argument("--prompt", "-p", default="hello", help="prompt text")
+    ovs_ch.add_argument("--model", "-m", default="gemini-2.5-flash", help="model name")
 
     # ---- komafree ----
     kf = sub.add_parser("komafree", help="Koma-Free: keyless zero-auth onboarding & instant vLLM inference")

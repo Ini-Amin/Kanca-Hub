@@ -761,6 +761,28 @@ def cmd_orvis(a: Any) -> int:
                 pass
         print(kancahub.col("yellow", "• No stored Orvis accounts found."))
         return 0
+    if mode == "create":
+        import orvis_client
+        print(kancahub.col("cyan", "Creating fresh Orvis AI account via residential proxy + fallback mailbox..."))
+        try:
+            acct = orvis_client.create_account(log=print)
+            print(kancahub.col("green", f"✓ Account created successfully: {acct.get('email')} (balance: {acct.get('balance')} credits)"))
+            return 0
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ Failed to create Orvis account: {exc}"))
+            return 1
+
+    if mode == "chat":
+        import orvis_client, asyncio
+        prompt = getattr(a, "prompt", "respond with only: pong") or "respond with only: pong"
+        model = getattr(a, "model", "gemini-2.5-flash") or "gemini-2.5-flash"
+        try:
+            reply = asyncio.run(orvis_client.chat_turn(prompt, model_name=model))
+            print(kancahub.col("green", f"Orvis AI ({model}):\n") + reply)
+            return 0
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ Chat failed: {exc}"))
+            return 1
 
     root = VENDOR / "orvispool"
     if not root.exists():

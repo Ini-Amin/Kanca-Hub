@@ -34,10 +34,10 @@ CATEGORIES: list[tuple[str, str, list[MenuEntry]]] = [
         ("16", "Free-AI farm status", "freeai status", ["freeai", "status"], None),
     ]),
     ("D", "Frontier & Keyless AI Fleet", [
-        ("17", "Koma-Free: keyless vLLM inference (koma/apple)", "komafree menu", ["komafree"], None),
-        ("18", "OpenSatan: anonymous uncensored chat (satan/genie)", "opensatan menu", ["opensatan"], None),
-        ("19", "OpenCode Anonymous: GLM-5.3 & DeepSeek (WARP gateway)", "opencode anon", ["opencode", "anon"], None),
-        ("20", "OpenCode Zen Pool: 26 API keys rotation", "opencode pool", ["opencode", "pool"], None),
+        ("17", "Orvis AI: 9 frontier models (Claude 4, GPT-4o, Gemini 2.5)", "orvis menu", ["orvis"], None),
+        ("18", "Koma-Free: keyless vLLM inference (koma/apple)", "komafree menu", ["komafree"], None),
+        ("19", "OpenSatan: anonymous uncensored chat (satan/genie)", "opensatan menu", ["opensatan"], None),
+        ("20", "OpenCode Anonymous: GLM-5.3 & DeepSeek (WARP gateway)", "opencode anon", ["opencode", "anon"], None),
         ("21", "AI Supplies: 22+ provider farm fleet", "supplies farm", ["supplies", "farm"], None),
     ]),
 ]
@@ -77,10 +77,10 @@ MENU_FARM_KEYS = {"11", "12"}
 # Items needing custom interactive prompts before dispatch.
 _INTERACTIVE_HANDLERS: dict[str, str] = {
     "13": "_handle_autofarm",
-    "17": "_handle_komafree",
-    "18": "_handle_opensatan",
-    "19": "_handle_opencode_anon",
-    "20": "_handle_opencode_pool",
+    "17": "_handle_orvis",
+    "18": "_handle_komafree",
+    "19": "_handle_opensatan",
+    "20": "_handle_opencode_anon",
     "21": "_handle_supplies",
 }
 _STATUS_LABELS: dict[str, str] = {
@@ -340,6 +340,35 @@ def _handle_autofarm(p: argparse.ArgumentParser) -> None:
         kancahub.dispatch(p, p.parse_args(cmd_args))
     except Exception as e:  # noqa: BLE001
         print(kancahub.col("red", f"Error: {e}"))
+def _handle_orvis(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for Orvis AI (Claude 4, GPT-4o, Gemini 2.5)."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [17] Orvis AI: 9 Frontier Models (100 free credits/acct) ──"))
+    print("  [1] List harvested accounts & credit balance")
+    print("  [2] Quick smoke test - Claude 4 Sonnet ('pong')")
+    print("  [3] Quick smoke test - Gemini 2.5 Flash ('pong')")
+    print("  [4] Quick smoke test - OpenAI GPT-4o ('pong')")
+    print("  [5] Mint new account headlessly (Cognito + Proxy + Tempik)")
+    print("  [6] Connect / inject into 9Router SQLite database")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-6, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["orvis", "accounts"]))
+    elif c == "2":
+        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "anthropic/claude-sonnet-4-20250514"]))
+    elif c == "3":
+        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "google/gemini-2.5-flash"]))
+    elif c == "4":
+        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "openai/gpt-4o"]))
+    elif c == "5":
+        kancahub.dispatch(p, p.parse_args(["orvis", "create"]))
+    elif c == "6":
+        kancahub.dispatch(p, p.parse_args(["orvis", "connect"]))
+
+
 def _handle_komafree(p: argparse.ArgumentParser) -> None:
     """Interactive handler for Koma-Free (vLLM inference)."""
     import kancahub
