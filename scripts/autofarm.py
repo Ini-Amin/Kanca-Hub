@@ -276,11 +276,19 @@ def get_fresh_proxy(explicit: str | None = None, mode: str | None = None) -> str
         return explicit
     if (mode or "").lower() in ("none", "direct", "off", "no") or (explicit or "").lower() in ("none", "direct"):
         return None
-    pool_file = ROOT / "signup_from_scratch" / "proxies.txt"
-    if pool_file.exists():
-        lines = [l.strip() for l in pool_file.read_text().splitlines() if l.strip() and not l.startswith("#")]
-        if lines:
-            return lines[0]
+    try:
+        import proxy_pool
+        p = proxy_pool.best()
+        if p and p.get("proxy"):
+            px = p["proxy"]
+            srv = px.get("server", "").replace("http://", "").replace("https://", "")
+            u, pwd = px.get("username"), px.get("password")
+            if u and pwd:
+                return f"http://{u}:{pwd}@{srv}"
+            if srv:
+                return f"http://{srv}"
+    except Exception:
+        pass
     return None
 
 
@@ -1347,6 +1355,15 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 def main() -> int:
+    camoufox_py = Path.home() / ".local/share/auto-freecf/camoufox-venv/bin/python"
+    try:
+        import camoufox
+    except ImportError:
+        if camoufox_py.is_file() and sys.executable != str(camoufox_py):
+            import subprocess
+            cmd = [str(camoufox_py), str(Path(__file__).resolve())] + sys.argv[1:]
+            return subprocess.run(cmd).returncode
+
     ap = build_parser()
     args = ap.parse_args()
 
