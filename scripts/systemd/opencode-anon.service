@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenCode Anonymous WARP Multi-Egress Gateway (:8799)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.config/auto-freecf/opencode2api
+ExecStart=%h/.local/bin/opencode2api -config %h/.config/auto-freecf/opencode2api/config.json
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

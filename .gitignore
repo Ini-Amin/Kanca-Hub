@@ -221,7 +221,9 @@ signup_from_scratch/README.md
 # Sensitive credentials & personal artifacts
 RECOVERY-CODES*
 *.pptx
+*.docx
 *.pdf
 .~lock.*
 .zbin_state.json
 *.appimage
+Indonesian Handwritten*
