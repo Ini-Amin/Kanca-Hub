@@ -34,10 +34,10 @@ CATEGORIES: list[tuple[str, str, list[MenuEntry]]] = [
         ("16", "Free-AI farm status", "freeai status", ["freeai", "status"], None),
     ]),
     ("D", "Frontier & Keyless AI Fleet", [
-        ("17", "Orvis AI: 16 models (Claude 4, GPT-4o, o3-mini)", "orvis menu", ["orvis"], None),
-        ("18", "Koma-Free: keyless instant vLLM inference", "komafree menu", ["komafree"], None),
-        ("19", "StepFun Studio: Step-5 Preview reasoning", "stepfun menu", ["stepfun"], None),
-        ("20", "OpenSatan: anonymous uncensored chat", "opensatan menu", ["opensatan"], None),
+        ("17", "Koma-Free: keyless vLLM inference (koma/apple)", "komafree menu", ["komafree"], None),
+        ("18", "OpenSatan: anonymous uncensored chat (satan/genie)", "opensatan menu", ["opensatan"], None),
+        ("19", "OpenCode Anonymous: GLM-5.3 & DeepSeek (WARP gateway)", "opencode anon", ["opencode", "anon"], None),
+        ("20", "OpenCode Zen Pool: 26 API keys rotation", "opencode pool", ["opencode", "pool"], None),
         ("21", "AI Supplies: 22+ provider farm fleet", "supplies farm", ["supplies", "farm"], None),
     ]),
 ]
@@ -77,10 +77,10 @@ MENU_FARM_KEYS = {"11", "12"}
 # Items needing custom interactive prompts before dispatch.
 _INTERACTIVE_HANDLERS: dict[str, str] = {
     "13": "_handle_autofarm",
-    "17": "_handle_orvis",
-    "18": "_handle_komafree",
-    "19": "_handle_stepfun",
-    "20": "_handle_opensatan",
+    "17": "_handle_komafree",
+    "18": "_handle_opensatan",
+    "19": "_handle_opencode_anon",
+    "20": "_handle_opencode_pool",
     "21": "_handle_supplies",
 }
 _STATUS_LABELS: dict[str, str] = {
@@ -340,47 +340,16 @@ def _handle_autofarm(p: argparse.ArgumentParser) -> None:
         kancahub.dispatch(p, p.parse_args(cmd_args))
     except Exception as e:  # noqa: BLE001
         print(kancahub.col("red", f"Error: {e}"))
-def _handle_orvis(p: argparse.ArgumentParser) -> None:
-    """Interactive handler for Orvis AI (Claude 4, GPT-4o, o3-mini)."""
-    import kancahub
-    print(kancahub.col("bold", "\n── [17] Orvis AI: Frontier Models (100 free credits/acct) ──"))
-    print("  [1] List harvested accounts & credit balance")
-    print("  [2] Quick smoke test — Claude 4 Sonnet ('pong')")
-    print("  [3] Quick smoke test — OpenAI o3-mini ('pong')")
-    print("  [4] Bulk-create new accounts headlessly (AWS Cognito OTP)")
-    print("  [5] Connect / inject into 9Router SQLite database")
-    print("  [q] Cancel / Back to menu\n")
-    try:
-        c = input(f" {kancahub.C['bold']}Select [1-5, q]: {kancahub.C['reset']}").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return
-    if c == "1":
-        kancahub.dispatch(p, p.parse_args(["orvis", "accounts"]))
-    elif c == "2":
-        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "anthropic/claude-sonnet-4-20250514"]))
-    elif c == "3":
-        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "openai/o3-mini"]))
-    elif c == "4":
-        try:
-            n = input(f" {kancahub.C['bold']}How many accounts [1]: {kancahub.C['reset']}").strip() or "1"
-        except (EOFError, KeyboardInterrupt):
-            return
-        kancahub.dispatch(p, p.parse_args(["orvis", "create", "--count", n]))
-    elif c == "5":
-        kancahub.dispatch(p, p.parse_args(["orvis", "connect"]))
-
-
 def _handle_komafree(p: argparse.ArgumentParser) -> None:
     """Interactive handler for Koma-Free (vLLM inference)."""
     import kancahub
-    print(kancahub.col("bold", "\n── [18] Koma-Free: Keyless vLLM Inference (Zero Auth) ──"))
-    print("  [1] Check doctor / latency / connectivity")
-    print("  [2] Quick chat test ('pong')")
-    print("  [3] Custom chat prompt")
-    print("  [4] Mint 5 keyless accounts locally")
+    print(kancahub.col("bold", "\n── [17] Koma-Free: Keyless vLLM Inference (koma/apple) ──"))
+    print("  [1] Live doctor & connectivity probe")
+    print("  [2] Quick smoke test ('pong' in ~0.5s)")
+    print("  [3] Custom prompt")
     print("  [q] Cancel / Back to menu\n")
     try:
-        c = input(f" {kancahub.C['bold']}Select [1-4, q]: {kancahub.C['reset']}").strip().lower()
+        c = input(f" {kancahub.C['bold']}Select [1-3, q]: {kancahub.C['reset']}").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
     if c == "1":
@@ -393,41 +362,17 @@ def _handle_komafree(p: argparse.ArgumentParser) -> None:
         except (EOFError, KeyboardInterrupt):
             return
         kancahub.dispatch(p, p.parse_args(["komafree", "chat", "-m", "koma/apple", "-p", txt]))
-    elif c == "4":
-        kancahub.dispatch(p, p.parse_args(["komafree", "create", "-n", "5"]))
-
-
-def _handle_stepfun(p: argparse.ArgumentParser) -> None:
-    """Interactive handler for StepFun Studio."""
-    import kancahub
-    print(kancahub.col("bold", "\n── [19] StepFun Studio: Flagship Reasoning (Step-5 Preview) ──"))
-    print("  [1] List StepFun flagship models")
-    print("  [2] Doctor: check config, token quota & 9Router DB")
-    print("  [3] Connect / inject StepFun Studio into 9Router SQLite DB")
-    print("  [q] Cancel / Back to menu\n")
-    try:
-        c = input(f" {kancahub.C['bold']}Select [1-3, q]: {kancahub.C['reset']}").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return
-    if c == "1":
-        kancahub.dispatch(p, p.parse_args(["stepfun", "models"]))
-    elif c == "2":
-        kancahub.dispatch(p, p.parse_args(["stepfun", "doctor"]))
-    elif c == "3":
-        kancahub.dispatch(p, p.parse_args(["stepfun", "connect"]))
 
 
 def _handle_opensatan(p: argparse.ArgumentParser) -> None:
-    """Interactive handler for OpenSatan & Ox Alpha."""
+    """Interactive handler for OpenSatan (uncensored)."""
     import kancahub
-    print(kancahub.col("bold", "\n── [20] OpenSatan & Ox Alpha Stealth AI ──"))
-    print("  [1] OpenSatan uncensored chat ('pong')")
-    print("  [2] OpenSatan custom prompt")
-    print("  [3] Mint anonymous OpenSatan identity (4s)")
-    print("  [4] Ox Alpha GLM-5.3 Flash 1M reasoning test")
+    print(kancahub.col("bold", "\n── [18] OpenSatan: Anonymous Uncensored Chat ──"))
+    print("  [1] Quick smoke test (Satan persona)")
+    print("  [2] Custom prompt")
     print("  [q] Cancel / Back to menu\n")
     try:
-        c = input(f" {kancahub.C['bold']}Select [1-4, q]: {kancahub.C['reset']}").strip().lower()
+        c = input(f" {kancahub.C['bold']}Select [1-2, q]: {kancahub.C['reset']}").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
     if c == "1":
@@ -438,14 +383,72 @@ def _handle_opensatan(p: argparse.ArgumentParser) -> None:
         except (EOFError, KeyboardInterrupt):
             return
         kancahub.dispatch(p, p.parse_args(["opensatan", "chat", "--prompt", txt]))
-    elif c == "3":
-        kancahub.dispatch(p, p.parse_args(["opensatan", "create", "--count", "1"]))
-    elif c == "4":
+
+
+def _handle_opencode_anon(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for OpenCode Anonymous Gateway."""
+    import kancahub, json, urllib.request, time
+    print(kancahub.col("bold", "\n── [19] OpenCode Anonymous Gateway (GLM-5.3 & Beam) ──"))
+    print("  [1] Smoke test GLM-5.3 Flash (oc-anon/glm-5.3-flash-free)")
+    print("  [2] Smoke test Beam fast model (oc-anon/beam-free)")
+    print("  [3] Custom prompt")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-3, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    model = "beam-free" if c == "2" else "glm-5.3-flash-free"
+    prompt = "respond with single word: pong"
+    if c == "3":
         try:
-            txt = input(f" {kancahub.C['bold']}Message: {kancahub.C['reset']}").strip() or "hello"
+            prompt = input(f" {kancahub.C['bold']}Prompt: {kancahub.C['reset']}").strip() or "hello"
         except (EOFError, KeyboardInterrupt):
             return
-        kancahub.dispatch(p, p.parse_args(["oxalpha", "test", txt]))
+    elif c not in ("1", "2"):
+        return
+
+    print(kancahub.col("cyan", f"[*] Calling {model} via Anonymous Gateway (:8799)..."))
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:8799/v1/chat/completions",
+            data=json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}]}).encode(),
+            headers={"Authorization": "Bearer sk-opencode-anon-local", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=25) as r:
+            body = json.loads(r.read().decode())
+            ans = body["choices"][0]["message"]["content"]
+            print(kancahub.col("green", f"✓ Response ({time.time()-t0:.2f}s):"))
+            print(f"  {ans}\n")
+    except Exception as exc:
+        print(kancahub.col("red", f"✗ Request failed: {exc}\n"))
+
+
+def _handle_opencode_pool(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for OpenCode Zen Key Pool."""
+    import kancahub, json, urllib.request
+    print(kancahub.col("bold", "\n── [20] OpenCode Zen 26-Key Pool (:8791) ──"))
+    print("  [1] View active pool keys & cooldown status")
+    print("  [2] Quick smoke test via pool")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-2, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8791/pool", timeout=5) as r:
+                d = json.loads(r.read().decode())
+                print(f"  Total Keys : {d.get('total_keys')}")
+                print(f"  Active Keys: {d.get('active_keys')}")
+                for item in d.get("keys", [])[:10]:
+                    cd = item.get("cooldown", 0)
+                    cd_str = f"cooling down ({cd}s left)" if cd > 0 else "ready"
+                    print(f"    • {item.get('key'):<22} : {cd_str}")
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ Could not query pool: {exc}"))
+    elif c == "2":
+        kancahub.dispatch(p, p.parse_args(["opencode", "status"]))
 
 
 def _handle_supplies(p: argparse.ArgumentParser) -> None:

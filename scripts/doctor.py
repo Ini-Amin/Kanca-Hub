@@ -183,6 +183,40 @@ def cmd_doctor(_a) -> int:
             print(f"  {'✅' if xai_t else '➖'} xai (Grok OAuth): {xai_t} total, {xai_a} active  (YOUR account)")
             print(kancahub.col("dim", "  (codex/xai are the user's own accounts — not farm output)"))
             con.close()
+
+            # ── 9Router Live Model Probes ──────────────────────────────────
+            print(kancahub.col("bold", "\n  9Router Live Model Probes (:20128):"))
+            rk_path = kancahub.HOME / ".9router" / "router.key"
+            if rk_path.is_file():
+                import json as _j, urllib.request as _ur, time as _t
+                rk = rk_path.read_text().strip()
+                test_models = [
+                    ("koma/apple", "koma/apple"),
+                    ("opensatan/satan", "opensatan/satan"),
+                    ("oc-anon/beam-free", "oc-anon/beam-free"),
+                    ("oc-anon/glm-5.3-flash-free", "oc-anon/glm-5.3-flash-free"),
+                    ("oc-anon/deepseek-v4.1-flash-free", "oc-anon/deepseek-v4.1-flash-free"),
+                ]
+                for label, m in test_models:
+                    t0 = _t.time()
+                    try:
+                        req = _ur.Request(
+                            "http://127.0.0.1:20128/v1/chat/completions",
+                            data=_j.dumps({"model": m, "messages": [{"role": "user", "content": "respond: pong"}]}).encode(),
+                            headers={"Authorization": f"Bearer {rk}", "Content-Type": "application/json"},
+                        )
+                        with _ur.urlopen(req, timeout=8) as r:
+                            raw = r.read().decode().split("data: [DONE]")[0].strip()
+                            d = _j.loads(raw)
+                            txt = d["choices"][0]["message"]["content"][:25].replace("\n", " ").strip()
+                            lat = _t.time() - t0
+                            print(f"  {kancahub.col('green', '✅')} {label:<34} ({lat:.2f}s): {txt}")
+                    except Exception as ex:
+                        lat = _t.time() - t0
+                        err_msg = str(ex)[:40].replace("\n", " ")
+                        print(f"  {kancahub.col('red', '❌')} {label:<34} ({lat:.2f}s): {err_msg}")
+            else:
+                print(kancahub.col("yellow", "  ➖ router.key not found — skipping live model probes"))
         except Exception as e:  # noqa: BLE001
             print(kancahub.col("red", f"  ❌ could not read DB: {e}"))
     else:
