@@ -76,6 +76,10 @@ MENU_FARM_KEYS = {"11", "12"}
 
 # Items needing custom interactive prompts before dispatch.
 _INTERACTIVE_HANDLERS: dict[str, str] = {
+    "3": "_handle_warp",
+    "5": "_handle_vpn",
+    "6": "_handle_zcode",
+    "9": "_handle_dahl",
     "13": "_handle_autofarm",
     "17": "_handle_orvis",
     "18": "_handle_komafree",
@@ -303,7 +307,96 @@ def _menu_ask_farm_options(key: str, argv: list[str]) -> list[str]:
     return argv
 
 
-# ── Interactive handlers for items needing custom prompts ─────────────
+def _handle_warp(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for Cloudflare WARP tunnel."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [3] Cloudflare WARP Tunnel Management ──"))
+    print("  [1] Check tunnel status & current egress IP")
+    print("  [2] Bring tunnel UP (connect)")
+    print("  [3] Bring tunnel DOWN (disconnect)")
+    print("  [4] Generate fresh WARP profile")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-4, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["warp", "status"]))
+    elif c == "2":
+        kancahub.dispatch(p, p.parse_args(["warp", "up"]))
+    elif c == "3":
+        kancahub.dispatch(p, p.parse_args(["warp", "down"]))
+    elif c == "4":
+        kancahub.dispatch(p, p.parse_args(["warp", "gen"]))
+
+
+def _handle_vpn(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for VPN & Residential Proxy Fleet."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [5] VPN & Residential Proxy Fleet ──"))
+    print("  [1] View pool status & IP health")
+    print("  [2] Run live egress verdict test")
+    print("  [3] Harvest fresh proxies")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-3, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["vpn", "status"]))
+    elif c == "2":
+        print(kancahub._egress_verdict())
+    elif c == "3":
+        kancahub.dispatch(p, p.parse_args(["proxy", "harvest", "--target", "20"]))
+
+
+def _handle_zcode(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for ZCode Start Plan & Tokens Pool."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [6] ZCode: Start Plan & Tokens Pool (251 Accounts) ──"))
+    print("  [1] Check account balances & remaining quotas")
+    print("  [2] Check active bridge health (:8787)")
+    print("  [3] Run VPN Gate residential claim orchestrator (1024 / 300M tokens)")
+    print("  [4] Connect / inject active keys into 9Router")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-4, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["zcode", "quota"]))
+    elif c == "2":
+        import urllib.request, json
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8787/health", timeout=5) as r:
+                d = json.loads(r.read().decode())
+                print(kancahub.col("green", f"✓ ZCode Bridge Healthy: {d.get('keys')} keys, upstream: {d.get('upstream')}, egress: {d.get('egress')}"))
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ Bridge check failed: {exc}"))
+    elif c == "3":
+        import subprocess, sys
+        script = kancahub.AUTO_FREECF / "scripts" / "claim_vpngate_orchestrator.py"
+        subprocess.run([sys.executable, str(script)])
+    elif c == "4":
+        kancahub.dispatch(p, p.parse_args(["zcode", "connect"]))
+
+
+def _handle_dahl(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for Dahl Inference."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [9] Dahl Inference 100M-Token Keys ──"))
+    print(kancahub.col("yellow", "  Note: Dahl requires browser challenge verification (CAPTCHA_KEY)."))
+    print("  [1] Attempt automated mint (requires proxies/solver)")
+    print("  [2] Connect stored keys into 9Router")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-2, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["dahlfarm", "mint"]))
+    elif c == "2":
+        kancahub.dispatch(p, p.parse_args(["dahlfarm", "connect"]))
 
 def _handle_autofarm(p: argparse.ArgumentParser) -> None:
     """Autofarm interactive prompt: URL, mailbox, options."""
@@ -358,11 +451,11 @@ def _handle_orvis(p: argparse.ArgumentParser) -> None:
     if c == "1":
         kancahub.dispatch(p, p.parse_args(["orvis", "accounts"]))
     elif c == "2":
-        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "anthropic/claude-sonnet-4-20250514"]))
+        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "claude-sonnet-4"]))
     elif c == "3":
-        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "google/gemini-2.5-flash"]))
+        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "gemini-2.5-flash"]))
     elif c == "4":
-        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "openai/gpt-4o"]))
+        kancahub.dispatch(p, p.parse_args(["orvis", "test", "--model", "gpt-4o"]))
     elif c == "5":
         kancahub.dispatch(p, p.parse_args(["orvis", "create"]))
     elif c == "6":
@@ -372,7 +465,7 @@ def _handle_orvis(p: argparse.ArgumentParser) -> None:
 def _handle_komafree(p: argparse.ArgumentParser) -> None:
     """Interactive handler for Koma-Free (vLLM inference)."""
     import kancahub
-    print(kancahub.col("bold", "\n── [17] Koma-Free: Keyless vLLM Inference (koma/apple) ──"))
+    print(kancahub.col("bold", "\n── [18] Koma-Free: Keyless vLLM Inference (koma/apple) ──"))
     print("  [1] Live doctor & connectivity probe")
     print("  [2] Quick smoke test ('pong' in ~0.5s)")
     print("  [3] Custom prompt")
@@ -396,7 +489,7 @@ def _handle_komafree(p: argparse.ArgumentParser) -> None:
 def _handle_opensatan(p: argparse.ArgumentParser) -> None:
     """Interactive handler for OpenSatan (uncensored)."""
     import kancahub
-    print(kancahub.col("bold", "\n── [18] OpenSatan: Anonymous Uncensored Chat ──"))
+    print(kancahub.col("bold", "\n── [19] OpenSatan: Anonymous Uncensored Chat ──"))
     print("  [1] Quick smoke test (Satan persona)")
     print("  [2] Custom prompt")
     print("  [q] Cancel / Back to menu\n")
@@ -417,24 +510,32 @@ def _handle_opensatan(p: argparse.ArgumentParser) -> None:
 def _handle_opencode_anon(p: argparse.ArgumentParser) -> None:
     """Interactive handler for OpenCode Anonymous Gateway."""
     import kancahub, json, urllib.request, time
-    print(kancahub.col("bold", "\n── [19] OpenCode Anonymous Gateway (GLM-5.3 & Beam) ──"))
-    print("  [1] Smoke test GLM-5.3 Flash (oc-anon/glm-5.3-flash-free)")
-    print("  [2] Smoke test Beam fast model (oc-anon/beam-free)")
-    print("  [3] Custom prompt")
+    print(kancahub.col("bold", "\n── [20] OpenCode Anonymous Gateway (GLM-5.3 & DeepSeek) ──"))
+    print("  [1] Smoke test DeepSeek V4.1 Flash (oc-anon/deepseek-v4.1-flash-free) ~1.2s")
+    print("  [2] Smoke test Beam fast model (oc-anon/beam-free) ~1.3s")
+    print("  [3] Smoke test GLM-5.3 Flash (oc-anon/glm-5.3-flash-free)")
+    print("  [4] Custom prompt")
     print("  [q] Cancel / Back to menu\n")
     try:
-        c = input(f" {kancahub.C['bold']}Select [1-3, q]: {kancahub.C['reset']}").strip().lower()
+        c = input(f" {kancahub.C['bold']}Select [1-4, q]: {kancahub.C['reset']}").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
-    model = "beam-free" if c == "2" else "glm-5.3-flash-free"
+    if c == "1":
+        model = "deepseek-v4.1-flash-free"
+    elif c == "2":
+        model = "beam-free"
+    elif c == "3":
+        model = "glm-5.3-flash-free"
+    elif c == "4":
+        model = "deepseek-v4.1-flash-free"
+    else:
+        return
     prompt = "respond with single word: pong"
-    if c == "3":
+    if c == "4":
         try:
             prompt = input(f" {kancahub.C['bold']}Prompt: {kancahub.C['reset']}").strip() or "hello"
         except (EOFError, KeyboardInterrupt):
             return
-    elif c not in ("1", "2"):
-        return
 
     print(kancahub.col("cyan", f"[*] Calling {model} via Anonymous Gateway (:8799)..."))
     t0 = time.time()

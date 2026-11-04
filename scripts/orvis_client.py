@@ -57,17 +57,21 @@ MODEL_MAP = {
 }
 
 
-def _get_proxy_url() -> str:
-    """Get authenticated proxy URL from residential pool."""
-    info = proxy_pool.best()
-    p = info.get("proxy", {})
-    user = p.get("username")
-    pwd = p.get("password")
-    srv = p.get("server", "").replace("http://", "").replace("https://", "")
-    if user and pwd:
-        return f"http://{user}:{pwd}@{srv}"
-    return f"http://{srv}"
-
+def _get_proxy_url() -> str | None:
+    """Get authenticated proxy URL from residential pool, or None if direct/tunnel."""
+    try:
+        info = proxy_pool.best()
+        p = info.get("proxy") or {}
+        srv = p.get("server", "").replace("http://", "").replace("https://", "")
+        if not srv:
+            return None
+        user = p.get("username")
+        pwd = p.get("password")
+        if user and pwd:
+            return f"http://{user}:{pwd}@{srv}"
+        return f"http://{srv}"
+    except Exception:
+        return None
 
 def _cognito_rpc(target: str, payload: dict, proxy_url: str | None = None, timeout: int = 25) -> dict:
     """Execute raw JSON-RPC call to AWS Cognito."""
@@ -81,9 +85,12 @@ def _cognito_rpc(target: str, payload: dict, proxy_url: str | None = None, timeo
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         },
     )
-    proxy = proxy_url or _get_proxy_url()
-    handler = urllib.request.ProxyHandler({"https": proxy, "http": proxy})
-    opener = urllib.request.build_opener(handler)
+    proxy = proxy_url if proxy_url is not None else _get_proxy_url()
+    if proxy:
+        handler = urllib.request.ProxyHandler({"https": proxy, "http": proxy})
+        opener = urllib.request.build_opener(handler)
+    else:
+        opener = urllib.request.build_opener()
     try:
         with opener.open(req, timeout=timeout) as r:
             body = r.read().decode("utf-8")
@@ -164,8 +171,9 @@ def create_account(log: Callable[[str], None] = print) -> dict:
         f"{ORVIS_API_BASE}/credits/balance",
         headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
     )
-    handler = urllib.request.ProxyHandler({"https": proxy, "http": proxy})
-    with urllib.request.build_opener(handler).open(req_bal, timeout=20) as r:
+    proxy = _get_proxy_url()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy, "http": proxy})) if proxy else urllib.request.build_opener()
+    with opener.open(req_bal, timeout=20) as r:
         bal_data = json.loads(r.read().decode("utf-8"))
     balance = bal_data.get("balance", 100.0)
     sender_user_id = bal_data.get("sender_user_id") or user_sub
@@ -241,6 +249,10 @@ def get_usable_account() -> dict:
     accounts = load_accounts()
     for a in accounts:
         if a.get("balance", 0) > 0.5 and a.get("access_token"):
+            # Auto-refresh if token older than 45 minutes (Cognito expiry is 60m)
+            updated = a.get("updated_at", 0)
+            if time.time() - updated > 2700:
+                a = refresh_account_tokens(a)
             return a
     print("  [orvis] no account with active balance found — harvesting fresh account...")
     return create_account()
@@ -323,11 +335,12 @@ async def chat_turn(
                     on_delta(c)
             elif ftype == "done":
                 break
-            elif ftype == "error":
+            elif ftype == "auth_error":
+                raise RuntimeError("Orvis auth error: session expired or token unauthorized. Token refresh required.")
+            elif ftype in ("error", "failed"):
                 raise RuntimeError(f"Orvis chat error: {f}")
             elif ftype == "ping":
                 await ws.send(json.dumps({"type": "pong"}))
-
         return "".join(chunks)
 
 

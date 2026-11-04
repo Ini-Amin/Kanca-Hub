@@ -98,7 +98,11 @@ def execute_codebuddy(model: str, prompt: str, timeout: int = 300) -> str:
     # Map request model name
     m_lower = model.lower()
     cb_model = "deepseek-v4.1-flash"
-    if "hy3" in m_lower or "hunyuan" in m_lower:
+    if "hy4" in m_lower:
+        cb_model = "hy4-preview" if "preview" in m_lower else "hy4"
+    elif "hy3" in m_lower:
+        cb_model = "hy3"
+    elif "hunyuan" in m_lower:
         cb_model = "hy3"
     elif "glm-5.3" in m_lower:
         cb_model = "glm-5.3"
@@ -178,6 +182,8 @@ class CodeBuddyBridgeHandler(BaseHTTPRequestHandler):
                 "tokens_loaded": len(tokens),
                 "available_models": [
                     "deepseek-v4.1-flash",
+                    "hy4",
+                    "hy4-preview",
                     "hy3",
                     "glm-5.3",
                     "glm-5.2",
@@ -192,6 +198,8 @@ class CodeBuddyBridgeHandler(BaseHTTPRequestHandler):
             models_raw = [
                 "CodeBuddy/deepseek-v4.1-flash",
                 "CodeBuddy/deepseek-1017",
+                "CodeBuddy/hy4",
+                "CodeBuddy/hy4-preview",
                 "CodeBuddy/hy3",
                 "CodeBuddy/glm-5.3",
                 "CodeBuddy/glm-5.2",
@@ -200,6 +208,8 @@ class CodeBuddyBridgeHandler(BaseHTTPRequestHandler):
                 "CodeBuddy/kimi-k3",
                 "deepseek-v4.1-flash",
                 "deepseek-1017",
+                "hy4",
+                "hy4-preview",
                 "hy3",
                 "glm-5.3",
             ]

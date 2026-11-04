@@ -723,10 +723,20 @@ def cmd_orvis(a: Any) -> int:
     if mode == "test":
         port = getattr(a, "port", 8796) or 8796
         import urllib.request
-        model = getattr(a, "model", "anthropic/claude-sonnet-4-20250514") or "anthropic/claude-sonnet-4-20250514"
+        raw_m = getattr(a, "model", "claude-sonnet-4") or "claude-sonnet-4"
+        if "sonnet" in raw_m:
+            model = "claude-sonnet-4"
+        elif "gpt-4o" in raw_m:
+            model = "gpt-4o"
+        elif "o3" in raw_m:
+            model = "o3-mini"
+        elif "opus" in raw_m:
+            model = "claude-opus-4"
+        else:
+            model = "gemini-2.5-flash"
         payload = json.dumps({
             "model": model,
-            "messages": [{"role": "user", "content": "respond with pong"}],
+            "messages": [{"role": "user", "content": "respond with only: pong"}],
         }).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/v1/chat/completions",
