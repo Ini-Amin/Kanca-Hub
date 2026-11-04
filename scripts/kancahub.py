@@ -1042,6 +1042,12 @@ def build_parser() -> argparse.ArgumentParser:
     oms_watch.add_argument("--interval", default="30s", help="poll interval")
     oms_watch.add_argument("--telegram", default="", help="bot_token:chat_id")
     omss.add_parser("sources", help="list all 43 supported platforms")
+
+    # ---- exa ----
+    ex = sub.add_parser("exa", help="Exa.ai: neural web search engine ($50 grant)")
+    ex.add_argument("query", help="search query")
+    ex.add_argument("-n", "--num", type=int, default=5, help="number of results (default 5)")
+    ex.add_argument("--json", action="store_true", help="output raw JSON")
     return p
 
 
@@ -1073,6 +1079,12 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         if getattr(args, "telegram", None):
             call_args.extend(["--telegram", args.telegram])
         return subprocess.run(call_args).returncode
+    if g == "exa":
+        import exa_search
+        call_args = [args.query, "-n", str(args.num)]
+        if getattr(args, "json", False):
+            call_args.append("--json")
+        return exa_search.main(call_args)
     if g == "memory":
         import memory as _mem  # noqa: PLC0415
         if cmd in ("index", "reindex"):

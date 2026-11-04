@@ -172,6 +172,12 @@
 "host",
 "port"
 ],
+"exa": [
+"help",
+"json",
+"num",
+"query"
+],
 "freeai": [
 "freeai_cmd",
 "help"
