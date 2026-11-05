@@ -255,7 +255,8 @@ async def mint(*, email: str | None = None, headless: bool = True,
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Mint one abliteration.ai API key (Camoufox)")
-    ap.add_argument("--email", default=None, help="use this address (else a fresh emailmux @gmail.com)")
+    ap.add_argument("--email", default=None, help="use this address")
+    ap.add_argument("--mailbox", default="tempik", help="mailbox provider: tempik, gmail, auto (default: tempik)")
     ap.add_argument("--headful", action="store_true", help="show visible browser window")
     ap.add_argument("--headless", action="store_true", default=True, help="run headless (default)")
     ap.add_argument("--proxy", default=None, help="http://user:pass@host:port")
@@ -264,11 +265,10 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         is_headless = not a.headful if a.headful else a.headless
-        rec = asyncio.run(mint(email=a.email, headless=is_headless, proxy=a.proxy, cdp=a.cdp))
+        rec = asyncio.run(mint(email=a.email, headless=is_headless, proxy=a.proxy, cdp=a.cdp, mailbox_provider=a.mailbox))
     except Exception as e:  # noqa: BLE001
         print(f"✗ mint failed: {type(e).__name__}: {e}")
         return 1
-    print(json.dumps(rec, indent=2))
     if a.out:
         with open(a.out, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")

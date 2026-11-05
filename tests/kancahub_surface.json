@@ -150,6 +150,25 @@
 "doctor": [
 "help"
 ],
+"dzine": [
+"dzine_cmd",
+"help"
+],
+"dzine connect": [
+"help"
+],
+"dzine create": [
+"count",
+"help"
+],
+"dzine list": [
+"help"
+],
+"dzine test": [
+"help",
+"model",
+"prompt"
+],
 "egress-node": [
 "en_cmd",
 "help"

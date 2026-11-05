@@ -43,8 +43,8 @@ class TestUnifiedMenuStructure(unittest.TestCase):
 
     def test_menu_integrity_and_categories(self) -> None:
         current_commands = {item[2] for item in UNIFIED_MENU}
-        # 21 items total across 4 categories (A, B, C, D)
-        self.assertEqual(len(UNIFIED_MENU), 21)
+        # 22 items total across 4 categories (A, B, C, D)
+        self.assertEqual(len(UNIFIED_MENU), 22)
         self.assertIn("autofarm", current_commands)
         self.assertIn("freeai status", current_commands)
         self.assertIn("orvis menu", current_commands)
@@ -52,6 +52,7 @@ class TestUnifiedMenuStructure(unittest.TestCase):
         self.assertIn("opensatan menu", current_commands)
         self.assertIn("opencode anon", current_commands)
         self.assertIn("supplies farm", current_commands)
+        self.assertIn("dzine menu", current_commands)
         self.assertIn("freebuff status", current_commands)
         self.assertIn("opencode menu", current_commands)
         self.assertIn("zcode auto-claim", current_commands)
@@ -59,7 +60,7 @@ class TestUnifiedMenuStructure(unittest.TestCase):
         self.assertNotIn("memory search", current_commands)
         self.assertNotIn("stack signup", current_commands)
 
-        expected_keys = [str(i) for i in range(1, 22)]
+        expected_keys = [str(i) for i in range(1, 23)]
         actual_keys = [item[0] for item in UNIFIED_MENU]
         self.assertEqual(actual_keys, expected_keys)
 

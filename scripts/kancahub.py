@@ -126,7 +126,7 @@ _REEXPORTS = {
     "doctor": "cmd_doctor",
     "commands_region": "cmd_region",
     "commands_misc": "cmd_ip_reuse cmd_egress_node cmd_report",
-    "commands_vendor": "cmd_zcode cmd_abliteration cmd_notrack cmd_opencode cmd_omnirush cmd_dahlfarm cmd_proxyvault cmd_orvis cmd_komafree cmd_stepfun cmd_opensatan cmd_oxalpha",
+    "commands_vendor": "cmd_zcode cmd_abliteration cmd_notrack cmd_opencode cmd_omnirush cmd_dahlfarm cmd_proxyvault cmd_orvis cmd_komafree cmd_stepfun cmd_opensatan cmd_oxalpha cmd_dzine",
     "commands_9router": "cmd_adb cmd_mobile _r9_cli_token _r9_api _r9_models cmd_9router",
     "commands_proxy": "_probe_http _egress_verdict cmd_proxy _proxy_start _proxy_export "
                       "_proxy_test_pool _proxy_stats _proxy_api _native_proxy_lib "
@@ -1029,6 +1029,17 @@ def build_parser() -> argparse.ArgumentParser:
     oxs.add_parser("list", help="list pool sessions")
     oxs.add_parser("connect", help="inject OxAlpha node into 9Router SQLite DB")
 
+    # ---- dzine ----
+    dz = sub.add_parser("dzine", help="Dzine AI: 145 models (prompt rewriting, image, video) with 100 free credits/acct")
+    dzs = dz.add_subparsers(dest="dzine_cmd")
+    dzs.add_parser("list", help="list farmed Dzine accounts and credits")
+    dzs_cr = dzs.add_parser("create", help="bulk-create Dzine accounts via disposable mail.tm")
+    dzs_cr.add_argument("-n", "--count", type=int, default=1, help="count")
+    dzs_t = dzs.add_parser("test", help="test chat completion")
+    dzs_t.add_argument("prompt", nargs="?", default="ping", help="prompt text")
+    dzs_t.add_argument("--model", default="smart_prompt", help="model id")
+    dzs.add_parser("connect", help="inject Dzine node into 9Router SQLite DB")
+
     # ---- omnisearch ----
     oms = sub.add_parser("omnisearch", help="OmniSearch: 43-platform keyword sentinel & deals watcher")
     omss = oms.add_subparsers(dest="omnisearch_cmd")
@@ -1229,6 +1240,8 @@ def dispatch(p: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return cmd_opensatan(args)
     if g == "oxalpha":
         return cmd_oxalpha(args)
+    if g == "dzine":
+        return cmd_dzine(args)
     p.print_help()
     return 0
 

@@ -45,10 +45,10 @@ class KomaFree:
         if KOMA_STORE.is_file():
             try:
                 data = json.loads(KOMA_STORE.read_text())
-                accs = data.get("accounts", [])
-                if accs and isinstance(accs, list):
-                    first = accs[0]
-                    return first.get("install_id", str(uuid.uuid4())), first.get("session_id", str(uuid.uuid4()))
+                accs = [a for a in data.get("accounts", []) if a.get("state") == "active"]
+                if accs:
+                    picked = random.choice(accs)
+                    return picked.get("install_id", str(uuid.uuid4())), picked.get("session_id", str(uuid.uuid4()))
             except Exception:
                 pass
         return str(uuid.uuid4()), str(uuid.uuid4())

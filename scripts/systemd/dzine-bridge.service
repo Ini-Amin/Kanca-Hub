@@ -1,0 +1,15 @@
+[Unit]
+Description=Dzine AI 145-Model OpenAI-Compatible Bridge (:20132)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Auto-FreeCF-vendor-refs/dzinerouter
+ExecStart=%h/.local/bin/dzinerouter serve -port 20132 -accounts %h/.config/auto-freecf/dzine_accounts.json
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

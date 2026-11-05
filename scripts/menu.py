@@ -39,6 +39,7 @@ CATEGORIES: list[tuple[str, str, list[MenuEntry]]] = [
         ("19", "OpenSatan: anonymous uncensored chat (satan/genie)", "opensatan menu", ["opensatan"], None),
         ("20", "OpenCode Anonymous: GLM-5.3 & DeepSeek (WARP gateway)", "opencode anon", ["opencode", "anon"], None),
         ("21", "AI Supplies: 22+ provider farm fleet", "supplies farm", ["supplies", "farm"], None),
+        ("22", "Dzine AI: 145 models (prompt rewriter, Flux, Qwen)", "dzine menu", ["dzine", "list"], None),
     ]),
 ]
 # Flat view for backward compat (render, dispatch, tests)
@@ -86,6 +87,7 @@ _INTERACTIVE_HANDLERS: dict[str, str] = {
     "19": "_handle_opensatan",
     "20": "_handle_opencode_anon",
     "21": "_handle_supplies",
+    "22": "_handle_dzine",
 }
 _STATUS_LABELS: dict[str, str] = {
     "blocked": " \x1b[31m[blocked]\x1b[0m",
@@ -332,14 +334,16 @@ def _handle_warp(p: argparse.ArgumentParser) -> None:
 
 def _handle_vpn(p: argparse.ArgumentParser) -> None:
     """Interactive handler for VPN & Residential Proxy Fleet."""
-    import kancahub
+    import kancahub, subprocess, sys
     print(kancahub.col("bold", "\n── [5] VPN & Residential Proxy Fleet ──"))
     print("  [1] View pool status & IP health")
     print("  [2] Run live egress verdict test")
-    print("  [3] Harvest fresh proxies")
+    print("  [3] Harvest Webshare residential proxies (Camoufox + Audio reCAPTCHA)")
+    print("  [4] Mint Fastly Anycast VPN 50GB accounts (Mozilla FxA + Tempik)")
+    print("  [5] Run Fastly VPN local proxy (:25347)")
     print("  [q] Cancel / Back to menu\n")
     try:
-        c = input(f" {kancahub.C['bold']}Select [1-3, q]: {kancahub.C['reset']}").strip().lower()
+        c = input(f" {kancahub.C['bold']}Select [1-5, q]: {kancahub.C['reset']}").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
     if c == "1":
@@ -347,8 +351,18 @@ def _handle_vpn(p: argparse.ArgumentParser) -> None:
     elif c == "2":
         print(kancahub._egress_verdict())
     elif c == "3":
-        kancahub.dispatch(p, p.parse_args(["proxy", "harvest", "--target", "20"]))
-
+        cnt = input(" Number of accounts to harvest (10 proxies/acct) [default: 1]: ").strip() or "1"
+        cmd = [kancahub.pick_python(), "scripts/webshare_camoufox.py", "--count", cnt, "--headless"]
+        print(f"[*] Launching Webshare hunter ({cnt} accounts)...")
+        subprocess.run(cmd)
+    elif c == "4":
+        cnt = input(" Number of Fastly accounts to mint (50GB/acct) [default: 1]: ").strip() or "1"
+        cmd = [kancahub.pick_python(), "scripts/fxa_tempik_e2e.py", "--count", cnt]
+        print(f"[*] Launching Fastly 50GB minter ({cnt} accounts)...")
+        subprocess.run(cmd)
+    elif c == "5":
+        print("[*] Starting Fastly VPN proxy on :25347 (press Ctrl+C to stop)...")
+        subprocess.run([kancahub.pick_python(), "scripts/fastly_vpn_proxy.py", "--port", "25347"])
 
 def _handle_zcode(p: argparse.ArgumentParser) -> None:
     """Interactive handler for ZCode Start Plan & Tokens Pool."""
@@ -586,6 +600,29 @@ def _handle_supplies(p: argparse.ArgumentParser) -> None:
     import supplies_registry
     supplies_registry.farm_supply()
 
+
+def _handle_dzine(p: argparse.ArgumentParser) -> None:
+    """Interactive handler for Dzine AI (145 models, prompt rewriting)."""
+    import kancahub
+    print(kancahub.col("bold", "\n── [22] Dzine AI: 145 Models (100 free credits/acct) ──"))
+    print("  [1] List harvested accounts & credit balance")
+    print("  [2] Quick smoke test - Smart Prompt ('ping')")
+    print("  [3] Mint fresh accounts headlessly (mail.tm)")
+    print("  [4] Sync / connect into 9Router SQLite DB")
+    print("  [q] Cancel / Back to menu\n")
+    try:
+        c = input(f" {kancahub.C['bold']}Select [1-4, q]: {kancahub.C['reset']}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if c == "1":
+        kancahub.dispatch(p, p.parse_args(["dzine", "list"]))
+    elif c == "2":
+        kancahub.dispatch(p, p.parse_args(["dzine", "test", "ping", "--model", "smart_prompt"]))
+    elif c == "3":
+        cnt = input(" Number of accounts to create [default: 1]: ").strip() or "1"
+        kancahub.dispatch(p, p.parse_args(["dzine", "create", "-n", cnt]))
+    elif c == "4":
+        kancahub.dispatch(p, p.parse_args(["dzine", "connect"]))
 
 # ── Background job management ─────────────────────────────────────────
 

@@ -1133,3 +1133,92 @@ def cmd_oxalpha(a: Any) -> int:
     extra = _extra(a)
     cmd = [str(node), str(script), mode] + extra
     return kancahub.run(cmd, cwd=root, env={"PORT": "8781"})
+
+def cmd_dzine(a: Any) -> int:
+    """dzinerouter: bulk Dzine accounts -> 145 models OpenAI edge (:20132)."""
+    import kancahub
+    mode = getattr(a, "dzine_cmd", "list") or "list"
+    vault = Path.home() / ".config/auto-freecf/dzine_accounts.json"
+    bin_path = Path.home() / ".local/bin/dzinerouter"
+    if not bin_path.is_file():
+        bin_path = VENDOR / "dzinerouter" / "dzinerouter"
+
+    if mode == "list":
+        if vault.is_file():
+            try:
+                raw_data = json.loads(vault.read_text())
+                accs = raw_data.get("accounts", []) if isinstance(raw_data, dict) else raw_data
+                print(f"\n{kancahub.col('cyan', 'Dzine AI Accounts')} ({len(accs)}):")
+                print(f"{'EMAIL':<30} {'PLAN':<8} {'CREDITS':<10}")
+                print("─" * 52)
+                for acc in accs:
+                    print(f"{acc.get('email', ''):<30} {acc.get('plan', 'free'):<8} {acc.get('credits', '100'):<10}")
+                print()
+                return 0
+            except Exception:
+                pass
+        print(kancahub.col("yellow", "• No stored Dzine accounts found."))
+        return 0
+
+    if mode == "create":
+        count = getattr(a, "count", 1) or 1
+        print(kancahub.col("cyan", f"[*] Creating {count} Dzine account(s) via disposable mail.tm..."))
+        cmd = [str(bin_path), "create", "-n", str(count), "-accounts", str(vault)]
+        rc = kancahub.run(cmd)
+        if rc == 0:
+            print(kancahub.col("green", f"✓ Created {count} account(s) in {vault}"))
+            subprocess.run(["systemctl", "--user", "restart", "dzine-bridge.service"], capture_output=True)
+        return rc
+
+    if mode == "test":
+        prompt = getattr(a, "prompt", "ping") or "ping"
+        model = getattr(a, "model", "smart_prompt") or "smart_prompt"
+        print(kancahub.col("cyan", f"[*] Testing Dzine model {model} with prompt: {prompt}"))
+        import urllib.request
+        payload = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}]}).encode()
+        req = urllib.request.Request("http://127.0.0.1:20132/v1/chat/completions", data=payload, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                res = json.loads(r.read().decode())
+                ans = res["choices"][0]["message"]["content"]
+                print(kancahub.col("green", f"✓ Dzine ({model}):\n") + ans)
+                return 0
+        except Exception as exc:
+            print(kancahub.col("red", f"✗ Dzine test failed: {exc}"))
+            return 1
+
+    if mode == "connect":
+        import urllib.request
+        base_url = "http://127.0.0.1:20132/v1"
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:20132/v1/models")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                mdata = json.loads(r.read())
+            models = [m["id"] for m in mdata.get("data", [])]
+        except Exception:
+            models = ["smart_prompt", "default"]
+        db_path = Path.home() / ".9router/db/data.sqlite"
+        if not db_path.is_file():
+            print(kancahub.col("red", "✗ 9Router DB not found"))
+            return 1
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        node_id = "openai-compatible-chat-dzine-bridge"
+        now = datetime.now(timezone.utc).isoformat()
+        cur.execute("DELETE FROM providerNodes WHERE id = ?", (node_id,))
+        cur.execute(
+            "INSERT INTO providerNodes (id, type, name, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
+            (node_id, "openai-compatible", "Dzine", json.dumps({"baseUrl": base_url, "apiType": "chat", "prefix": "dzine", "models": models, "name": "Dzine"}), now, now),
+        )
+        cur.execute("DELETE FROM providerConnections WHERE id = ?", ("conn-dzine-bridge",))
+        cur.execute(
+            "INSERT INTO providerConnections (id, provider, authType, name, priority, isActive, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("conn-dzine-bridge", node_id, "apikey", "Dzine-Local-Pool", 1, 1, json.dumps({"apiKey": "sk-dzine-local-pool", "defaultModel": "smart_prompt", "testStatus": "active", "providerSpecificData": {"authMethod": "api_key", "baseUrl": base_url, "prefix": "dzine"}}), now, now),
+        )
+        conn.commit()
+        conn.close()
+        print(kancahub.col("green", f"✓ Injected Dzine node ({len(models)} models) into 9Router SQLite DB!"))
+        print(kancahub.col("dim", "  Prefix: dzine/* (e.g. dzine/smart_prompt, dzine/default)"))
+        return 0
+
+    return 0
