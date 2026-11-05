@@ -88,9 +88,10 @@ async def _submit(page, labels, log, timeout_ms=8000) -> bool:
     return False
 
 
-async def _once(*, headless=True, log=print, puzzles=20) -> dict:
+async def _once(*, headless=True, log=print, puzzles=20, proxy=None) -> dict:
     import mailboxes as M
     import captcha_slider as CS
+    import camoufox_helpers
     from camoufox.async_api import AsyncCamoufox
 
     box = M.open_mailbox("auto", domain=MAIL_DOMAIN, log=log)
@@ -98,7 +99,14 @@ async def _once(*, headless=True, log=print, puzzles=20) -> dict:
     rec = {"email": email, "password": password, "name": name, "provider": "zai", "status": "start"}
     log(f"  email: {email}  password: {password}  name: {name}")
 
-    async with AsyncCamoufox(headless=headless, humanize=True, os="windows") as browser:
+    effective_proxy = proxy or os.environ.get("HTTP_PROXY") or "http://127.0.0.1:8899"
+    proxy_cfg = camoufox_helpers.to_camoufox_proxy(effective_proxy)
+    cam_kw = {"headless": headless, "humanize": True, "os": "windows"}
+    if proxy_cfg:
+        cam_kw["proxy"] = proxy_cfg
+        log(f"  proxy: {effective_proxy}")
+
+    async with AsyncCamoufox(**cam_kw) as browser:
         page = await browser.new_page()
         posts = []
         async def on_resp(r):
@@ -170,12 +178,12 @@ async def _once(*, headless=True, log=print, puzzles=20) -> dict:
         return rec
 
 
-async def signup(*, headless=True, attempts=3, log=print) -> dict:
+async def signup(*, headless=True, attempts=3, log=print, proxy=None) -> dict:
     last = {}
     for i in range(1, attempts + 1):
         log(f"=== attempt {i}/{attempts} ===")
         try:
-            rec = await _once(headless=headless, log=log)
+            rec = await _once(headless=headless, log=log, proxy=proxy)
         except Exception as e:  # noqa: BLE001
             log(f"  error: {type(e).__name__}: {e}")
             rec = {"status": "error", "error": str(e)}
@@ -189,11 +197,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Create a z.ai account + get its token")
     ap.add_argument("--headless", action="store_true")
     ap.add_argument("--attempts", type=int, default=3)
+    ap.add_argument("--proxy", default=None, help="Proxy URL (default: http://127.0.0.1:8899)")
     ap.add_argument("-o", "--out", default=None, help="write the token to this file")
     ap.add_argument("--out-json", default=None,
                     help="write the full record (incl. email/password) to this JSON file")
     a = ap.parse_args(argv)
-    rec = asyncio.run(signup(headless=a.headless, attempts=a.attempts))
+    rec = asyncio.run(signup(headless=a.headless, attempts=a.attempts, proxy=a.proxy))
     if a.out_json:
         Path(a.out_json).write_text(json.dumps(rec))
     print(json.dumps({k: v for k, v in rec.items() if k != "token"}, indent=2))

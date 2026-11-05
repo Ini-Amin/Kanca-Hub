@@ -58,20 +58,23 @@ MODEL_MAP = {
 
 
 def _get_proxy_url() -> str | None:
-    """Get authenticated proxy URL from residential pool, or None if direct/tunnel."""
+    """Get authenticated proxy URL from residential pool, or fallback to local rotating gateway."""
+    if os.environ.get("HTTP_PROXY"):
+        return os.environ.get("HTTP_PROXY")
     try:
         info = proxy_pool.best()
         p = info.get("proxy") or {}
         srv = p.get("server", "").replace("http://", "").replace("https://", "")
-        if not srv:
-            return None
-        user = p.get("username")
-        pwd = p.get("password")
-        if user and pwd:
-            return f"http://{user}:{pwd}@{srv}"
-        return f"http://{srv}"
+        if srv:
+            user = p.get("username")
+            pwd = p.get("password")
+            if user and pwd:
+                return f"http://{user}:{pwd}@{srv}"
+            return f"http://{srv}"
     except Exception:
-        return None
+        pass
+    # Fallback to local rotating residential gateway
+    return "http://127.0.0.1:8899"
 
 def _cognito_rpc(target: str, payload: dict, proxy_url: str | None = None, timeout: int = 25) -> dict:
     """Execute raw JSON-RPC call to AWS Cognito."""

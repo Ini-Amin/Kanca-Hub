@@ -267,26 +267,48 @@ class ProxyGatewayHandler(socketserver.BaseRequestHandler):
             first_line = initial.split(b"\r\n", 1)[0].decode("latin1", "ignore")
             if first_line.upper().startswith("CONNECT "):
                 target = first_line.split()[1]
-                if bridge.is_http_upstream:
-                    upstream = bridge.open_proxy_socket()
-                    req = [f"CONNECT {target} HTTP/1.1", f"Host: {target}"]
-                    if bridge.auth_header:
-                        req.append(f"Proxy-Authorization: Basic {bridge.auth_header}")
-                    upstream.sendall(("\r\n".join(req) + "\r\n\r\n").encode("latin1"))
-                    response = _recv_until_headers(upstream, timeout=bridge.timeout)
-                    status = response.split(b"\r\n", 1)[0] if response else b""
-                    if b" 200 " not in status:
-                        code = status.decode("latin1", "ignore")
-                        kind = "http_proxy_auth" if b" 407 " in status else "http_connect"
-                        raise ProxyBridgeError(kind, code or "proxy CONNECT failed")
-                    self.request.sendall(response)
-                else:
-                    host, port = _split_host_port(target, 443)
-                    upstream = bridge.open_socks_target(host, port)
-                    self.request.sendall(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: local-bridge\r\n\r\n")
+                connected = False
+                for attempt in range(3):
+                    try:
+                        if attempt > 0:
+                            bridge = server.acquire_bridge(None)
+                        if bridge.is_http_upstream:
+                            upstream = bridge.open_proxy_socket()
+                            req = [f"CONNECT {target} HTTP/1.1", f"Host: {target}"]
+                            if bridge.auth_header:
+                                req.append(f"Proxy-Authorization: Basic {bridge.auth_header}")
+                            upstream.sendall(("\r\n".join(req) + "\r\n\r\n").encode("latin1"))
+                            response = _recv_until_headers(upstream, timeout=bridge.timeout)
+                            status = response.split(b"\r\n", 1)[0] if response else b""
+                            if b" 200 " not in status:
+                                if upstream:
+                                    try:
+                                        upstream.close()
+                                    except Exception:
+                                        pass
+                                    upstream = None
+                                continue
+                            self.request.sendall(response)
+                            connected = True
+                            break
+                        else:
+                            host, port = _split_host_port(target, 443)
+                            upstream = bridge.open_socks_target(host, port)
+                            self.request.sendall(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: local-bridge\r\n\r\n")
+                            connected = True
+                            break
+                    except Exception:
+                        if upstream:
+                            try:
+                                upstream.close()
+                            except Exception:
+                                pass
+                            upstream = None
+                        continue
+                if not connected:
+                    raise ProxyBridgeError("http_connect", "upstream proxy CONNECT retries exhausted")
                 _relay(self.request, upstream, timeout=bridge.relay_timeout)
                 return
-
             # Plain HTTP request: strip internal tracking headers and inject auth
             clean_initial = strip_internal_headers(initial)
             if bridge.is_http_upstream:

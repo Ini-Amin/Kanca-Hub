@@ -132,18 +132,17 @@ async def mint(*, email: str | None = None, headless: bool = True,
             await _pw.stop()
     else:
         from camoufox.async_api import AsyncCamoufox
-        kw: dict = dict(headless=headless, humanize=True, os="windows")
-        if proxy:
-            # Firefox rejects inline credentials in `server` (CONNECT 407 →
-            # NS_ERROR_PROXY_CONNECTION_REFUSED); pass auth as separate fields.
-            if "@" in proxy:
-                creds, hostport = proxy.rsplit("@", 1)
+        effective_proxy = proxy or os.environ.get("HTTP_PROXY") or "http://127.0.0.1:8899"
+        kw: dict = dict(headless=headless, humanize=True, os="windows", exclude_addons=["ubo"])
+        if effective_proxy:
+            if "@" in effective_proxy:
+                creds, hostport = effective_proxy.rsplit("@", 1)
                 user, pwd = creds.split("://", 1)[1].split(":", 1)
                 kw["proxy"] = {"server": f"http://{hostport}",
                                "username": user, "password": pwd}
             else:
-                kw["proxy"] = {"server": proxy}
-            kw["geoip"] = True
+                kw["proxy"] = {"server": effective_proxy}
+            kw["geoip"] = False
         _cm = AsyncCamoufox(**kw)
         _br = await _cm.__aenter__()
         page = await _br.new_page()

@@ -65,9 +65,10 @@ async def _screenshot(page, tag: str) -> None:
             pass
 
 
-async def register(*, headless: bool, timeout: float) -> dict:
+async def register(*, headless: bool, timeout: float, proxy: str | None = None) -> dict:
     import github_farm as g
     import residential_proxy_signup as R
+    import camoufox_helpers
     from camoufox.async_api import AsyncCamoufox
 
     domain = g.get_relay_config()["domains"][0]
@@ -80,7 +81,14 @@ async def register(*, headless: bool, timeout: float) -> dict:
     print(f"  • Username : {username}")
     print(f"  • Password : {password}")
 
-    async with AsyncCamoufox(headless=headless, os="windows", humanize=True) as browser:
+    effective_proxy = proxy or os.environ.get("HTTP_PROXY") or "http://127.0.0.1:8899"
+    proxy_cfg = camoufox_helpers.to_camoufox_proxy(effective_proxy)
+    cam_kw = {"headless": headless, "os": "windows", "humanize": True}
+    if proxy_cfg:
+        cam_kw["proxy"] = proxy_cfg
+        print(f"  • Proxy    : {effective_proxy}")
+
+    async with AsyncCamoufox(**cam_kw) as browser:
         page = await browser.new_page()
         await page.goto(REGISTER_URL, wait_until="domcontentloaded", timeout=60000)
         # wait out a possible Turnstile / "just a moment"

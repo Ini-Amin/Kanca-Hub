@@ -24,9 +24,9 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from camoufox.async_api import AsyncCamoufox
+import camoufox_helpers
 import captcha_slider
 import mailboxes as M
-
 CONFIG_DIR = Path.home() / ".config" / "auto-freecf"
 QODER_ACCOUNTS_FILE = CONFIG_DIR / "qoder_accounts.jsonl"
 
@@ -42,6 +42,7 @@ async def run_qoder_signup(
     first_name: str = "Ame",
     last_name: str = "Kanca",
     headless: bool = True,
+    proxy: str | None = None,
 ):
     print("=== Qoder Clean Browser Sign-Up (Domain Email) ===")
 
@@ -59,8 +60,13 @@ async def run_qoder_signup(
     print(f"      Password: {password}")
 
     # 2. Launch Browser
-    print("[2/6] Launching Camoufox (humanize=True, OS=windows)...")
-    async with AsyncCamoufox(headless=headless, humanize=True, os="windows") as browser:
+    effective_proxy = proxy or os.environ.get("HTTP_PROXY") or "http://127.0.0.1:8899"
+    proxy_cfg = camoufox_helpers.to_camoufox_proxy(effective_proxy)
+    print(f"[2/6] Launching Camoufox (humanize=True, OS=windows, proxy: {effective_proxy})...")
+    cam_kwargs: dict = {"headless": headless, "humanize": True, "os": "windows"}
+    if proxy_cfg:
+        cam_kwargs["proxy"] = proxy_cfg
+    async with AsyncCamoufox(**cam_kwargs) as browser:
         page = await browser.new_page()
 
         # Capture key API network responses
@@ -213,6 +219,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Clean Browser Qoder Sign-Up")
     parser.add_argument("--email", type=str, default="", help="Custom domain email (optional)")
     parser.add_argument("--password", type=str, default="", help="Custom password (optional)")
+    parser.add_argument("--proxy", type=str, default="", help="Proxy URL (default: http://127.0.0.1:8899)")
     parser.add_argument("--headed", action="store_true", help="Run headed/visible browser")
     args = parser.parse_args()
 
@@ -221,5 +228,6 @@ if __name__ == "__main__":
             email=args.email or None,
             password=args.password or None,
             headless=not args.headed,
+            proxy=args.proxy or None,
         )
     )
