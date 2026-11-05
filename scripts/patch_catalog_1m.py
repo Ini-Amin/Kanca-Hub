@@ -32,11 +32,56 @@ PROVIDERS_1M = {
     "codebuddy": ["step-5-preview"],
     "codebuddy-intl": ["step-5-preview"],
 
-    # OpenCode / oc
-    "oc": ["step-5-preview", "step-5-preview-free"],
-    "opencode": ["step-5-preview", "step-5-preview-free"],
+    # OpenCode / oc / ocz / OpenCodeZen
+    "oc": [
+        "step-5-preview", "step-5-preview-free", "glm-5.3-flash-free", "deepseek-v4.1-flash-free",
+        "mimo-v2.6-flash-free", "flint-40b-free", "beam-free", "big-pickle",
+        "nemotron-3.5-lightning-free", "nemotron-3.5-super-vl-free", "nemotron-3-ultra-free",
+        "minimax-m3.1-flash-free", "ling-3.0-flash-fin-free"
+    ],
+    "opencode": [
+        "step-5-preview", "step-5-preview-free", "glm-5.3-flash-free", "deepseek-v4.1-flash-free",
+        "mimo-v2.6-flash-free", "flint-40b-free", "beam-free", "big-pickle",
+        "nemotron-3.5-lightning-free", "nemotron-3.5-super-vl-free", "nemotron-3-ultra-free",
+        "minimax-m3.1-flash-free", "ling-3.0-flash-fin-free"
+    ],
     "opencode-go": ["step-5-preview", "step-5-preview-free"],
-
+    "opencode-zen": [
+        "step-5-preview", "step-5-preview-free", "glm-5.3-flash-free", "deepseek-v4.1-flash-free",
+        "mimo-v2.6-flash-free", "flint-40b-free", "beam-free", "big-pickle",
+        "nemotron-3.5-lightning-free", "nemotron-3.5-super-vl-free", "nemotron-3-ultra-free",
+        "minimax-m3.1-flash-free", "ling-3.0-flash-fin-free"
+    ],
+    "ocz": [
+        "step-5-preview", "step-5-preview-free", "glm-5.3-flash-free", "deepseek-v4.1-flash-free",
+        "mimo-v2.6-flash-free", "flint-40b-free", "beam-free", "big-pickle",
+        "nemotron-3.5-lightning-free", "nemotron-3.5-super-vl-free", "nemotron-3-ultra-free",
+        "minimax-m3.1-flash-free", "ling-3.0-flash-fin-free"
+    ],
+    "OpenCodeZen": [
+        "step-5-preview", "step-5-preview-free", "glm-5.3-flash-free", "deepseek-v4.1-flash-free",
+        "mimo-v2.6-flash-free", "flint-40b-free", "beam-free", "big-pickle",
+        "nemotron-3.5-lightning-free", "nemotron-3.5-super-vl-free", "nemotron-3-ultra-free",
+        "minimax-m3.1-flash-free", "ling-3.0-flash-fin-free"
+    ],
+    "openai-compatible-chat-opencode-zen": [
+        "step-5-preview", "step-5-preview-free", "glm-5.3-flash-free", "deepseek-v4.1-flash-free",
+        "mimo-v2.6-flash-free", "flint-40b-free", "beam-free", "big-pickle",
+        "nemotron-3.5-lightning-free", "nemotron-3.5-super-vl-free", "nemotron-3-ultra-free",
+        "minimax-m3.1-flash-free", "ling-3.0-flash-fin-free"
+    ],
+    "oc-anon": [
+        "step-5-preview", "step-5-preview-free", "glm-5.3-flash-free", "deepseek-v4.1-flash-free",
+        "mimo-v2.6-flash-free", "flint-40b-free", "beam-free", "big-pickle",
+        "nemotron-3.5-lightning-free", "nemotron-3.5-super-vl-free", "nemotron-3-ultra-free",
+        "minimax-m3.1-flash-free", "ling-3.0-flash-fin-free"
+    ],
+    "openai-compatible-chat-opencode-anon": [
+        "step-5-preview", "step-5-preview-free", "glm-5.3-flash-free", "deepseek-v4.1-flash-free",
+        "mimo-v2.6-flash-free", "flint-40b-free", "beam-free", "big-pickle",
+        "nemotron-3.5-lightning-free", "nemotron-3.5-super-vl-free", "nemotron-3-ultra-free",
+        "minimax-m3.1-flash-free", "ling-3.0-flash-fin-free"
+    ],
     # Zenmux
     "zenmux": ["step-5-preview", "stepfun/step-5-preview"],
     "anthropic-compatible-0d027b8c-5a12-4645-9f6b-80b9c8f48c64": ["step-5-preview", "stepfun/step-5-preview"],
