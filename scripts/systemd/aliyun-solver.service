@@ -1,0 +1,15 @@
+[Unit]
+Description=Aliyun Captcha Happy-DOM Solver Microservice (:8783)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/amen/.bun/bin/bun run /home/amen/Auto-FreeCF/scripts/aliyun_happy_solver.ts serve 8783
+WorkingDirectory=/home/amen/Auto-FreeCF
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
