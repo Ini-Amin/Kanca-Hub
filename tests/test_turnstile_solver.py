@@ -41,7 +41,7 @@ class TestIdPArchitectureSniffing(unittest.IsolatedAsyncioTestCase):
             <html>
                 <script>
                     const firebaseConfig = {
-                        apiKey: "AIzaSyC8E_4h32to_uIgxqUOpLrdcFyDe1Wpu3U",
+                        apiKey: "AIzaDummyTestFixtureKeyForUnitTestsOnly01",
                         authDomain: "kildev.firebaseapp.com",
                         projectId: "kildev"
                     };
@@ -51,7 +51,7 @@ class TestIdPArchitectureSniffing(unittest.IsolatedAsyncioTestCase):
         idp = await TS.sniff_idp_architecture(fake_page)
         self.assertTrue(idp["has_idp"])
         self.assertEqual(idp["provider"], "firebase")
-        self.assertEqual(idp["details"]["api_key"], "AIzaSyC8E_4h32to_uIgxqUOpLrdcFyDe1Wpu3U")
+        self.assertEqual(idp["details"]["api_key"], "AIzaDummyTestFixtureKeyForUnitTestsOnly01")
         self.assertEqual(idp["details"]["project_id"], "kildev")
 
     async def test_detects_supabase_auth(self):
