@@ -464,7 +464,7 @@ def main() -> int:
             backoff = min(backoff * 2, a.backoff_max)
         else:
             backoff = a.backoff_start
-            time.sleep(max(20, a.interval + random.randint(-15, 20)))
+            time.sleep(a.interval + random.randint(0, 4))
 
     return EXIT_OK
 
